@@ -62,3 +62,9 @@ knowledge_base/
 # Temporary files
 *.tmp
 *.temp
+
+# Local evaluation data and generated artifacts
+MDT-5*.csv
+eval_out/
+offline_packages/
+offline_packages.tar.gz

@@ -124,7 +124,43 @@ class MDTService:
             for discussion_id, discussion in self.active_discussions.items()
         ]
 
-
-
-
+    def start_consultation_sync(self, patient_data: Dict, main_issue: str) -> Dict:
+        """同步执行MDT会诊（用于批处理）"""
+        try:
+            # 步骤1: 主控智能体分析
+            selected_specialties = self.agents.controller_agent(
+                patient_data['medical_history'],
+                main_issue
+            )
+            
+            # 步骤2: 各专科智能体分析
+            specialist_analyses = []
+            
+            for specialty in selected_specialties:
+                analysis = self.agents.specialist_agent(
+                    patient_data['medical_history'],
+                    main_issue,
+                    specialty
+                )
+                specialist_analyses.append(analysis)
+            
+            # 步骤3: 整合智能体综合分析
+            final_conclusion = self.agents.coordinator_agent(
+                patient_data['medical_history'],
+                main_issue,
+                specialist_analyses
+            )
+            
+            return {
+                'status': 'completed',
+                'selected_specialties': selected_specialties,
+                'specialist_analyses': specialist_analyses,
+                'final_conclusion': final_conclusion
+            }
+            
+        except Exception as e:
+            return {
+                'status': 'error',
+                'error': str(e)
+            }
 
