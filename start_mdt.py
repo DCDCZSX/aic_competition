@@ -7,6 +7,12 @@ MDT智能会诊系统启动脚本
 import sys
 import os
 
+try:
+    from dotenv import load_dotenv, find_dotenv
+except ImportError:  # python-dotenv 为可选依赖
+    load_dotenv = None
+    find_dotenv = None
+
 def main():
     """主启动函数"""
     # 获取项目根目录
@@ -25,6 +31,10 @@ def main():
     
     # 切换工作目录
     os.chdir(backend_dir)
+
+    # 加载 .env（可选依赖；从 backend/ 向上查找 CHAIS/.env 或 backend/.env）
+    if load_dotenv is not None:
+        load_dotenv(find_dotenv(usecwd=True))
     
     try:
         print("🏥 MDT智能会诊系统")
@@ -56,17 +66,24 @@ def main():
         
         # 导入并启动应用
         from app import app
-        
+
+        # 绑定与调试开关走环境变量：默认只监听本机、关闭 debug（演示/提交要求）
+        host = os.getenv('APP_HOST', '127.0.0.1').strip()
+        port = int(os.getenv('APP_PORT', '5000'))
+        debug = os.getenv('APP_DEBUG', 'false').strip().lower() in ('1', 'true', 'yes')
+
         print("✅ 应用加载成功")
         print("=" * 50)
         print("🚀 系统启动成功!")
-        print("📍 访问地址: http://localhost:5000")
-        print("🔧 调试模式: 开启")
+        print(f"📍 访问地址: http://{host}:{port}")
+        print(f"🔧 调试模式: {'开启（仅限本地开发）' if debug else '关闭'}")
+        if not os.getenv('AI_API_KEY'):
+            print("⚠️  未配置 AI_API_KEY（参考 .env.example），AI 分析将不可用")
         print("🛑 按 Ctrl+C 停止服务")
         print("=" * 50)
-        
+
         # 启动Flask应用
-        app.run(debug=True, host='0.0.0.0', port=5000)
+        app.run(debug=debug, host=host, port=port)
         
     except ImportError as e:
         print(f"❌ 导入错误: {e}")

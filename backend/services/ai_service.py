@@ -1,19 +1,46 @@
-import requests
+"""LLM 调用服务（OpenAI 兼容网关）。
+
+安全约定（务必遵守）：
+- **绝不把 API Key 写进代码或提交到 git**；
+- 密钥只从环境变量读取：`AI_API_KEY`（必填），可选 `AI_API_URL` / `AI_MODEL_NAME` /
+  `AI_TIMEOUT` / `AI_MAX_RETRIES`；
+- 本地开发在 `CHAIS/.env` 或 `backend/.env` 配置（`.env` 已被 .gitignore 忽略），
+  模板见仓库根目录 `.env.example`。
+"""
+
 import json
-import time
+import os
 import re
+import time
 from typing import Optional
+
+import requests
+
+# 默认值：可被环境变量覆盖
+DEFAULT_API_URL = "https://openai.uniin.cn/openapi/v2/chat/completions"
+DEFAULT_MODEL_NAME = "qwen-max-latest"
+
 
 class AIService:
     def __init__(self):
-        self.api_url = "https://openai.uniin.cn/openapi/v2/chat/completions"
-        self.api_key = "sk-cXV0dWRrbHNjemVtYnVhamhhYjZ0Nng3cTgzaW96eHA6OTV2am4wanJmeXJhZTZpY3FjdWFvaDF3dzZnb2R2ZXNlcTF6MWc4eTFvYTJ1OHRlOTNmdXhzaG50MXlmcmZkcA=="
-        self.model_name = "qwen-max-latest"
-        self.timeout = 3000
-        self.max_retries = 3
+        self.api_url = os.getenv("AI_API_URL", DEFAULT_API_URL).strip()
+        self.api_key = (os.getenv("AI_API_KEY") or "").strip()
+        self.model_name = os.getenv("AI_MODEL_NAME", DEFAULT_MODEL_NAME).strip()
+        self.timeout = int(os.getenv("AI_TIMEOUT", "3000"))
+        self.max_retries = int(os.getenv("AI_MAX_RETRIES", "3"))
+
+        if not self.api_key:
+            print(
+                "[AIService] 警告：未检测到环境变量 AI_API_KEY，LLM 调用将被跳过。\n"
+                "           请在 CHAIS/.env 或 backend/.env 中配置（参考 .env.example）。\n"
+                "           注意：不要把密钥写回代码或提交到 git。"
+            )
 
     def call_ai_api(self, prompt: str, role_description: str = None) -> Optional[str]:
         """调用AI API"""
+        if not self.api_key:
+            print("[AIService] 错误：缺少 AI_API_KEY，已跳过本次调用。")
+            return None
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
