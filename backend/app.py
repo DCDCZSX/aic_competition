@@ -3,6 +3,14 @@ from flask_cors import CORS
 import sys
 import os
 
+# 加载 .env（python-dotenv 为可选依赖：未安装时仅使用系统环境变量）
+try:
+    from dotenv import load_dotenv, find_dotenv
+
+    load_dotenv(find_dotenv(usecwd=True))
+except ImportError:
+    pass
+
 # 添加当前目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -65,14 +73,21 @@ def get_all_discussions():
         return jsonify({'error': f'获取讨论列表失败: {str(e)}'}), 500
 
 if __name__ == '__main__':
+    # 绑定与调试开关走环境变量：默认只监听本机、关闭 debug（演示/提交要求）
+    host = os.getenv('APP_HOST', '127.0.0.1').strip()
+    port = int(os.getenv('APP_PORT', '5000'))
+    debug = os.getenv('APP_DEBUG', 'false').strip().lower() in ('1', 'true', 'yes')
+
     print("=" * 60)
-    print("🏥 MDT智能会诊系统启动中...")
-    print("📍 访问地址: http://localhost:5000")
-    print("🔧 调试模式: 开启")
-    print("⚡ 使用模型: qwen3-32B")
+    print("🏥 多学科就医智助系统启动中...")
+    print(f"📍 访问地址: http://{host}:{port}")
+    print(f"🔧 调试模式: {'开启（仅限本地开发）' if debug else '关闭'}")
+    print(f"⚡ 使用模型: {os.getenv('AI_MODEL_NAME', 'qwen-max-latest')}")
+    if not os.getenv('AI_API_KEY'):
+        print("⚠️  未配置 AI_API_KEY（参考 .env.example），AI 分析将不可用")
     print("🛑 按 Ctrl+C 停止服务")
     print("=" * 60)
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=debug, host=host, port=port)
 
 
 
