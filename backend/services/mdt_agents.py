@@ -1,55 +1,13 @@
 from .ai_service import AIService
+from .department_domain import SPECIALISTS
 from typing import List, Dict
-import json
 
 class MDTAgents:
     def __init__(self):
         self.ai_service = AIService()
-        self.specialists = {
-            # 内科系统
-            "cardiology": "心血管内科",
-            "neurology": "神经内科", 
-            "oncology": "肿瘤科",
-            "endocrinology": "内分泌科",
-            "pulmonology": "呼吸内科",
-            "gastroenterology": "消化内科",
-            "nephrology": "肾内科",
-            "hematology": "血液科",
-            "rheumatology": "风湿免疫科",
-            "infectious_disease": "感染科",
-            "geriatrics": "老年医学科",
-            
-            # 外科系统
-            "general_surgery": "普通外科",
-            "orthopedics": "骨科",
-            "neurosurgery": "神经外科",
-            "cardiac_surgery": "心胸外科",
-            "urology": "泌尿外科",
-            "plastic_surgery": "整形外科",
-            "vascular_surgery": "血管外科",
-            
-            # 专科系统
-            "dermatology": "皮肤科",
-            "ophthalmology": "眼科",
-            "otolaryngology": "耳鼻喉科",
-            "psychiatry": "精神科",
-            "rehabilitation": "康复医学科",
-            "emergency": "急诊科",
-            "icu": "重症医学科",
-            "anesthesiology": "麻醉科",
-            "radiology": "影像科",
-            "pathology": "病理科",
-            "laboratory": "检验科",
-            
-            # 妇儿系统
-            "obstetrics_gynecology": "妇产科",
-            "pediatrics": "儿科",
-            "neonatology": "新生儿科",
-            
-            # 中医系统
-            "traditional_chinese_medicine": "中医科",
-            "acupuncture": "针灸科"
-        }
+        # 科室域以 services/department_domain.py 为**唯一权威源**（规格书 §4.2）：
+        # 原先进程内硬编码的 34 科字典已移除，改为引用权威源（含新增的超声科/肝胆外科/介入科）。
+        self.specialists: Dict[str, str] = dict(SPECIALISTS)
 
     def controller_agent(self, medical_record: str, main_issue: str) -> List[str]:
         """主控智能体 - 全面分析病历并决定需要哪些专科参与"""

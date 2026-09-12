@@ -6,7 +6,14 @@ import sys
 
 def main():
     """批量MDT处理启动脚本"""
-    
+
+    # Windows 中文控制台默认 GBK：emoji 会触发 UnicodeEncodeError，统一切到 UTF-8
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
     try:
         print("🏥 批量MDT智能会诊系统")
         print("=" * 50)

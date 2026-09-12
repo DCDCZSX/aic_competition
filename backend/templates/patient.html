@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多学科就医智助系统 · 患者端</title>
+<style>
+  /* ===== 设计 token（对齐《UI设计说明-患者端.md》§1，与医生端共用）===== */
+  :root{
+    --blue:#1B5E8A; --blue-2:#2C7FB8; --base:#F4F7FA; --surface:#FFFFFF;
+    --line:#E2E8F0; --ink:#1F2A37; --ink2:#5B6B7C; --ink3:#8A99A8;
+    --ok:#2E7D4F; --warn:#B7791F; --danger:#B3402E; --info:#5B4B8A;
+    --radius:10px; --shadow:0 1px 3px rgba(31,42,55,.06);
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--base);color:var(--ink);line-height:1.6;
+       font-family:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;font-size:15px;}
+  .hide{display:none !important;}
+  button{font-family:inherit;font-size:15px;cursor:pointer;border-radius:8px;padding:10px 18px;
+         border:1px solid var(--line);background:#fff;color:var(--ink);transition:.15s;}
+  button:hover{border-color:var(--blue-2);}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#fff;}
+  button.primary:hover{background:var(--blue-2);}
+  button.ghost{background:transparent;border-color:var(--line);color:var(--ink2);}
+  button:disabled{opacity:.5;cursor:not-allowed;}
+  input,textarea,select{font-family:inherit;font-size:15px;padding:10px 12px;border:1px solid var(--line);
+       border-radius:8px;width:100%;background:#fff;color:var(--ink);}
+  textarea{resize:vertical;min-height:150px;line-height:1.7;}
+  .wrap{max-width:920px;margin:0 auto;padding:24px 20px 64px;}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+        padding:20px;margin-bottom:16px;box-shadow:var(--shadow);}
+  .muted{color:var(--ink2);font-size:13px;}
+  .tiny{color:var(--ink3);font-size:12px;}
+  h1{font-size:20px;margin:0 0 4px;} h2{font-size:17px;margin:0 0 12px;}
+  h3{font-size:15px;margin:0 0 8px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row>*{flex:1;min-width:180px;}
+  .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;
+        background:rgba(27,94,138,.1);color:var(--blue);}
+  .pill.ok{background:rgba(46,125,79,.12);color:var(--ok);}
+  .pill.warn{background:rgba(183,121,31,.14);color:var(--warn);}
+  .pill.danger{background:rgba(179,64,46,.12);color:var(--danger);}
+  .pill.info{background:rgba(91,75,138,.12);color:var(--info);}
+  .ai-block{background:rgba(44,127,184,.05);border-left:3px solid var(--blue-2);
+            padding:12px 14px;border-radius:0 8px 8px 0;margin:8px 0;}
+  .banner{padding:12px 14px;border-radius:8px;margin-bottom:12px;font-size:14px;}
+  .banner.danger{background:rgba(179,64,46,.08);border:1px solid rgba(179,64,46,.3);color:var(--danger);}
+  .banner.warn{background:rgba(183,121,31,.08);border:1px solid rgba(183,121,31,.3);color:var(--warn);}
+  .banner.ok{background:rgba(46,125,79,.08);border:1px solid rgba(46,125,79,.3);color:var(--ok);}
+  /* 登录 */
+  #login{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;}
+  .login-card{width:100%;max-width:660px;background:#fff;border:1px solid var(--line);
+              border-radius:14px;padding:36px;box-shadow:0 6px 24px rgba(31,42,55,.08);}
+  .brand{text-align:center;margin-bottom:24px;}
+  .brand .logo{font-size:30px;}
+  .role-cards{display:flex;gap:14px;margin:18px 0;}
+  .role-card{flex:1;border:1px solid var(--line);border-radius:12px;padding:18px;text-align:center;
+             cursor:pointer;transition:.18s;background:#fff;}
+  .role-card:hover{transform:translateY(-2px);border-color:var(--blue);box-shadow:0 4px 14px rgba(27,94,138,.12);}
+  .role-card .t{font-weight:600;margin:6px 0 4px;}
+  .role-card .d{font-size:12px;color:var(--ink2);line-height:1.5;}
+  /* 步骤条 */
+  .steps{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 0;}
+  .step{font-size:12px;color:var(--ink3);padding:3px 9px;border-radius:999px;border:1px solid var(--line);}
+  .step.active{background:var(--blue);border-color:var(--blue);color:#fff;}
+  .step.done{color:var(--ok);border-color:rgba(46,125,79,.4);}
+  .topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+          background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px 18px;margin-bottom:16px;}
+  .ident{font-size:13px;color:var(--ink2);}
+  /* 目标选择 */
+  .goal{border:1px solid var(--line);border-radius:10px;padding:14px 16px;cursor:pointer;margin-bottom:10px;transition:.15s;}
+  .goal:hover{border-color:var(--blue-2);}
+  .goal.sel{border-color:var(--blue);background:rgba(27,94,138,.04);}
+  .goal .t{font-weight:600;}
+  details summary{cursor:pointer;color:var(--blue);font-size:14px;margin:6px 0;}
+  /* 脱敏预览 */
+  .masked{white-space:pre-wrap;background:#fff;border:1px dashed var(--line);border-radius:8px;
+          padding:14px;font-size:14px;max-height:280px;overflow:auto;}
+  mark{background:rgba(183,121,31,.22);padding:0 2px;border-radius:3px;}
+  /* 画像卡 */
+  .field{display:flex;gap:10px;padding:7px 0;border-bottom:1px dashed var(--line);align-items:baseline;}
+  .field:last-child{border-bottom:0;}
+  .ref{font-size:11px;color:var(--blue-2);border:1px solid rgba(44,127,184,.35);border-radius:999px;
+       padding:0 7px;cursor:help;white-space:nowrap;}
+  .gap{background:rgba(183,121,31,.08);border-left:3px solid var(--warn);padding:8px 12px;
+       border-radius:0 6px 6px 0;margin:6px 0;font-size:14px;}
+  /* 追问 */
+  .q{border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:12px;}
+  .q .why{font-size:13px;color:var(--ink2);margin:6px 0;}
+  .q .affects{font-size:12px;color:var(--info);}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+  .chip{border:1px solid var(--line);border-radius:999px;padding:5px 14px;font-size:13px;cursor:pointer;background:#fff;}
+  .chip:hover{border-color:var(--blue-2);}
+  .chip.on{background:var(--blue);border-color:var(--blue);color:#fff;}
+  .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap;}
+  .foot{margin-top:22px;padding-top:12px;border-top:1px solid var(--line);color:var(--ink3);font-size:12px;}
+</style>
+</head>
+<body>
+
+<!-- ===================== 登录页（屏 0）===================== -->
+<div id="login">
+  <div class="login-card">
+    <div class="brand">
+      <div class="logo">🏥</div>
+      <h1 style="font-size:22px;">多学科就医智助系统</h1>
+      <div class="muted">AI 辅助就医信息整理与多学科决策协作平台</div>
+    </div>
+
+    <div class="role-cards">
+      <div class="role-card" onclick="loginAs('patient')">
+        <div style="font-size:24px;">🧑‍🦳</div>
+        <div class="t">进入患者演示</div>
+        <div class="d">资料整理 / 就医路径<br>任务中心 / 就诊后更新</div>
+        <div class="tiny" style="margin-top:6px;">patient_demo</div>
+      </div>
+      <div class="role-card" onclick="loginAs('doctor')">
+        <div style="font-size:24px;">🩺</div>
+        <div class="t">进入医生演示</div>
+        <div class="d">病例审核 / 证据审阅<br>报告确认 / 线下意见录入</div>
+        <div class="tiny" style="margin-top:6px;">doctor_demo</div>
+      </div>
+    </div>
+
+    <details>
+      <summary>或使用账号登录</summary>
+      <div class="row" style="margin-top:10px;">
+        <input id="login-user" placeholder="账号（patient_demo）" autocomplete="username">
+        <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password">
+      </div>
+      <div class="actions" style="justify-content:flex-start;">
+        <button onclick="loginForm()">登录</button>
+      </div>
+    </details>
+
+    <div id="login-msg" class="banner danger hide"></div>
+    <div class="foot" style="text-align:center;">
+      ⚠️ 本系统为就医辅助演示，不提供诊断或处方；急症请立即就医。<br>
+      演示数据均为脱敏或合成病例。
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 主流程 ===================== -->
+<div id="app" class="wrap hide">
+  <div class="topbar">
+    <div>
+      <strong>多学科就医智助系统</strong>
+      <span class="muted"> · 患者端</span>
+      <div class="steps" id="steps"></div>
+    </div>
+    <div style="text-align:right;">
+      <div class="ident" id="ident">—</div>
+      <div style="margin-top:6px;">
+        <span class="pill warn" id="badge">AI 辅助分析 · 尚未经医生审核</span>
+        <button class="ghost" style="padding:4px 10px;font-size:12px;margin-left:6px;" onclick="logout()">退出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- P1 就医目标 -->
+  <section id="s-goal" class="card">
+    <h2>第一步 · 你是哪种情况？</h2>
+    <p class="muted">只用来帮你更快开始，选不准也没关系，可以都不选。</p>
+    <div class="goal" id="goal-primary" onclick="pickGoal('unknown_department')">
+      <div class="t">😕 我/家人身体不舒服，不知道先该看哪个科、怎么办</div>
+      <div class="tiny">推荐选择：多数人都是这种情况</div>
+    </div>
+    <details>
+      <summary>我的情况更特殊一点（可不选）</summary>
+      <div class="goal" onclick="pickGoal('multi_disease')">
+        <div class="t">有好几种老毛病，想一起理清楚</div>
+      </div>
+      <div class="goal" onclick="pickGoal('compare_opinions')">
+        <div class="t">几个医生说法不太一样，想对比一下</div>
+      </div>
+      <div class="goal" onclick="pickGoal('surgery_prep')">
+        <div class="t">要做手术/治疗，想提前把想问的问题准备好</div>
+      </div>
+    </details>
+    <div class="actions">
+      <button class="primary" onclick="go('intake')">直接开始录入资料 →</button>
+    </div>
+  </section>
+
+  <!-- P2 资料录入 -->
+  <section id="s-intake" class="card hide">
+    <h2>第二步 · 把病情资料放进来</h2>
+    <div class="row" style="margin-bottom:12px;">
+      <button id="tab-paste" class="primary" onclick="switchTab('paste')">粘贴病历</button>
+      <button id="tab-form" onclick="switchTab('form')">表单填写</button>
+    </div>
+
+    <div id="pane-paste">
+      <textarea id="history" placeholder="粘贴门诊病历 / 出院记录 / 检查报告正文…（≤8000 字）"></textarea>
+      <p class="tiny">系统会先帮你整理成画像卡，供你核对；不会直接下结论。</p>
+    </div>
+
+    <div id="pane-form" class="hide">
+      <div class="row" style="margin-bottom:10px;">
+        <div><label class="muted">年龄</label><input id="f-age" type="number" placeholder="58"></div>
+        <div><label class="muted">性别</label>
+          <select id="f-sex"><option value="">未知</option><option>男</option><option>女</option></select>
+        </div>
+      </div>
+      <label class="muted">既往疾病（点选，照顾不方便打字）</label>
+      <div class="chips" id="disease-chips"></div>
+      <label class="muted" style="display:block;margin-top:12px;">症状与病程（每行一条，如：视物模糊 3月）</label>
+      <textarea id="f-symptoms" style="min-height:90px;" placeholder="视物模糊 3月&#10;下肢浮肿 1周"></textarea>
+      <label class="muted" style="display:block;margin-top:12px;">当前用药</label>
+      <input id="f-meds" placeholder="二甲双胍 0.5g bid">
+      <label class="muted" style="display:block;margin-top:12px;">已做检查结果</label>
+      <input id="f-exams" placeholder="尿蛋白++，空腹血糖9.2">
+      <div class="actions" style="justify-content:flex-start;">
+        <button onclick="buildFromForm()">把这些内容合并到病历文本</button>
+      </div>
+    </div>
+
+    <div style="margin-top:14px;">
+      <label class="muted">主要问题（选填）</label>
+      <input id="main-issue" placeholder="例如：该先看哪个科？">
+    </div>
+    <div class="banner warn" style="margin-top:12px;">
+      ⚠️ 请勿填写姓名 / 身份证 / 手机号 / 住址 —— 系统会先做脱敏预览并提示。
+    </div>
+    <div id="intake-msg"></div>
+    <div class="actions">
+      <button class="ghost" onclick="go('goal')">← 上一步</button>
+      <button class="primary" onclick="doPreview()">继续 → 脱敏预览</button>
+    </div>
+  </section>
+
+  <!-- P3 脱敏预览 -->
+  <section id="s-mask" class="card hide">
+    <h2>第三步 · 提交前脱敏预览</h2>
+    <div id="mask-summary"></div>
+    <div class="masked" id="mask-text"></div>
+    <p class="tiny">打码不可逆（不提供"撤销打码"）；原始资料与脱敏资料分开存储。</p>
+    <div id="mask-msg"></div>
+    <div class="actions">
+      <button class="ghost" onclick="go('intake')">← 返回修改</button>
+      <button class="primary" onclick="doCreateCase()">确认脱敏并提交 →</button>
+    </div>
+  </section>
+
+  <!-- P4 画像确认 -->
+  <section id="s-profile" class="card hide">
+    <h2>第四步 · 系统先把资料整理成画像，请核对</h2>
+    <div id="profile-body"></div>
+    <div id="gap-body"></div>
+    <div class="actions">
+      <button class="ghost" onclick="go('intake')">有误？补充/修正</button>
+      <button class="primary" onclick="go('ask')">画像无误，继续 →</button>
+    </div>
+  </section>
+
+  <!-- P5 智能追问 -->
+  <section id="s-ask" class="card hide">
+    <h2>第五步 · 还差几个关键信息（最多 3 个，可跳过）</h2>
+    <div id="ask-body"></div>
+    <p class="tiny">跳过会导致结果可靠性降低，但系统不会编造你的情况。</p>
+    <div class="actions">
+      <button class="ghost" onclick="go('profile')">← 返回画像</button>
+      <button class="primary" onclick="submitAnswers()">回答完毕 →</button>
+    </div>
+  </section>
+
+  <!-- P6 分诊结果 -->
+  <section id="s-triage" class="card hide">
+    <h2>分析结果 · 建议的就医方向</h2>
+    <div id="triage-body"></div>
+    <div class="actions">
+      <button class="ghost" onclick="go('ask')">← 返回追问</button>
+      <button class="primary" onclick="go('path')">查看就医路径与任务 →</button>
+    </div>
+  </section>
+
+  <!-- P7 就医路径 + 任务中心 -->
+  <section id="s-path" class="card hide">
+    <h2>就医路径与我的任务</h2>
+    <div id="path-body"></div>
+    <div class="actions">
+      <button class="ghost" onclick="go('triage')">← 返回分诊结果</button>
+      <button class="primary" onclick="goMdt()">查看 AI 多学科分析 →</button>
+    </div>
+  </section>
+
+  <!-- P8 多学科分析 -->
+  <section id="s-mdt" class="card hide">
+    <h2>AI 多学科分析（各科意见摘要）</h2>
+    <div id="mdt-body"></div>
+    <div class="actions">
+      <button class="ghost" onclick="go('path')">← 返回路径与任务</button>
+      <button class="primary" onclick="finishFlow()">完成（查看本次小结）→</button>
+    </div>
+  </section>
+
+  <!-- 结果 / 后续步骤占位 -->
+  <section id="s-done" class="card hide">
+    <h2 id="done-title">已完成本期可演示范围</h2>
+    <div id="done-body"></div>
+    <div class="actions">
+      <button class="ghost" onclick="location.reload()">重新开始</button>
+    </div>
+  </section>
+
+  <div class="foot">
+    本系统为就医信息整理与决策辅助工具，<strong>不替代医生诊断与处方</strong>；所有 AI 结果仅供线下就医参考。
+  </div>
+</div>
+
+<script>
+/* ===================== 状态 ===================== */
+const S = { token:null, role:null, label:null, goals:[], caseId:null, questions:[], answers:{},
+            profile:null, mode:'paste', triage:null, path:null, mdt:null };
+const STEPS = [['goal','就医目标'],['intake','录入资料'],['mask','脱敏预览'],
+               ['profile','画像确认'],['ask','智能追问'],['triage','就医方向'],
+               ['path','路径与任务'],['mdt','多学科分析']];
+const DISEASES = ['糖尿病','高血压','冠心病','心房颤动','脑梗死','慢阻肺','哮喘',
+                  '慢性肾病','甲状腺功能减退','类风湿关节炎','肿瘤史','肝炎'];
+
+/* ===================== 工具 ===================== */
+async function api(path, opts={}){
+  const headers = Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+  if (S.token) headers['Authorization'] = 'Bearer ' + S.token;
+  const res = await fetch(path, Object.assign({}, opts, {headers}));
+  let data = null;
+  try { data = await res.json(); } catch(e) { data = {}; }
+  return {status:res.status, data};
+}
+function show(id){ document.querySelectorAll('section').forEach(s=>s.classList.add('hide'));
+                   document.getElementById(id).classList.remove('hide'); }
+function go(step){ show('s-'+step); renderSteps(step); window.scrollTo({top:0,behavior:'smooth'}); }
+function renderSteps(active){
+  document.getElementById('steps').innerHTML = STEPS.map(([k,label])=>
+    `<span class="step ${k===active?'active':''}">${label}</span>`).join('');
+}
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function msg(el, html, cls='danger'){ const n=document.getElementById(el);
+  if(!html){ n.className='hide'; n.innerHTML=''; return; }
+  n.className='banner '+cls; n.innerHTML=html; }
+
+/* ===================== 登录 ===================== */
+async function loginAs(role){
+  const r = await api('/api/login', {method:'POST', body:JSON.stringify({role})});
+  if(r.status!==200){ msg('login-msg', esc(r.data.error||'登录失败')); return; }
+  afterLogin(r.data);
+}
+async function loginForm(){
+  const u=document.getElementById('login-user').value.trim();
+  const p=document.getElementById('login-pass').value;
+  const r = await api('/api/login', {method:'POST', body:JSON.stringify({username:u,password:p})});
+  if(r.status!==200){ msg('login-msg', esc(r.data.error||'登录失败')); return; }
+  afterLogin(r.data);
+}
+function afterLogin(d){
+  S.token=d.session.token; S.role=d.session.role; S.label=d.session.label;
+  document.getElementById('login').classList.add('hide');
+  document.getElementById('app').classList.remove('hide');
+  document.getElementById('ident').textContent = (S.role==='doctor'?'医生':'患者') + ' · ' + d.session.username + '（' + S.label + '）';
+  if(S.role==='doctor'){
+    document.getElementById('done-title').textContent='已登录医生角色';
+    document.getElementById('done-body').innerHTML =
+      '<div class="banner warn">医生端界面（病例审核台）将在后续版本提供；本次演示请使用患者端流程。</div>' +
+      '<p class="muted">如需查看患者端流程，请退出后选择"进入患者演示"。</p>';
+    go('done'); return;
+  }
+  buildDiseaseChips(); pickGoal('unknown_department'); go('goal');
+}
+async function logout(){
+  await api('/api/logout', {method:'POST', body:JSON.stringify({token:S.token})});
+  location.reload();
+}
+
+/* ===================== P1 目标 ===================== */
+function buildDiseaseChips(){
+  document.getElementById('disease-chips').innerHTML =
+    DISEASES.map(d=>`<span class="chip" onclick="this.classList.toggle('on')">${d}</span>`).join('');
+}
+function pickGoal(id){
+  S.goals=[id];
+  document.querySelectorAll('#s-goal .goal').forEach(el=>el.classList.remove('sel'));
+  event && event.currentTarget && event.currentTarget.classList.add('sel');
+}
+
+/* ===================== P2 录入 ===================== */
+function switchTab(which){
+  S.mode=which;
+  document.getElementById('pane-paste').classList.toggle('hide', which!=='paste');
+  document.getElementById('pane-form').classList.toggle('hide', which!=='form');
+  document.getElementById('tab-paste').className = which==='paste'?'primary':'';
+  document.getElementById('tab-form').className = which==='form'?'primary':'';
+}
+function buildFromForm(){
+  const picked=[...document.querySelectorAll('#disease-chips .chip.on')].map(c=>c.textContent);
+  const sym=(document.getElementById('f-symptoms').value||'').trim();
+  const meds=(document.getElementById('f-meds').value||'').trim();
+  const exams=(document.getElementById('f-exams').value||'').trim();
+  const age=document.getElementById('f-age').value;
+  const sex=document.getElementById('f-sex').value;
+  let parts=[];
+  if(age||sex) parts.push(`患者，${sex||''}${age?age+'岁':''}。`);
+  if(sym) parts.push('症状：'+sym.replace(/\n/g,'；')+'。');
+  if(picked.length) parts.push('既往：'+picked.join('、')+'。');
+  if(meds) parts.push('用药：'+meds+'。');
+  if(exams) parts.push('检查：'+exams+'。');
+  const text=parts.join('');
+  if(!text){ msg('intake-msg','请至少填写一项内容'); return; }
+  document.getElementById('history').value = text;
+  msg('intake-msg','已合并为：'+esc(text),'ok');
+}
+
+/* ===================== P3 脱敏预览 ===================== */
+async function doPreview(){
+  const history=document.getElementById('history').value.trim();
+  const issue=document.getElementById('main-issue').value.trim();
+  msg('intake-msg','');
+  const r = await api('/api/v2/preview', {method:'POST',
+    body:JSON.stringify({medical_history:history, main_issue:issue})});
+  if(r.status!==200){ msg('intake-msg','预览失败，请重试'); return; }
+  const d=r.data;
+
+  if(d.blocked){
+    const crisis = d.is_crisis;
+    msg('intake-msg',
+      `<strong>${crisis?'⛔ 疑似急症，已拦截':'内容不符合使用范围'}</strong><br>${esc(d.advice)}` +
+      (d.reasons&&d.reasons.length?'<br><span class="tiny">触发依据：'+d.reasons.map(esc).join('；')+'</span>':''),
+      'danger');
+    if(crisis) return; // 危象：停在录入页
+  }
+
+  const hits = d.hits||[];
+  document.getElementById('mask-summary').innerHTML =
+    hits.length
+      ? `<div class="banner warn">共识别 ${hits.length} 处需要打码的信息（其中需清除 ${d.blocking_hit_count} 处）：`
+        + hits.map(h=>`<div class="tiny">· ${esc(h.label)} → <code>${esc(h.masked)}</code> — ${esc(h.reason)}</div>`).join('')
+        + `</div>`
+      : `<div class="banner ok">未识别到需要打码的敏感信息。</div>`;
+  document.getElementById('mask-text').textContent = d.masked_text || '（无内容）';
+  msg('mask-msg','');
+  go('mask');
+}
+
+/* ===================== P4/P5 创建病例 ===================== */
+async function doCreateCase(){
+  const history=document.getElementById('history').value.trim();
+  const issue=document.getElementById('main-issue').value.trim();
+  const r = await api('/api/v2/case', {method:'POST', body:JSON.stringify({
+    medical_history:history, main_issue:issue, goals:S.goals,
+    age:document.getElementById('f-age').value||null,
+    gender:document.getElementById('f-sex').value||''
+  })});
+  const d=r.data;
+  if(d.blocked){
+    msg('mask-msg', `<strong>已拦截</strong><br>${esc(d.advice||(d.errors||[]).join('；'))}`,'danger');
+    return;
+  }
+  if(!d.ok && !d.passes_gate){
+    S.caseId=d.case_id; renderProfile(d);
+    msg('mask-msg','画像信息不足，请返回补充后再分析（G4 门禁）','warn');
+    go('profile'); return;
+  }
+  if(!d.ok){ msg('mask-msg', esc((d.errors||[]).join('；'))); return; }
+
+  S.caseId=d.case_id; S.profile=d.profile; S.questions=d.questions||[];
+  S.triage=d.triage||null; S.path=d.path||null; S.mdt=d.mdt||null;
+  renderProfile(d); renderQuestions();
+  go('profile');
+}
+
+function renderProfile(d){
+  const p=d.profile||{};
+  const line=(label,val,refs)=>`<div class="field"><div style="min-width:96px;" class="muted">${label}</div>
+      <div style="flex:1;">${esc(val)||'<span class="tiny">（未提供）</span>'}</div>
+      ${(refs||[]).map(r=>`<span class="ref" title="原文出处">${esc(r)}</span>`).join('')}</div>`;
+  let html='';
+  html+=line('基本信息',[p.sex,p.age?p.age+'岁':''].filter(Boolean).join(' '));
+  html+=line('主诉',p.chief_complaint);
+  html+=(p.symptoms_timeline||[]).map(s=>line('症状',`${s.symptom} ${s.onset||''}`,s.source_refs)).join('');
+  html+=(p.diseases||[]).map(x=>line('既往',`${x.name} ${x.duration||''}`,x.source_refs)).join('');
+  html+=(p.exams||[]).map(x=>line('检查',`${x.item} ${x.value||''}`,x.source_refs)).join('');
+  html+=(p.medications||[]).map(x=>line('用药',`${x.name} ${x.dose||''}`)).join('');
+  const cov = d.direct_quote_coverage!=null ? d.direct_quote_coverage : 0;
+  const cmp = d.completeness!=null ? d.completeness : 0;
+  html+=`<div class="ai-block"><span class="pill ${d.passes_gate?'ok':'danger'}">原文直引覆盖率 ${cov}</span>
+         <span class="pill">关键字段完整度 ${cmp}</span>
+         <div class="tiny" style="margin-top:6px;">灰色为 AI 推断/待确认；紫标为 AI 推断，需你核对。</div></div>`;
+  document.getElementById('profile-body').innerHTML+=html;
+
+  const gaps = d.gaps||[];
+  document.getElementById('gap-body').innerHTML = gaps.length
+    ? `<h3 style="margin-top:16px;">信息缺口（${gaps.length}）</h3>` +
+      gaps.map(g=>`<div class="gap">⚠️ ${esc(g)}</div>`).join('')
+    : `<div class="banner ok">未发现明显信息缺口。</div>`;
+}
+
+function renderQuestions(){
+  const qs=S.questions;
+  if(!qs.length){
+    document.getElementById('ask-body').innerHTML='<div class="banner ok">关键信息已足够，无需追问。</div>';
+    return;
+  }
+  document.getElementById('ask-body').innerHTML = qs.map((q,i)=>`
+    <div class="q">
+      <strong>Q${i+1}　${esc(q.text)}</strong>
+      <div class="why">为什么问：${esc(q.why)}</div>
+      <div class="affects">影响判断：${(q.affects||[]).map(esc).join('、')}
+        ${q.affects_triage?'<span class="pill warn">影响分诊方向</span>':''}</div>
+      <input id="ans-${i}" placeholder="你的回答（留空或填"不清楚"表示跳过）">
+      <div class="chips">
+        ${(q.options||[]).map(o=>`<span class="chip" onclick="setAns(${i},'${esc(o)}')">${esc(o)}</span>`).join('')}
+        <span class="chip" onclick="setAns(${i},'不清楚 / 跳过')">不清楚 / 跳过</span>
+      </div>
+    </div>`).join('');
+}
+function setAns(i,val){ document.getElementById('ans-'+i).value=val; }
+
+async function submitAnswers(){
+  const answers={};
+  S.questions.forEach((q,i)=>{
+    const v=(document.getElementById('ans-'+i).value||'').trim();
+    if(v) answers[q.field]=v;
+  });
+  const r=await api(`/api/v2/case/${S.caseId}/answers`, {method:'POST', body:JSON.stringify({answers})});
+  const d=r.data||{};
+  S.triage = d.triage || S.triage;
+  S.path = d.path || S.path;
+  if(d.mdt) S.mdt = d.mdt;
+  S.answerSummary = {resolved:(d.resolved_fields||[]).length,
+                     unresolved:(d.unresolved_fields||[]).length,
+                     downgrade:!!d.reliability_downgrade};
+  renderTriage(); renderPath(); renderMdt();
+  go('triage');
+}
+
+function goMdt(){ renderMdt(); go('mdt'); }
+
+/* ===================== P6 分诊结果 ===================== */
+function renderTriage(){
+  const t=S.triage||{};
+  const p=t.primary, sec=t.secondary||[];
+  const rel=t.reliability||{};
+  const roleLabel = r => r==='牵头' ? '牵头方向' : (r==='可咨询' ? '可咨询' : '可协同');
+  let html='';
+
+  if(!p){
+    html+='<div class="banner warn">未能给出明确的就诊方向建议：请补充资料，或直接线下咨询医生。</div>';
+  } else {
+    html+=`<div class="ai-block"><div style="font-weight:600;font-size:16px;">🏥 ${esc(p.department)}（${roleLabel(p.role)}）</div>
+      <div class="muted" style="margin-top:4px;">依据：${esc((p.signals||[]).join('；'))||'规则命中'}</div></div>`;
+    if(sec.length){
+      html+=`<h3>可协同咨询</h3>` + sec.map(d=>
+        `<div class="field"><div style="min-width:110px;"><strong>${esc(d.department)}</strong></div>
+         <div style="flex:1;" class="muted">${esc((d.signals||[]).join('；'))||'相关方向'}</div>
+         <span class="pill">${roleLabel(d.role)}</span></div>`).join('');
+    }
+  }
+
+  html+=`<h3 style="margin-top:16px;">结果可靠性</h3>
+    <div><span class="pill ${rel.level==='高'?'ok':(rel.level==='中'?'warn':'danger')}">可靠性 ${esc(rel.level||'—')}</span>
+    ${(rel.reasons||[]).map(x=>`<div class="tiny">· ${esc(x)}</div>`).join('')}</div>`;
+
+  const flags=[];
+  flags.push(t.needs_mdt ? '<span class="pill info">建议多学科协同</span>' : '<span class="pill">暂不需要多学科会诊</span>');
+  if(t.needs_doctor_review) flags.push('<span class="pill warn">建议医生复核</span>');
+  if(t.behavior_type) flags.push(`<span class="pill">病例类型 ${esc(t.behavior_type)}</span>`);
+  html+=`<div style="margin-top:12px;">${flags.join(' ')}</div>`;
+
+  if((t.conflicts||[]).length){
+    html+=`<div class="banner warn" style="margin-top:12px;"><strong>存在分歧（如实呈现）</strong>` +
+      t.conflicts.map(c=>`<div class="tiny">· ${esc(c.department)}：${esc(c.model_reason||'')} → ${esc(c.resolution||'')}</div>`).join('') +
+      `</div>`;
+  }
+  if((t.validator_notes||[]).length){
+    html+=`<details style="margin-top:10px;"><summary>规则校验说明（技术细节）</summary>` +
+      t.validator_notes.map(n=>`<div class="tiny">· ${esc(n)}</div>`).join('') + `</details>`;
+  }
+
+  html+=`<div class="banner warn" style="margin-top:14px;">注：<strong>牵头方向 ≠ 最终诊断科室</strong>，仅表示就医信息组织上的优先方向；最终以线下医生判断为准。</div>`;
+  document.getElementById('triage-body').innerHTML=html;
+}
+
+/* ===================== P7 路径与任务 ===================== */
+function renderPath(){
+  const p=S.path||{};
+  const steps=p.steps||[], tasks=p.tasks||[];
+  let html='';
+
+  if(steps.length){
+    html+=`<h3>就医路径（条件分支）</h3>`;
+    steps.forEach((s,i)=>{
+      html+=`<div class="field">
+        <div style="min-width:46px;"><span class="pill ${s.kind==='visit'?'ok':''}">${esc(s.step_id)}</span></div>
+        <div style="flex:1;">
+          <div><strong>${esc(s.title)}</strong>${s.parallel?' <span class="tiny">（可并行）</span>':''}</div>
+          <div class="tiny">${esc(s.detail||'')}</div>
+          ${s.condition?`<div class="tiny" style="color:var(--warn);">条件：${esc(s.condition)}</div>`:''}
+          ${s.requires_doctor?'<div class="tiny" style="color:var(--info);">需医生决定</div>':''}
+        </div></div>`;
+    });
+  } else {
+    html+='<div class="banner warn">尚未生成就医路径：先完成分诊。</div>';
+  }
+
+  html+=`<h3 style="margin-top:18px;">我的任务（${tasks.length} 项）</h3>`;
+  if(tasks.length){
+    html+=tasks.map(t=>`<div class="q" style="padding:12px 14px;">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <span class="pill ${t.priority==='high'?'warn':''}">${esc(t.priority)}</span>
+        <span class="pill">${esc(t.type)}</span>
+        <span class="tiny">来源：${esc(t.source||'')}</span>
+      </div>
+      <div style="margin-top:6px;">${esc(t.content)}</div>
+      <div class="tiny" style="margin-top:4px;">状态：${esc(t.state)}</div>
+    </div>`).join('');
+    html+=`<p class="tiny">医疗行为类任务均为「向医生确认是否需要…」表述，系统不直接下指令。</p>`;
+  } else {
+    html+='<div class="tiny">暂无任务。</div>';
+  }
+
+  if((p.notes||[]).length){
+    html+=`<div class="banner warn" style="margin-top:12px;">${p.notes.map(esc).join('<br>')}</div>`;
+  }
+  document.getElementById('path-body').innerHTML=html;
+}
+
+function finishFlow(){
+  const a=S.answerSummary||{resolved:0,unresolved:0,downgrade:false};
+  const t=S.triage||{}, rel=t.reliability||{};
+  document.getElementById('done-title').textContent='本次小结';
+  document.getElementById('done-body').innerHTML =
+    `<div class="banner ok">病例 <code>${esc(S.caseId)}</code> 已完成「录入 → 脱敏 → 画像 → 追问 → 就医方向 → 路径与任务 → 多学科分析」全流程，并已落库。</div>
+     <div class="ai-block">
+       <div><strong>建议方向</strong>：${esc((t.primary||{}).department||'—')}${(t.secondary||[]).length?'（协同 '+t.secondary.map(d=>esc(d.department)).join('、')+'）':''}</div>
+       <div><strong>可靠性</strong>：${esc(rel.level||'—')}</div>
+       <div><strong>追问</strong>：已回答 ${a.resolved} 项，未解决 ${a.unresolved} 项${a.downgrade?'（已下调可靠性）':''}</div>
+     </div>
+     <h3>后续步骤（开发中）</h3>
+     <p class="muted">一页就医摘要与完整报告、就诊后资料更新与变化摘要、以及医生端审核台，将在下一阶段接通。</p>
+     <div class="banner warn">本系统为就医信息整理与决策辅助工具，不替代医生诊断与处方。</div>`;
+  go('done');
+}
+
+/* ===================== P8 多学科分析 ===================== */
+function renderMdt(){
+  const m=S.mdt||{};
+  const analyses=m.analyses||[], agg=m.aggregation||{}, ch=m.challenge||{};
+  let html='';
+
+  if(!m.card_count){
+    html+='<div class="banner warn">本次未能生成专科意见卡（模型未配置或调用失败）。分诊与路径结果仍然有效。</div>';
+    if(m.notes) html+=m.notes.map(n=>`<div class="tiny">· ${esc(n)}</div>`).join('');
+    document.getElementById('mdt-body').innerHTML=html; return;
+  }
+
+  html+=`<p class="muted">系统请了 ${esc((m.departments||[]).join('、'))} 一起看你的情况。
+    每个科室都是<strong>独立分析</strong>（互不参考彼此结论），以下是各科意见摘要。</p>`;
+  html+=`<div class="banner warn">⚠️ 以下为 <strong>AI 分析视角</strong>，不是真实医生会诊意见；最终以线下医生判断为准。</div>`;
+
+  analyses.forEach(a=>{
+    if(a.status!=='ok'){
+      html+=`<div class="q"><strong>${esc(a.department)}</strong><div class="tiny">本次未完成分析（${esc(a.error||'未知原因')}）</div></div>`;
+      return;
+    }
+    html+=`<div class="q">
+      <div style="font-weight:600;font-size:15px;">🏥 ${esc(a.department)}</div>
+      <div class="muted" style="margin:4px 0;">关注点：${esc(a.focus||'—')}</div>
+      ${(a.inferences||[]).slice(0,2).map(i=>
+        `<div style="margin-top:4px;">· ${esc(i.text)}
+          <span class="pill ${i.confidence==='low'?'warn':(i.confidence==='high'?'ok':'')}">${esc(i.confidence)}</span></div>`).join('')}
+      ${(a.checks||[]).length?`<div class="tiny" style="margin-top:6px;">建议向医生确认：`+
+        (a.checks||[]).slice(0,2).map(c=>esc(c.content.replace(/^建议向医生确认是否需要[：:]?/,''))).join('；')+`</div>`:''}
+      ${a.referral?`<div class="tiny" style="color:var(--info);">建议同时咨询：${esc(a.referral)}</div>`:''}
+    </div>`;
+  });
+
+  // 共识
+  if((agg.consensus||[]).length){
+    html+=`<h3 style="margin-top:16px;">多科一致（共识）</h3>`;
+    html+=agg.consensus.map(c=>`<div class="gap" style="border-left-color:var(--ok);background:rgba(46,125,79,.07);">
+      ✅ ${esc(c.topic)}　<span class="tiny">${esc((c.supporters||[]).join('、'))}</span></div>`).join('');
+  }
+
+  // 分歧（如实呈现，但患者端只给结论提示）
+  if((agg.disagreements||[]).length){
+    html+=`<h3 style="margin-top:16px;">看法不完全一致</h3>`;
+    html+=`<div class="banner warn">有 ${agg.disagreements.length} 处不同看法，<strong>系统不做强行统一</strong>，已提交给医生复核。</div>`;
+    html+=agg.disagreements.map(d=>`<div class="tiny">· ${esc(d.topic)}：`+
+      Object.entries(d.positions||{}).map(([k,v])=>`${esc(k)}认为${esc(v)}`).join('；')+`</div>`).join('');
+  }
+
+  // 不确定性
+  if((agg.uncertainties||[]).length){
+    html+=`<h3 style="margin-top:16px;">还不确定的部分</h3>`;
+    html+=agg.uncertainties.slice(0,6).map(u=>`<div class="tiny">· ${esc(u.topic)}
+      ${(u.impact||[]).length?`<span class="muted">（影响 ${esc((u.impact||[]).join('、'))} 的判断）</span>`:''}</div>`).join('');
+  }
+
+  // 质询（只提示存在，不展示概率——本来也没有）
+  if(ch.triggered){
+    const n=(ch.rounds||[]).length;
+    html+=`<div class="ai-block" style="margin-top:14px;">
+      <strong>🔍 系统对结论做了一次质疑复核</strong>
+      <div class="tiny">共提出 ${n||ch.questions.length} 个挑战问题，相关科室已回应。</div>
+      ${ch.needs_doctor_decision?'<div class="tiny" style="color:var(--warn);">质询后仍有未收敛的问题，已列入待医生裁决。</div>':
+        '<div class="tiny">质询后各科结论保持稳定。</div>'}
+      <div class="tiny" style="margin-top:4px;">完整的质询记录与逐科依据在医生端审核台可查看。</div>
+    </div>`;
+  }
+
+  if((agg.open_questions||[]).length){
+    html+=`<h3 style="margin-top:16px;">建议向医生确认的问题</h3>`;
+    html+=agg.open_questions.slice(0,5).map(q=>`<div class="field"><div style="flex:1;">· ${esc(q)}</div></div>`).join('');
+  }
+
+  html+=`<div class="banner warn" style="margin-top:14px;">本页内容为 AI 辅助分析，<strong>尚未经医生审核</strong>；不能作为诊断或用药依据。</div>`;
+  document.getElementById('mdt-body').innerHTML=html;
+}
+
+renderSteps('goal');
+</script>
+</body>
+</html>
