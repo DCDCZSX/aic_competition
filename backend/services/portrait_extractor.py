@@ -147,8 +147,11 @@ def _extract_symptoms(text: str) -> List[SymptomEvent]:
         onset = m.group(2).strip()
         if len(symptom) < 2 or symptom in seen:
             continue
-        # 过滤明显不是症状的词
+        # 过滤明显不是症状的词：文书词、疾病名（"2型糖尿病5年"里的"型糖尿病"）
         if any(token in symptom for token in ("患者", "入院", "出院", "诊断", "治疗", "病史")):
+            continue
+        if any(d in symptom for d in ("糖尿病", "高血压", "冠心病", "房颤", "心衰",
+                                      "慢阻肺", "肝硬化", "贫血", "肿瘤", "癌")):
             continue
         seen.add(symptom)
         events.append(SymptomEvent(

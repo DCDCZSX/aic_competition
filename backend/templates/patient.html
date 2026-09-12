@@ -94,6 +94,21 @@
   .chip.on{background:var(--blue);border-color:var(--blue);color:#fff;}
   .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap;}
   .foot{margin-top:22px;padding-top:12px;border-top:1px solid var(--line);color:var(--ink3);font-size:12px;}
+  /* ===== 打印 / 导出 PDF：只保留报告正文 ===== */
+  @media print{
+    body{background:#fff;}
+    #login,.topbar,.steps,.actions,.foot,.row{display:none !important;}
+    .wrap{max-width:none;padding:0;}
+    .card{border:0;box-shadow:none;padding:0;margin:0 0 12px;}
+    h2{font-size:18px;}
+    details{display:block;margin:6px 0;}
+    details>summary{list-style:none;font-weight:600;cursor:default;}
+    details>summary::-webkit-details-marker{display:none;}
+    details>div{display:block !important;}
+    .banner{border-width:1px;}
+    .field{border-bottom:1px dashed #ddd;}
+    a[href]:after{content:"";}
+  }
 </style>
 </head>
 <body>
@@ -291,7 +306,22 @@
     <div id="mdt-body"></div>
     <div class="actions">
       <button class="ghost" onclick="go('path')">← 返回路径与任务</button>
-      <button class="primary" onclick="finishFlow()">完成（查看本次小结）→</button>
+      <button class="primary" onclick="goReport()">查看就医报告 →</button>
+    </div>
+  </section>
+
+  <!-- P9 报告 -->
+  <section id="s-report" class="card hide">
+    <h2>就医报告</h2>
+    <div class="row" style="margin-bottom:12px;">
+      <button id="tab-summary" class="primary" onclick="switchReport('summary')">一页就医摘要</button>
+      <button id="tab-full" onclick="switchReport('full')">完整报告</button>
+    </div>
+    <div id="report-body"></div>
+    <div class="actions">
+      <button class="ghost" onclick="go('mdt')">← 返回多学科分析</button>
+      <button class="primary" onclick="printReport()">打印 / 导出 PDF</button>
+      <button class="primary" onclick="finishFlow()">完成 →</button>
     </div>
   </section>
 
@@ -312,10 +342,11 @@
 <script>
 /* ===================== 状态 ===================== */
 const S = { token:null, role:null, label:null, goals:[], caseId:null, questions:[], answers:{},
-            profile:null, mode:'paste', triage:null, path:null, mdt:null };
+            profile:null, mode:'paste', triage:null, path:null, mdt:null, report:null,
+            reportView:'summary' };
 const STEPS = [['goal','就医目标'],['intake','录入资料'],['mask','脱敏预览'],
                ['profile','画像确认'],['ask','智能追问'],['triage','就医方向'],
-               ['path','路径与任务'],['mdt','多学科分析']];
+               ['path','路径与任务'],['mdt','多学科分析'],['report','就医报告']];
 const DISEASES = ['糖尿病','高血压','冠心病','心房颤动','脑梗死','慢阻肺','哮喘',
                   '慢性肾病','甲状腺功能减退','类风湿关节炎','肿瘤史','肝炎'];
 
@@ -534,6 +565,91 @@ async function submitAnswers(){
 }
 
 function goMdt(){ renderMdt(); go('mdt'); }
+
+/* ===================== P9 报告 ===================== */
+async function goReport(){
+  if(!S.report){
+    const r = await api(`/api/v2/case/${S.caseId}/report`);
+    if(r.status!==200){ alert('报告生成失败：'+(r.data.error||r.status)); return; }
+    S.report = r.data;
+  }
+  switchReport(S.reportView || 'summary');
+  go('report');
+}
+
+function switchReport(view){
+  S.reportView = view;
+  document.getElementById('tab-summary').className = view==='summary' ? 'primary' : '';
+  document.getElementById('tab-full').className = view==='full' ? 'primary' : '';
+  const rep = (S.report||{})[view] || {};
+  const sections = rep.sections || {};
+  let html='';
+
+  html += `<div class="banner ${rep.doctor_confirmed?'ok':'warn'}">
+    ${rep.doctor_confirmed ? '✅ 已由医生审核确认' : '⚠️ ' + esc(rep.badge||'AI 生成，尚未经医生审核')}
+    <span class="tiny">　病例号 ${esc(rep.case_id)}　生成于 ${esc(rep.generated_at)}</span></div>`;
+
+  if(view==='summary'){
+    const rows = ['主要问题','关键已知资料','当前信息缺口','建议咨询方向','需要向医生确认的问题','当前任务'];
+    html += `<div class="ai-block" style="background:#fff;border-left-color:var(--blue);">
+      <div style="font-size:16px;font-weight:600;">多学科就医智助系统 · 一页就医摘要</div>
+      <div class="tiny">适合带到线下就诊时给医生看</div></div>`;
+    rows.forEach(k=>{
+      const v = sections[k];
+      html += `<h3 style="margin-top:14px;">${esc(k)}</h3>`;
+      html += Array.isArray(v)
+        ? (v.length ? v.map(x=>`<div class="field"><div style="flex:1;">· ${esc(x)}</div></div>`).join('') : '<div class="tiny">（无）</div>')
+        : `<div>${esc(v||'（无）')}</div>`;
+    });
+    html += `<div class="field" style="margin-top:12px;"><div class="muted" style="min-width:96px;">结果可靠性</div>
+      <div style="flex:1;">${esc(sections['结果可靠性']||'—')}
+      ${(sections['可靠性原因']||[]).map(x=>`<div class="tiny">· ${esc(x)}</div>`).join('')}</div></div>`;
+    html += `<p class="tiny" style="margin-top:10px;">未经过医生审核的内容均为 AI 辅助分析，不能作为诊断或用药依据。</p>`;
+  } else {
+    // 用后端给出的权威段落顺序（Flask 的 jsonify 会排序 key，不能用 Object.keys）
+    const keys = rep.section_order || Object.keys(sections);
+    html += `<p class="muted">共 ${keys.length} 段，结构完整性：${rep.complete?'✅ 完整':'⚠ 缺 '+ (rep.missing_sections||[]).join('、')}</p>`;
+    keys.forEach((k,i)=>{
+      html += `<details ${i<3?'open':''} style="margin-top:8px;">
+        <summary style="font-weight:600;">${i+1}. ${esc(k)}</summary>
+        <div style="margin-top:6px;">${renderSectionValue(sections[k])}</div></details>`;
+    });
+  }
+
+  html += `<div class="banner warn" style="margin-top:14px;">${esc(rep.disclaimer||'')}<br>
+    <span class="tiny">${esc(rep.capability_boundary||'')}</span></div>`;
+  document.getElementById('report-body').innerHTML = html;
+}
+
+function renderSectionValue(v){
+  if(v==null || v==='') return '<div class="tiny">（无）</div>';
+  if(typeof v==='string') return `<div>${esc(v)}</div>`;
+  if(Array.isArray(v)){
+    if(!v.length) return '<div class="tiny">（无）</div>';
+    return v.map(item=>{
+      if(typeof item==='object'){
+        const txt = Object.entries(item).filter(([k,x])=>x!==null&&x!==''&&!(Array.isArray(x)&&!x.length))
+          .map(([k,x])=>`<strong>${esc(k)}</strong>：${esc(Array.isArray(x)?x.join('、'):x)}`).join('；');
+        return `<div class="field"><div style="flex:1;">· ${txt||'（空）'}</div></div>`;
+      }
+      return `<div class="field"><div style="flex:1;">· ${esc(item)}</div></div>`;
+    }).join('');
+  }
+  if(typeof v==='object'){
+    return Object.entries(v).map(([k,x])=>{
+      if(Array.isArray(x)||typeof x==='object') return `<div style="margin-top:6px;"><strong>${esc(k)}</strong>${renderSectionValue(x)}</div>`;
+      return `<div class="field"><div class="muted" style="min-width:110px;">${esc(k)}</div><div style="flex:1;">${esc(x)}</div></div>`;
+    }).join('');
+  }
+  return `<div>${esc(v)}</div>`;
+}
+
+function printReport(){
+  const view = S.reportView==='full' ? '完整报告' : '一页就医摘要';
+  document.title = `多学科就医智助_${view}_${S.caseId}`;
+  window.print();
+  document.title = '多学科就医智助系统 · 患者端';
+}
 
 /* ===================== P6 分诊结果 ===================== */
 function renderTriage(){

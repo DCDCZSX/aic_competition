@@ -31,6 +31,7 @@ from services.mdt_analyst import aggregate, analyze_specialty  # noqa: E402
 from services.path_service import build_path  # noqa: E402
 from services.portrait_extractor import ExtractionResult, extract  # noqa: E402
 from services.privacy import desensitize  # noqa: E402
+from services import report_service  # noqa: E402
 from services.rule_engine import evaluate as evaluate_rules  # noqa: E402
 from services.s2_analyst import analyze as s2_analyze  # noqa: E402
 from services.store import Store  # noqa: E402
@@ -283,11 +284,7 @@ class CaseFlow:
         result.triage = outcome.to_dict()
 
         # ---- 6. 就医路径与任务（P7）----
-        checks_by_dept: Dict[str, List[str]] = {}
-        for gap in result.gaps:
-            for dep in outcome.selected:
-                if dep in gap:
-                    checks_by_dept.setdefault(dep, []).append(f"完善{gap.split('：')[0]}")
+        checks_by_dept = self._checks_by_department(result.gaps, outcome.selected)
         care_path = build_path(outcome=outcome, gaps=result.gaps,
                                checks_by_department=checks_by_dept, case_id=case_id)
         result.path = care_path.to_dict()
@@ -343,10 +340,7 @@ class CaseFlow:
                               completeness=completeness,
                               unresolved_gaps=len(outcome_answers["unresolved_fields"]))
 
-        checks_by_dept: Dict[str, List[str]] = {}
-        for dep in outcome.selected:
-            checks_by_dept[dep] = [f"完善{g.split('：')[0]}"
-                                   for g in remaining_gaps if dep in g]
+        checks_by_dept = self._checks_by_department(remaining_gaps, outcome.selected)
         care_path = build_path(outcome=outcome, gaps=remaining_gaps,
                                checks_by_department=checks_by_dept, case_id=case_id)
 
@@ -406,7 +400,48 @@ class CaseFlow:
     def get_case(self, case_id: str) -> Optional[Dict[str, Any]]:
         return self.store.load_case(case_id) if self.store else None
 
+    def build_reports(self, case_id: str) -> Optional[Dict[str, Any]]:
+        """生成患者版一页摘要 + 完整报告（P9）。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return None
+        payload = dict(case.get("payload") or {})
+        # 医生审核记录（若已有）用于"医生最终意见 / AI vs 医生差异"段
+        payload["decisions"] = self.store.list_decisions(case_id) if self.store else []
+        merged = dict(case)
+        merged["payload"] = payload
+        reports = report_service.build_both(merged)
+        if self.store:
+            self.store.add_audit(case_id, "report_generated",
+                                 f"完整={reports['full'].get('complete')} "
+                                 f"缺段={reports['full'].get('missing_sections')}")
+        return reports
+
     # ------------------------------------------------------------------ 内部
+    @staticmethod
+    def _checks_by_department(gaps: Sequence[str], selected: Sequence[str]) -> Dict[str, List[str]]:
+        """把"信息缺口"映射到"该向哪个科室确认"（用依赖矩阵反查，而不是字符串包含）。
+
+        修正：缺口文案是"眼底检查：信息不足"（字段名），并不含科室名，
+        原来用 `dep in gap` 判断永远匹配不上，导致没有任何"就医咨询"任务。
+        """
+        from services.dependency_matrix import BY_LABEL, departments_for_field
+
+        out: Dict[str, List[str]] = {}
+        for gap in gaps or []:
+            field = None
+            for label, key in BY_LABEL.items():
+                if label in str(gap):
+                    field = key
+                    break
+            if not field:
+                continue
+            item = f"完善{str(gap).split('：')[0]}"
+            for dep in departments_for_field(field):
+                if dep in (selected or []) and item not in out.setdefault(dep, []):
+                    out[dep].append(item)
+        return out
+
     def _profile_to_dict(self, profile: Any) -> Dict[str, Any]:
         """画像 → 前端可渲染的结构（保留 source_refs 供 hover 出处）。"""
         return {

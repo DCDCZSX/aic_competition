@@ -158,6 +158,18 @@ def get_case(case_id):
         return jsonify({'error': f'病例不存在：{case_id}'}), 404
     return jsonify({'case': case, 'audit': _shared_store.list_audit(case_id, limit=50)})
 
+
+@app.route('/api/v2/case/<case_id>/report', methods=['GET'])
+def get_report(case_id):
+    """生成患者版一页摘要 + 医生审核版完整报告（P9）。"""
+    session, error = _guard()
+    if error:
+        return error
+    reports = case_flow.build_reports(case_id)
+    if not reports:
+        return jsonify({'error': f'病例不存在：{case_id}'}), 404
+    return jsonify(reports)
+
 @app.route('/api/start_consultation', methods=['POST'])
 def start_consultation():
     try:

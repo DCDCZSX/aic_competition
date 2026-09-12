@@ -175,9 +175,15 @@ def _build_tasks(
                 f"path:{dep}")
 
     # ② 就医咨询任务（来自各科 high checks，一律"确认式"）
+    #   去重：多个专科可能提出同一项检查（如"完善眼底检查"），合并为一条任务。
+    seen_checks: set = set()
     for dep, checks in (checks_by_department or {}).items():
         for check in list(checks)[:2]:
-            add("就医咨询", f"{CONFIRM_PREFIX}：{check}", "high", f"{dep}:checks")
+            key = str(check).strip()
+            if not key or key in seen_checks:
+                continue
+            seen_checks.add(key)
+            add("就医咨询", f"{CONFIRM_PREFIX}：{key}", "high", f"{dep}:checks")
 
     # ③ 就诊后资料更新任务
     add("就诊后资料更新", "就诊后上传新检查结果与用药变化，系统会更新建议", "medium", "path:followup")
