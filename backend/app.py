@@ -55,15 +55,42 @@ def _guard(required_scope=None):
     return session, None
 
 
+def _guard_doctor(required_scope='review'):
+    """医生端守卫：**始终**要求医生角色会话（规格书 §3.1：后台按角色鉴权，不能只做前端跳转）。
+
+    与 `_guard` 的区别：这里不受 `APP_AUTH_REQUIRED` 影响——审核操作在任何情况下都必须
+    由医生角色发起，使用医生账号（doctor）或从首页「医生工作台」进入即可。
+    """
+    session = _current_session()
+    if session is None:
+        return None, (jsonify({'error': '未登录：医生端操作需要先登录医生账号'}), 401)
+    if session.role != ROLE_DOCTOR:
+        return session, (jsonify({'error': f'当前角色（{session.role}）无权访问医生工作台'}), 403)
+    if not auth_service.has_scope(session, required_scope):
+        return session, (jsonify({'error': f'医生角色缺少权限：{required_scope}'}), 403)
+    return session, None
+
+
 @app.route('/', methods=['GET'])
 def home():
-    return render_template('index.html')
+    """产品首页（暖色编辑风落地页 + 患者端/医生端双入口）。
+
+    内容全部取自本系统真实能力（评测数字、护栏、审核流程），素材为自绘 SVG，无外链资源。
+    """
+    return render_template('home.html')
+
 
 
 @app.route('/patient', methods=['GET'])
 def patient_home():
     """患者端页面（P0 登录 + P1-P5：目标/录入/脱敏/画像/追问）。"""
     return render_template('patient.html')
+
+
+@app.route('/doctor', methods=['GET'])
+def doctor_home():
+    """医生端审核台（屏 A-G，见 `UI设计说明-医生端审核台.md`）。"""
+    return render_template('doctor.html')
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +185,148 @@ def get_case(case_id):
         return jsonify({'error': f'病例不存在：{case_id}'}), 404
     return jsonify({'case': case, 'audit': _shared_store.list_audit(case_id, limit=50)})
 
+
+@app.route('/api/v2/case/<case_id>/report', methods=['GET'])
+def get_report(case_id):
+    """生成患者版一页摘要 + 医生审核版完整报告（P9）。"""
+    session, error = _guard()
+    if error:
+        return error
+    reports = case_flow.build_reports(case_id)
+    if not reports:
+        return jsonify({'error': f'病例不存在：{case_id}'}), 404
+    return jsonify(reports)
+
+
+@app.route('/api/v2/case/<case_id>/tasks/<task_id>', methods=['POST'])
+def update_task(case_id, task_id):
+    """任务状态机（P7）：todo → doing → done / cancelled / reopened。"""
+    session, error = _guard('case:own')
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    result = case_flow.update_task_state(
+        case_id, task_id, str(data.get('state') or ''),
+        actor=(session.username if session else (data.get('actor') or 'patient')),
+        reason=str(data.get('reason') or ''),
+    )
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/updates', methods=['POST'])
+def add_case_update(case_id):
+    """就诊后资料更新（P10）：患者上传手上资料，或医生端录入线下意见。
+
+    来源为"医生上传/医院文档/已确认资料"时必须由**医生角色**发起——
+    患者端不承担"替医生写意见"（UI 设计说明 §6 第 7 条）。
+    """
+    data = request.get_json(silent=True) or {}
+    source = str(data.get('source') or '患者上传')
+    doctor_sources = {'医生上传', '医院文档', '已确认资料'}
+    if source in doctor_sources:
+        session, error = _guard_doctor('decision')
+    else:
+        session, error = _guard()
+    if error:
+        return error
+    result = case_flow.add_update(
+        case_id,
+        kind=str(data.get('kind') or ''),
+        content=str(data.get('content') or ''),
+        source=source,
+        department=str(data.get('department') or ''),
+    )
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/changes', methods=['GET'])
+def get_changes(case_id):
+    """变化摘要（P11）：新增了什么、哪些判断变了、哪些未受影响。"""
+    session, error = _guard()
+    if error:
+        return error
+    data = case_flow.get_change_summary(case_id)
+    if data is None:
+        return jsonify({'error': f'病例不存在：{case_id}'}), 404
+    return jsonify(data)
+
+
+# ---------------------------------------------------------------------------
+# 医生端审核台（屏 A-G，规格书 §5.6 / §7.1，任务 4.1-4.5）
+# 注：医生端接口**始终**要求医生角色（`_guard_doctor`），不受 APP_AUTH_REQUIRED 影响。
+# ---------------------------------------------------------------------------
+
+@app.route('/api/v2/cases', methods=['GET'])
+def list_review_cases():
+    """屏 A 病例列表（待审优先）。"""
+    session, error = _guard_doctor()
+    if error:
+        return error
+    state_filter = request.args.get('state') or ''
+    return jsonify({
+        'cases': case_flow.list_review_cases(limit=int(request.args.get('limit') or 100),
+                                             state_filter=state_filter),
+        'reviewer': session.to_dict(include_token=False),
+    })
+
+
+@app.route('/api/v2/case/<case_id>/review', methods=['GET'])
+def get_review(case_id):
+    """屏 B-F 数据：决策条目 + 审核进度 + 待确认问题 + 线下意见。"""
+    session, error = _guard_doctor()
+    if error:
+        return error
+    data = case_flow.get_review(case_id)
+    if data is None:
+        return jsonify({'error': f'病例不存在：{case_id}'}), 404
+    return jsonify(data)
+
+
+@app.route('/api/v2/case/<case_id>/decisions', methods=['POST'])
+def submit_decision(case_id):
+    """屏 F 逐条审核：accept / modify / reject / uncertain / request_more_info。"""
+    session, error = _guard_doctor('decision')
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    result = case_flow.submit_decision(
+        case_id,
+        item_id=str(data.get('item_id') or ''),
+        action=str(data.get('action') or ''),
+        after=str(data.get('after') or ''),
+        reason=str(data.get('reason') or ''),
+        reviewer_name=str(data.get('reviewer') or (session.label if session else '审核医生')),
+        reviewer_dept=str(data.get('reviewer_dept') or ''),
+    )
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/publish', methods=['POST'])
+def publish_review(case_id):
+    """屏 F 底部：发布审核版报告（状态→doctor_confirmed、版本+1、角标转绿）。"""
+    session, error = _guard_doctor('report:confirm')
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    result = case_flow.publish_review(
+        case_id,
+        reviewer_name=str(data.get('reviewer') or (session.label if session else '审核医生')),
+        accept_all=bool(data.get('accept_all')),
+    )
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/audit', methods=['GET'])
+def get_case_audit(case_id):
+    """屏 G 审核记录与版本：审计时间线 + 决策记录 + 条目状态。"""
+    session, error = _guard_doctor()
+    if error:
+        return error
+    data = case_flow.get_review_history(case_id)
+    if data is None:
+        return jsonify({'error': f'病例不存在：{case_id}'}), 404
+    return jsonify(data)
+
 @app.route('/api/start_consultation', methods=['POST'])
 def start_consultation():
     try:
@@ -212,7 +381,7 @@ if __name__ == '__main__':
     except Exception:
         pass
 
-    # 绑定与调试开关走环境变量：默认只监听本机、关闭 debug（演示/提交要求）
+    # 绑定与调试开关走环境变量：默认只监听本机、关闭 debug（合规要求）
     host = os.getenv('APP_HOST', '127.0.0.1').strip()
     port = int(os.getenv('APP_PORT', '5000'))
     debug = os.getenv('APP_DEBUG', 'false').strip().lower() in ('1', 'true', 'yes')

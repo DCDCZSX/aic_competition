@@ -1,15 +1,16 @@
 """登录、角色分流与会话守卫（规格书 §3.1/§3.2，主文档 §11）。
 
-比赛版定位（写死）：
-- **预置演示账号**：`patient_demo` / `doctor_demo`，不接真实注册与实名认证；
-- **角色分流**：患者进患者端，医生进审核台；后台按角色鉴权，不能只做前端跳转；
-- **未登录不得访问病例接口**：`APP_AUTH_REQUIRED=true` 时强制校验（演示/提交请开启）；
-- 会话为内存实现（比赛版），带过期时间；真实产品应换成正式认证体系。
+产品定位（写死）：
+- **账号体系**：内置「就诊者」与「审核医生」两类账号；本地部署、不接第三方注册，
+  真实上线时把这里替换为机构统一身份认证；
+- **角色分流**：就诊者进患者端，医生进医生工作台；后台按角色鉴权，不能只做前端跳转；
+- **未登录不得访问病例接口**：`APP_AUTH_REQUIRED=true` 时强制校验（生产部署请开启）；
+- 会话为内存实现，带过期时间；多实例部署时应换成集中式会话存储。
 
 用法：
     auth = AuthService()
-    session = auth.login(username="doctor_demo", password="doctor_demo")
-    session = auth.login(role="patient")          # 角色卡片快捷入口（演示）
+    session = auth.login(username="doctor", password="doctor")
+    session = auth.login(role="patient")          # 角色入口（等价于该角色账号）
     auth.verify(token)                            # -> Session | None
 """
 
@@ -32,10 +33,10 @@ ROLE_SCOPES: Dict[str, List[str]] = {
     ROLE_DOCTOR: ["review", "case:authorized", "decision", "report:confirm"],
 }
 
-# 预置演示账号（密码仅用于演示，不构成真实认证）
-DEMO_ACCOUNTS: Dict[str, Dict[str, str]] = {
-    "patient_demo": {"password": "patient_demo", "role": ROLE_PATIENT, "label": "患者演示"},
-    "doctor_demo": {"password": "doctor_demo", "role": ROLE_DOCTOR, "label": "医生演示（审核人）"},
+# 内置账号（本机部署的可用账号；真实上线接机构认证并强制改密）
+ACCOUNTS: Dict[str, Dict[str, str]] = {
+    "patient": {"password": "patient", "role": ROLE_PATIENT, "label": "就诊者"},
+    "doctor": {"password": "doctor", "role": ROLE_DOCTOR, "label": "审核医生"},
 }
 
 
@@ -88,13 +89,13 @@ class AuthService:
     ) -> Session:
         """登录。
 
-        - 传 `username` + `password`：按预置账号校验；
-        - 只传 `role`：角色卡片快捷入口（演示用，等价于对应演示账号）。
+        - 传 `username` + `password`：按内置账号校验；
+        - 只传 `role`：角色入口（等价于该角色账号，供页面上的角色卡直接进入）。
         """
         if username:
-            account = DEMO_ACCOUNTS.get(username.strip())
+            account = ACCOUNTS.get(username.strip())
             if not account:
-                raise AuthError("账号不存在（演示版仅提供 patient_demo / doctor_demo）")
+                raise AuthError("账号不存在，请核对账号后重试")
             if account["password"] != (password or ""):
                 raise AuthError("账号或密码不正确")
             return self._create_session(username.strip(), account["role"], account["label"])
@@ -102,11 +103,11 @@ class AuthService:
         if role:
             if role not in VALID_ROLES:
                 raise AuthError(f"未知角色：{role}（可选：{' / '.join(VALID_ROLES)}）")
-            username = "patient_demo" if role == ROLE_PATIENT else "doctor_demo"
-            account = DEMO_ACCOUNTS[username]
+            username = "patient" if role == ROLE_PATIENT else "doctor"
+            account = ACCOUNTS[username]
             return self._create_session(username, account["role"], account["label"])
 
-        raise AuthError("请提供账号密码，或选择进入患者/医生演示")
+        raise AuthError("请提供账号密码，或选择进入患者端 / 医生工作台")
 
     def _create_session(self, username: str, role: str, label: str) -> Session:
         now = datetime.now()

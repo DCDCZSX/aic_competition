@@ -1,6 +1,6 @@
 """病例流程编排（接线层）：把已实现的模块串成可用的患者端链路。
 
-对应规格书 §2 P0 演示链路的**前半段**：
+对应规格书 §2 P0 主链路的**前半段**：
 
     录入与校验(G1/G2/G3) → 脱敏 → 病例结构化(画像+G4门禁) → 智能追问
     →（分诊/MDT 属阶段 2，本层预留接入点）
@@ -31,12 +31,17 @@ from services.mdt_analyst import aggregate, analyze_specialty  # noqa: E402
 from services.path_service import build_path  # noqa: E402
 from services.portrait_extractor import ExtractionResult, extract  # noqa: E402
 from services.privacy import desensitize  # noqa: E402
+from services import report_service  # noqa: E402
+from services import review_service  # noqa: E402
+from services import task_service  # noqa: E402
+from services import update_service  # noqa: E402
 from services.rule_engine import evaluate as evaluate_rules  # noqa: E402
 from services.s2_analyst import analyze as s2_analyze  # noqa: E402
 from services.store import Store  # noqa: E402
 from services.triage import orchestrate  # noqa: E402
+from schemas import CASE_STATE_LABELS  # noqa: E402
 
-# P0 演示限制：多专科分析最多取前 3 个科室（控制耗时）
+# 耗时控制：多专科分析最多取前 3 个科室
 MAX_MDT_DEPARTMENTS = 3
 
 # 病例状态（与 schemas.CASE_STATES 保持一致）
@@ -50,7 +55,7 @@ def _now() -> str:
 
 
 def new_case_id() -> str:
-    """生成病例号：#C + 8 位随机（便于演示展示与脱敏）。"""
+    """生成病例号：#C + 8 位随机（便于脱敏展示与检索）。"""
     return "C" + uuid.uuid4().hex[:8].upper()
 
 
@@ -283,11 +288,7 @@ class CaseFlow:
         result.triage = outcome.to_dict()
 
         # ---- 6. 就医路径与任务（P7）----
-        checks_by_dept: Dict[str, List[str]] = {}
-        for gap in result.gaps:
-            for dep in outcome.selected:
-                if dep in gap:
-                    checks_by_dept.setdefault(dep, []).append(f"完善{gap.split('：')[0]}")
+        checks_by_dept = self._checks_by_department(result.gaps, outcome.selected)
         care_path = build_path(outcome=outcome, gaps=result.gaps,
                                checks_by_department=checks_by_dept, case_id=case_id)
         result.path = care_path.to_dict()
@@ -343,10 +344,7 @@ class CaseFlow:
                               completeness=completeness,
                               unresolved_gaps=len(outcome_answers["unresolved_fields"]))
 
-        checks_by_dept: Dict[str, List[str]] = {}
-        for dep in outcome.selected:
-            checks_by_dept[dep] = [f"完善{g.split('：')[0]}"
-                                   for g in remaining_gaps if dep in g]
+        checks_by_dept = self._checks_by_department(remaining_gaps, outcome.selected)
         care_path = build_path(outcome=outcome, gaps=remaining_gaps,
                                checks_by_department=checks_by_dept, case_id=case_id)
 
@@ -406,7 +404,416 @@ class CaseFlow:
     def get_case(self, case_id: str) -> Optional[Dict[str, Any]]:
         return self.store.load_case(case_id) if self.store else None
 
+    def build_reports(self, case_id: str) -> Optional[Dict[str, Any]]:
+        """生成患者版一页摘要 + 完整报告（P9）。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return None
+        payload = dict(case.get("payload") or {})
+        # 医生审核记录（若已有）用于"医生最终意见 / AI vs 医生差异"段
+        payload["decisions"] = self.store.list_decisions(case_id) if self.store else []
+        merged = dict(case)
+        merged["payload"] = payload
+        reports = report_service.build_both(merged)
+        if self.store:
+            self.store.add_audit(case_id, "report_generated",
+                                 f"完整={reports['full'].get('complete')} "
+                                 f"缺段={reports['full'].get('missing_sections')}")
+        return reports
+
+    # ------------------------------------------------------------------ 任务状态机（3.4）
+    def update_task_state(self, case_id: str, task_id: str, to_state: str,
+                          *, actor: str = "patient", reason: str = "") -> Dict[str, Any]:
+        """变更任务状态（合法性由 task_service 校验）。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+
+        payload = dict(case.get("payload") or {})
+        path = dict(payload.get("path") or {})
+        tasks = list(path.get("tasks") or [])
+        try:
+            update = task_service.update_state(tasks, task_id, to_state,
+                                               actor=actor, reason=reason)
+        except task_service.TaskError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        path["tasks"] = tasks
+        payload["path"] = path
+        payload["tasks"] = tasks
+        if self.store:
+            self.store.save_case(
+                case_id, patient_name=case.get("patient_name") or "",
+                main_issue=case.get("main_issue") or "", status=case.get("status") or "running",
+                case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
+                report_version=int(case.get("report_version") or 1), payload=payload)
+            self.store.add_audit(case_id, "task_updated",
+                                 f"{task_id}: {update.from_state} → {update.to_state}"
+                                 f"（{update.reason or '无原因'}）")
+        return {"ok": True, "update": update.to_dict(),
+                "tasks_summary": task_service.summarize(tasks)}
+
+    # ------------------------------------------------------------------ 就诊后更新（3.6）
+    def add_update(self, case_id: str, *, kind: str, content: str,
+                   source: str = update_service.SOURCE_PATIENT,
+                   department: str = "") -> Dict[str, Any]:
+        """录入一条就诊后资料（患者上传 / 医生录入），并做**局部重算** + 变化摘要。
+
+        患者上传的"医生意见"一律标记为待验证，不自动成为医生确认意见（主文档 §14）。
+        """
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+        try:
+            update_service.validate_update(kind, content, source)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        payload = dict(case.get("payload") or {})
+        old_triage = payload.get("triage") or {}
+        old_path = payload.get("path") or {}
+        current_departments = list(old_triage.get("selected") or [])
+
+        # 依赖矩阵：确定受影响模块（只重算受影响部分）
+        affected = update_service.determine_affected(kind, content, current_departments)
+
+        update = update_service.UpdateRecord(
+            update_id=f"U-{len(payload.get('updates') or []) + 1:03d}",
+            case_id=case_id, kind=kind, content=str(content).strip(), source=source,
+            at=datetime.now().isoformat(timespec="seconds"),
+            affected_departments=affected["departments"], affected_modules=affected["modules"],
+        )
+
+        # 医生意见：存入独立列表（不混入患者上传）。
+        # 红线（主文档 §14）：患者转述的"医生说……"**不得**被当作医生确认意见，
+        # 因此原样保留来源，由 build_doctor_opinion 判定 is_verified=False。
+        if kind == "医生意见":
+            opinions = list(payload.get("doctor_opinions") or [])
+            opinions.append(update_service.build_doctor_opinion(
+                department or "线下医生", str(content).strip(),
+                source if source in update_service.VALID_SOURCES
+                else update_service.SOURCE_UNVERIFIED))
+            payload["doctor_opinions"] = opinions
+
+        # ---- 新资料填补缺口：命中则从缺口列表移除（避免"已提供却仍显示缺失"）----
+        filled_labels = update_service.gaps_filled_by(f"{kind}：{content}")
+        old_gaps = list(payload.get("gaps") or [])
+        remaining_gaps = [g for g in old_gaps
+                          if not any(label in str(g) for label in filled_labels)]
+        filled_gaps = [g for g in old_gaps if g not in remaining_gaps]
+
+        # ---- 局部重算：把新资料并入病历文本，只重跑分诊与路径 ----
+        masked_history = str(payload.get("masked_history") or "")
+        merged_text = "；".join(x for x in (masked_history, f"{kind}：{content}") if x)
+        rule_eval = evaluate_rules(merged_text)
+        outcome = orchestrate(
+            text=merged_text, case_id=case_id, evaluation=rule_eval, model_picks=None,
+            completeness=float(payload.get("completeness") or 0.0),
+            unresolved_gaps=len(remaining_gaps))
+        checks_by_dept = self._checks_by_department(remaining_gaps, outcome.selected)
+        care_path = build_path(outcome=outcome, gaps=remaining_gaps,
+                               checks_by_department=checks_by_dept, case_id=case_id)
+
+        new_triage = outcome.to_dict()
+        new_path = care_path.to_dict()
+
+        # ---- 变化摘要 ----
+        summary = update_service.build_change_summary(
+            case_id=case_id, old_triage=old_triage, new_triage=new_triage,
+            old_path=old_path, new_path=new_path, updates=[update],
+            unresolved_gaps=remaining_gaps,
+            doctor_opinions=payload.get("doctor_opinions") or [])
+        for gap in filled_gaps:
+            summary.added.append(f"已填补信息缺口：{gap}")
+            if f"仍未确认：{gap}" in summary.needs_doctor_review:
+                summary.needs_doctor_review.remove(f"仍未确认：{gap}")
+
+        updates = list(payload.get("updates") or [])
+        updates.append(update.to_dict())
+        payload.update({
+            "updates": updates,
+            "gaps": remaining_gaps,
+            "masked_history": merged_text[:2000],
+            "triage": new_triage,
+            "path": new_path,
+            "tasks": new_path.get("tasks", []),
+            "change_summary": summary.to_dict(),
+        })
+        # 新资料进入后待复核（状态机）
+        if self.store:
+            self.store.save_case(
+                case_id, patient_name=case.get("patient_name") or "",
+                main_issue=case.get("main_issue") or "", status=case.get("status") or "running",
+                case_state="awaiting_recheck",
+                report_version=int(case.get("report_version") or 1), payload=payload)
+            self.store.save_transition(case_id, case.get("case_state") or STATE_AWAITING_DOCTOR,
+                                       "awaiting_recheck", actor=source,
+                                       reason=f"{kind}更新")
+            self.store.add_audit(case_id, "case_updated",
+                                 f"{kind}（{source}）→ 受影响科室：{affected['departments'] or '无'}"
+                                 f"；变化摘要 {len(summary.changed)} 项")
+
+        return {"ok": True, "update": update.to_dict(),
+                "change_summary": summary.to_dict(),
+                "triage": new_triage, "path": new_path,
+                "affected": affected}
+
+    def get_change_summary(self, case_id: str) -> Optional[Dict[str, Any]]:
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return None
+        payload = case.get("payload") or {}
+        return {
+            "change_summary": payload.get("change_summary"),
+            "updates": payload.get("updates") or [],
+            "doctor_opinions": payload.get("doctor_opinions") or [],
+        }
+
+    # ------------------------------------------------------------------ 医生端审核台（4.1-4.5）
+    def list_review_cases(self, limit: int = 100, state_filter: str = "") -> List[Dict[str, Any]]:
+        """屏 A 病例列表：按"待审优先"排序，带待审条数与关键摘要。"""
+        if not self.store:
+            return []
+        rows: List[Dict[str, Any]] = []
+        for case in self.store.list_cases(limit=limit):
+            payload = case.get("payload") or {}
+            triage = payload.get("triage") or {}
+            items = review_service.apply_decisions(
+                review_service.build_items(case),
+                self.store.list_decisions(case.get("case_id") or ""),
+            )
+            summary = review_service.summarize(items)
+            primary = triage.get("primary") or {}
+            rows.append({
+                "case_id": case.get("case_id"),
+                "case_state": case.get("case_state"),
+                "case_state_label": CASE_STATE_LABELS.get(str(case.get("case_state")), case.get("case_state")),
+                "patient_name": case.get("patient_name") or "（脱敏病例）",
+                "age": (payload.get("profile") or {}).get("age"),
+                "sex": (payload.get("profile") or {}).get("sex"),
+                "behavior_type": triage.get("behavior_type"),
+                "reliability": (triage.get("reliability") or {}).get("level"),
+                "primary_department": primary.get("department"),
+                "chief_complaint": (payload.get("profile") or {}).get("chief_complaint")
+                                   or case.get("main_issue") or "",
+                "pending_items": summary["pending"],
+                "review": summary,
+                "reviewed_by": (payload.get("review") or {}).get("published_by") or "",
+                "report_version": int(case.get("report_version") or 1),
+                "created_at": case.get("created_at"),
+                "updated_at": case.get("updated_at"),
+            })
+        if state_filter:
+            rows = [r for r in rows if r["case_state"] == state_filter]
+        # 待审优先 → 新病例优先
+        rows.sort(key=lambda r: (-int(r["pending_items"] or 0), str(r["created_at"] or "")), reverse=False)
+        rows.sort(key=lambda r: (-int(r["pending_items"] or 0),))
+        return rows
+
+    def get_review(self, case_id: str) -> Optional[Dict[str, Any]]:
+        """屏 B-F 数据：决策条目 + 审核进度 + 是否可发布 + 线下意见。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return None
+        decisions = self.store.list_decisions(case_id) if self.store else []
+        items = review_service.apply_decisions(review_service.build_items(case), decisions)
+        summary = review_service.summarize(items)
+        payload = case.get("payload") or {}
+        return {
+            "case_id": case_id,
+            "case_state": case.get("case_state"),
+            "case_state_label": CASE_STATE_LABELS.get(str(case.get("case_state")), case.get("case_state")),
+            "items": [i.to_dict() for i in items],
+            "summary": summary,
+            "pending_questions": review_service.pending_questions(items),
+            "decisions": decisions,
+            "review": payload.get("review") or {},
+            "doctor_opinions": payload.get("doctor_opinions") or [],
+            "change_summary": payload.get("change_summary"),
+            "published": bool((payload.get("review") or {}).get("published")),
+        }
+
+    def submit_decision(self, case_id: str, item_id: str, action: str, *,
+                        after: str = "", reason: str = "",
+                        reviewer_name: str = "审核医生", reviewer_dept: str = "") -> Dict[str, Any]:
+        """逐条审核（屏 F）：接受 / 修改 / 驳回 / 暂不确定 / 请求补资料。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+
+        items = review_service.build_items(case)
+        try:
+            item = review_service.find_item(items, item_id)
+            decisions = self.store.list_decisions(case_id) if self.store else []
+            decision = review_service.make_decision(
+                case_id=case_id, item=item, action=action, after=after, reason=reason,
+                reviewer_name=reviewer_name, reviewer_dept=reviewer_dept,
+                version=int(case.get("report_version") or 1),
+                decision_id=f"{case_id}-{item.target_type}-{item.target_id}-{len(decisions) + 1}",
+            )
+        except review_service.ReviewError as exc:
+            return {"ok": False, "error": str(exc), "action": action}
+
+        if self.store:
+            record = dict(decision.__dict__)
+            # reviewer 必须以普通 dict 落库（payload 走 json.dumps，不能塞 dataclass）
+            record["reviewer"] = {"role": reviewer_name or "审核医生", "dept": reviewer_dept}
+            record["reviewer_name"] = reviewer_name
+            self.store.save_decision(record)
+            self.store.add_audit(
+                case_id, "decision_recorded",
+                f"{review_service.ACTION_LABELS.get(action, action)} {item.title}"
+                + (f"｜原因：{reason}" if reason else "")
+                + (f"｜改为：{after}" if action == "modify" and after else ""),
+            )
+
+        # 请求补资料 → 病例退回补资料（状态机 + 留痕）
+        state_changed = None
+        if action == "request_more_info" and self.store:
+            from_state = str(case.get("case_state") or STATE_AWAITING_DOCTOR)
+            self.store.save_case(
+                case_id, patient_name=case.get("patient_name") or "",
+                main_issue=case.get("main_issue") or "", status="running",
+                case_state=STATE_NEED_MORE_INFO,
+                report_version=int(case.get("report_version") or 1),
+                payload=dict(case.get("payload") or {}))
+            self.store.save_transition(case_id, from_state, STATE_NEED_MORE_INFO,
+                                       actor=reviewer_name or "doctor",
+                                       reason=f"请求补资料：{item.title}")
+            self.store.add_audit(case_id, "case_state_changed",
+                                 f"{from_state} → {STATE_NEED_MORE_INFO}（请求补资料）")
+            state_changed = STATE_NEED_MORE_INFO
+
+        review = self.get_review(case_id) or {}
+        return {"ok": True, "decision": decision.__dict__, "state_changed": state_changed,
+                "items": review.get("items"), "summary": review.get("summary"),
+                "pending_questions": review.get("pending_questions") or []}
+
+    def publish_review(self, case_id: str, *, reviewer_name: str = "审核医生",
+                       accept_all: bool = False) -> Dict[str, Any]:
+        """发布审核版报告（屏 F 底部）：状态 → doctor_confirmed、版本 +1、角标转绿。
+
+        规则（写死）：
+        - 仍有"待审"条目时**不得发布**；`accept_all=True` 时把剩余条目**逐条**批量接受并留痕
+          （不是静默通过：每条都落一条 reviewer=批量接受 的决策记录）；
+        - 发布后病例状态 `doctor_confirmed`、`report_version + 1`、审计留痕。
+        """
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+
+        symbols = self.get_review(case_id) or {}
+        items = review_service.apply_decisions(
+            review_service.build_items(case),
+            self.store.list_decisions(case_id) if self.store else [])
+        pending = [i for i in items if i.state == review_service.AWAITING]
+
+        accepted_ids: List[str] = []
+        if pending and accept_all:
+            for item in pending:
+                result = self.submit_decision(
+                    case_id, item.item_id, "accept",
+                    reason="批量接受（发布时统一确认）", reviewer_name=reviewer_name)
+                if result.get("ok"):
+                    accepted_ids.append(item.item_id)
+            items = review_service.apply_decisions(
+                review_service.build_items(case),
+                self.store.list_decisions(case_id) if self.store else [])
+            pending = [i for i in items if i.state == review_service.AWAITING]
+
+        if pending:
+            return {"ok": False,
+                    "error": f"仍有 {len(pending)} 条未审核，不能发布审核版",
+                    "pending_items": [i.item_id for i in pending]}
+
+        summary = review_service.summarize(items)
+        if not summary["total"]:
+            return {"ok": False, "error": "该病例没有可审核条目，无法发布审核版"}
+
+        payload = dict(case.get("payload") or {})
+        new_version = int(case.get("report_version") or 1) + 1
+        payload["review"] = {
+            "published": True,
+            "published_by": reviewer_name,
+            "published_at": _now(),
+            "version": new_version,
+            "counts": summary["by_state"],
+            "human_touched": summary["human_touched"],
+            "batch_accepted": accepted_ids,
+        }
+        # "暂不确定"条目进入报告的待医生确认问题清单
+        payload["review_pending_questions"] = review_service.pending_questions(items)
+        if self.store:
+            self.store.save_case(
+                case_id, patient_name=case.get("patient_name") or "",
+                main_issue=case.get("main_issue") or "", status="reviewed",
+                case_state="doctor_confirmed", report_version=new_version, payload=payload)
+            self.store.save_transition(case_id, str(case.get("case_state") or STATE_AWAITING_DOCTOR),
+                                       "doctor_confirmed", actor=reviewer_name or "doctor",
+                                       reason="发布审核版报告")
+            self.store.add_audit(
+                case_id, "report_published",
+                f"审核人={reviewer_name} 版本={new_version} 人工操作={summary['human_touched']}/"
+                f"{summary['total']} 批量接受={len(accepted_ids)}")
+        return {"ok": True, "case_state": "doctor_confirmed", "report_version": new_version,
+                "summary": summary, "batch_accepted": accepted_ids,
+                "review": payload["review"]}
+
+    def get_review_history(self, case_id: str) -> Optional[Dict[str, Any]]:
+        """屏 G 审核记录与版本：审计时间线 + 版本 + 条目状态快照。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return None
+        decisions = self.store.list_decisions(case_id) if self.store else []
+        items = review_service.apply_decisions(review_service.build_items(case), decisions)
+        payload = case.get("payload") or {}
+        timeline: List[Dict[str, Any]] = []
+        for row in self.store.list_audit(case_id, limit=200) if self.store else []:
+            timeline.append({"at": row.get("at"), "event": row.get("event"),
+                             "detail": row.get("detail")})
+        return {
+            "case_id": case_id,
+            "report_version": int(case.get("report_version") or 1),
+            "review": payload.get("review") or {},
+            "decisions": [
+                {"decision_id": d.get("decision_id"), "action": d.get("action"),
+                 "action_label": review_service.ACTION_LABELS.get(str(d.get("action")), d.get("action")),
+                 "target_type": d.get("target_type"), "target_id": d.get("target_id"),
+                 "before": d.get("before"), "after": d.get("after"),
+                 "reason": d.get("reason"),
+                 "reviewer": (d.get("reviewer") or {}).get("role"),
+                 "created_at": d.get("created_at"), "version": d.get("version")}
+                for d in decisions
+            ],
+            "items": [i.to_dict() for i in items],
+            "timeline": timeline,
+        }
+
     # ------------------------------------------------------------------ 内部
+    @staticmethod
+    def _checks_by_department(gaps: Sequence[str], selected: Sequence[str]) -> Dict[str, List[str]]:
+        """把"信息缺口"映射到"该向哪个科室确认"（用依赖矩阵反查，而不是字符串包含）。
+
+        修正：缺口文案是"眼底检查：信息不足"（字段名），并不含科室名，
+        原来用 `dep in gap` 判断永远匹配不上，导致没有任何"就医咨询"任务。
+        """
+        from services.dependency_matrix import BY_LABEL, departments_for_field
+
+        out: Dict[str, List[str]] = {}
+        for gap in gaps or []:
+            field = None
+            for label, key in BY_LABEL.items():
+                if label in str(gap):
+                    field = key
+                    break
+            if not field:
+                continue
+            item = f"完善{str(gap).split('：')[0]}"
+            for dep in departments_for_field(field):
+                if dep in (selected or []) and item not in out.setdefault(dep, []):
+                    out[dep].append(item)
+        return out
+
     def _profile_to_dict(self, profile: Any) -> Dict[str, Any]:
         """画像 → 前端可渲染的结构（保留 source_refs 供 hover 出处）。"""
         return {

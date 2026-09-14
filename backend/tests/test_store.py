@@ -108,7 +108,7 @@ class TestDecisions(StoreTestBase):
             "decision_id": "DD-001", "case_id": "C001",
             "target_type": "department_selection", "target_id": "ophthalmology",
             "action": "modify", "before": "先看眼科", "after": "先查眼底再看眼科",
-            "reason": "补充检查优先级", "reviewer": {"role": "演示审核人", "dept": "眼科"},
+            "reason": "补充检查优先级", "reviewer": {"role": "审核医生", "dept": "眼科"},
             "version": 3, "created_at": "2026-09-11T14:02:00",
         }
         self.store.save_decision(decision)

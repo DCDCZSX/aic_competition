@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多学科就医智助系统 · 医生工作台</title>
+<link rel="stylesheet" href="/static/css/dsh.css">
+<style>
+  /* 医生工作台专用样式（公共 token 与组件在 dsh.css） */
+  /* 左轨：待办病例 + 视图导航 */
+  .rail-cases{display:flex;flex-direction:column;gap:6px;max-height:38vh;overflow:auto;}
+  .rail-sec{border-top:1px solid var(--line);margin-top:var(--sp-12);padding-top:var(--sp-12);}
+  .view-nav{display:flex;flex-direction:column;gap:2px;}
+  .view-nav a{
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:8px 12px;border-radius:var(--br-8);color:var(--ink2);font-size:var(--body-3);
+  }
+  .view-nav a:hover{background:var(--gray-100);text-decoration:none;}
+  .view-nav a.on{background:var(--gray-000);border:1px solid var(--gray-200);color:var(--ink);font-weight:500;}
+  .view-nav a.dis{color:var(--ink3);cursor:not-allowed;}
+  /* 屏幕 E：三栏工作台已有通用 .mdt；屏幕 F：条目两列铺开 */
+  #rev-body{display:grid;gap:var(--sp-12);grid-template-columns:1fr;}
+  @media (min-width:1280px){ #rev-body{grid-template-columns:repeat(2,minmax(0,1fr));}}
+  #rev-body .item{margin-bottom:0;}
+  /* 病例列表：宽屏两列 */
+  #list-body{display:grid;gap:var(--sp-12);grid-template-columns:1fr;}
+  @media (min-width:1100px){ #list-body{grid-template-columns:repeat(2,minmax(0,1fr));}}
+  #list-body .case-row{margin-bottom:0;}
+  /* 窄屏：轨道折成整宽 */
+  @media (max-width:1100px){
+    .shell{grid-template-columns:1fr;}
+    .rail{position:static;max-height:none;border:1px solid var(--line);border-radius:var(--br-12);
+          background:var(--gray-000);padding:var(--sp-12);}
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== 屏 0：登录（全屏分栏，左=进入方式，右=工作台说明）===================== -->
+<div id="login" class="auth">
+  <div class="auth-main">
+    <div class="auth-panel">
+      <a class="auth-brand" href="/">
+        <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+          <rect x="1" y="1" width="26" height="26" rx="8" fill="#141413"/>
+          <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.2" stroke-linecap="round"/>
+          <circle cx="14" cy="14" r="3.2" fill="#faf9f5"/>
+        </svg>
+        <span class="name">多学科就医智助系统</span>
+      </a>
+
+      <h1>进入医生工作台</h1>
+      <p class="muted">先核对依据，再逐条把 AI 的结论过一遍：接受、修改、驳回、暂不确定，全部留痕可回溯。</p>
+
+      <div class="role-cards">
+        <div class="role-card" onclick="loginAs('doctor')">
+          <span class="ic">🩺</span>
+          <span>
+            <span class="t">进入医生工作台</span>
+            <span class="d">病例审阅 · 证据核查 · 逐条审核 · 录入线下意见</span>
+          </span>
+          <span class="go">→</span>
+        </div>
+      </div>
+
+      <details open>
+        <summary>或使用账号登录</summary>
+        <div class="row" style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
+          <input id="login-user" placeholder="账号" style="flex:1;min-width:160px;">
+          <input id="login-pass" type="password" placeholder="密码" style="flex:1;min-width:160px;">
+          <button class="primary" onclick="loginForm()">登录</button>
+        </div>
+      </details>
+
+      <div id="login-msg" class="banner danger hide" style="margin-top:var(--sp-12);"></div>
+    </div>
+  </div>
+
+  <aside class="auth-side">
+    <div class="auth-side-inner">
+      <h2>你在这个工作台里做什么</h2>
+      <ul class="auth-points">
+        <li><span class="n">01</span><span><strong>看依据，不看黑箱</strong>：分诊依据按"规则命中 → 模型受限发言 → 编排校验"三段展开，每个入选科室都有信号来源。</span></li>
+        <li><span class="n">02</span><span><strong>审多学科过程</strong>：各科先独立研判，共识与分歧分列；有争议的进"待医生确认"，不替医生裁决。</span></li>
+        <li><span class="n">03</span><span><strong>逐条把关</strong>：对科室入选、路径步骤、共识分歧、患者建议四类条目做接受 / 修改 / 驳回 / 暂不确定，修改与驳回必须填原因。</span></li>
+        <li><span class="n">04</span><span><strong>发布审核版并闭环</strong>：全部条目终态后发布，报告角标转为"已审核"；就诊后录入线下实际意见，生成「AI 建议 vs 医生意见」对照。</span></li>
+      </ul>
+
+      <div class="auth-preview">
+        <div class="ct">审核留痕示意（脱敏示例数据）</div>
+        <div class="pv-row"><span>14:00　接受</span><span class="chip ok">路径步骤 · 先查眼底</span></div>
+        <div class="pv-row"><span>14:02　修改</span><span class="chip ok">科室入选 · 牵头改为眼科</span></div>
+        <div class="pv-row"><span>14:05　驳回</span><span class="chip danger">患者建议 · 依据不足</span></div>
+        <div class="pv-row"><span>14:10　发布</span><span class="chip info">审核版 v2 · 已审核</span></div>
+      </div>
+
+      <p class="tiny" style="margin-top:var(--sp-16);">
+        审核记录全程留痕、可回溯，可按机构要求对接电子签名；AI 生成的内容未经审核时始终带"尚未经医生审核"角标。
+      </p>
+    </div>
+  </aside>
+
+  <footer class="auth-foot">
+    <p>⚠️ 本系统提供就医信息整理与决策辅助，<strong>不提供诊断或处方，也不替代医生判断</strong>；出现胸痛、呼吸困难、意识障碍、大出血等急症表现请立即就医。</p>
+    <p>体验账号：<span class="mono">doctor</span>（密码同账号名）；病例数据仅保存在本机。　<span style="white-space:nowrap;">就诊者请前往 <a href="/patient">患者端 →</a></span></p>
+  </footer>
+</div>
+
+<!-- ===================== 医生工作台主体 ===================== -->
+<div id="app" class="app hide">
+  <header class="appbar">
+    <div class="appbar-inner">
+      <div class="ab-left">
+        <a class="ab-brand" href="/">
+          <svg width="26" height="26" viewBox="0 0 28 28" aria-hidden="true">
+            <rect x="1" y="1" width="26" height="26" rx="8" fill="#141413"/>
+            <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.2" stroke-linecap="round"/>
+            <circle cx="14" cy="14" r="3.2" fill="#faf9f5"/>
+          </svg>
+          <span class="name">多学科就医智助系统</span>
+        </a>
+        <span class="tag">医生工作台</span>
+        <span class="abr-divider"></span>
+        <span class="abr-case mono" id="ctx">未选择病例</span>
+        <span class="pill gray" id="badge">AI 生成 · 尚未经医生审核</span>
+      </div>
+      <div class="ab-right">
+        <span class="ident muted" id="ident">—</span>
+        <button class="ghost btn-sm" onclick="logout()">退出登录</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="shell">
+    <!-- 左轨：待办病例 + 视图导航 -->
+    <aside class="rail rail-left">
+      <div class="rail-title">待办病例</div>
+      <div class="rail-cases" id="rail-cases"><div class="skeleton">加载中…</div></div>
+      <div class="rail-sec">
+        <div class="rail-title">审阅视图</div>
+        <nav class="view-nav" id="nav">
+          <a onclick="go('list')" data-s="list">病例列表</a>
+          <a onclick="navCase('overview')" data-s="overview" class="dis">病例总览</a>
+          <a onclick="navCase('triage')" data-s="triage" class="dis">分诊依据</a>
+          <a onclick="navCase('evidence')" data-s="evidence" class="dis">证据板</a>
+          <a onclick="navCase('mdt')" data-s="mdt" class="dis">多学科审阅 ★</a>
+          <a onclick="navCase('review')" data-s="review" class="dis">报告审核 ★</a>
+          <a onclick="navCase('history')" data-s="history" class="dis">审核记录与版本</a>
+        </nav>
+      </div>
+      <div class="rail-foot">
+        <div class="progress"><i id="rev-bar" style="width:0%"></i></div>
+        <div class="tiny" id="rev-note">未选择病例</div>
+      </div>
+    </aside>
+
+    <main class="work">
+      <section id="s-list" class="card">
+        <h2>病例列表（待审优先）</h2>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+          <select id="f-state" style="width:auto;" onchange="loadList()">
+            <option value="">全部状态</option>
+            <option value="awaiting_doctor">AI 分析完成 / 待医生审核</option>
+            <option value="awaiting_recheck">新资料进入后待复核</option>
+            <option value="need_more_info">退回补资料</option>
+            <option value="doctor_confirmed">医生已确认</option>
+          </select>
+          <button class="ghost mini" onclick="loadList()">刷新</button>
+          <span class="tiny" id="list-note"></span>
+        </div>
+        <div id="list-body"><div class="skeleton">加载中…</div></div>
+      </section>
+
+      <section id="s-overview" class="card hide">
+        <h2 id="ov-title">病例总览</h2>
+        <div id="ov-body"></div>
+      </section>
+
+      <section id="s-triage" class="card hide">
+        <h2>分诊依据（规则 → 模型 → 编排）</h2>
+        <div id="tri-body"></div>
+      </section>
+
+      <section id="s-evidence" class="card hide">
+        <h2>证据板（时间线 + 判断 ↔ 证据关联）</h2>
+        <div id="ev-body"></div>
+      </section>
+
+      <section id="s-mdt" class="card hide">
+        <h2>多学科会诊审阅</h2>
+        <div class="tiny" style="margin-bottom:8px;">独立研判 → 分歧 → 质询 → 补答。本页只显示"哪些判断被质疑、缺什么证据、是否维持"，不显示任何概率或置信度数字。</div>
+        <div style="margin-bottom:10px;"><button class="mini" onclick="playMdt()">▶ 播放过程</button>
+          <span class="tiny" id="mdt-note"></span></div>
+        <div id="mdt-body"></div>
+      </section>
+
+      <section id="s-review" class="card hide">
+        <h2>报告审核</h2>
+        <div class="banner gray" id="pub-badge">AI 生成 · 尚未经医生审核</div>
+        <div id="rev-body"></div>
+      </section>
+
+      <section id="s-history" class="card hide">
+        <h2>审核记录与版本</h2>
+        <div id="hist-body"></div>
+      </section>
+    </main>
+
+    <!-- 右轨：审核面板（进度 / 发布 / 线下意见录入，常驻可见） -->
+    <aside class="rail rail-right">
+      <div class="panel">
+        <div class="panel-title">审核进度</div>
+        <div id="rev-summary"></div>
+      </div>
+      <div id="rev-publish"></div>
+      <div class="panel">
+        <div class="panel-title">审核须知</div>
+        <div class="tiny" style="margin-bottom:6px;">· 修改与驳回必须填写原因，记录含 AI 原稿与医生版本，可回溯。</div>
+        <div class="tiny" style="margin-bottom:6px;">· "暂不确定"的条目会带原因进入报告的待确认问题清单。</div>
+        <div class="tiny" style="margin-bottom:6px;">· 仍有待审条目时不能发布审核版；"全部接受并发布"也会逐条留痕。</div>
+        <div class="tiny">· 患者转述的"医生说…"不会被当作医生意见采信。</div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- 修改/驳回弹窗 -->
+<div id="modal" class="modal hide">
+  <div class="box">
+    <h2 id="modal-title">审核操作</h2>
+    <div id="modal-body"></div>
+    <div class="actions">
+      <button class="ghost" onclick="closeModal()">取消</button>
+      <button class="primary" onclick="submitModal()">确认提交</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===================== 状态与工具 ===================== */
+const S = { token:'', me:null, cases:[], caseId:'', caseData:null, review:null,
+            audit:null, screen:'list', modal:null, mdtTimer:null };
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function $(id){ return document.getElementById(id); }
+function msg(id, text, cls){ const el=$(id); if(!el) return; el.className='banner '+(cls||'danger'); el.textContent=text; el.classList.remove('hide'); }
+
+async function api(path, opt){
+  opt = opt || {};
+  const headers = Object.assign({'Content-Type':'application/json'}, opt.headers||{});
+  if(S.token) headers['Authorization'] = 'Bearer ' + S.token;
+  const res = await fetch(path, Object.assign({}, opt, {headers}));
+  let data = null;
+  try{ data = await res.json(); }catch(e){ data = {}; }
+  return {status:res.status, data};
+}
+
+/* ===================== 登录 ===================== */
+async function loginAs(role){
+  const r = await api('/api/login', {method:'POST', body:JSON.stringify({role})});
+  if(r.status!==200){ msg('login-msg', r.data.error||'登录失败'); return; }
+  const d = r.data.session || {};
+  if(d.role !== 'doctor'){
+    msg('login-msg', '当前登录的是患者账号；医生工作台需要医生账号（请点「进入医生工作台」）');
+    return;
+  }
+  S.token = d.token; S.me = d;
+  enterApp();
+}
+async function loginForm(){
+  const username = $('login-user').value.trim(), password = $('login-pass').value;
+  const r = await api('/api/login', {method:'POST', body:JSON.stringify({username, password})});
+  if(r.status!==200){ msg('login-msg', r.data.error||'登录失败'); return; }
+  const d = r.data.session || {};
+  if(d.role !== 'doctor'){ msg('login-msg','该账号不是医生角色，无法进入审核台'); return; }
+  S.token = d.token; S.me = d; enterApp();
+}
+async function logout(){
+  await api('/api/logout', {method:'POST', body:JSON.stringify({token:S.token})});
+  try{ localStorage.removeItem('dsh_session'); }catch(e){}
+  S.token=''; S.me=null; $('app').classList.add('hide'); $('login').classList.remove('hide');
+  $('ctx').textContent='未选择病例'; enableCaseNav(false); S.caseId='';
+  const rc=$('rail-cases'); if(rc) rc.innerHTML='';
+}
+function enterApp(){
+  // 跨页会话：登录（或从首页一键进入）后写入，供刷新与两端跳转复用
+  try{ localStorage.setItem('dsh_session', JSON.stringify({token:S.token, role:'doctor',
+        username:S.me.username, label:S.me.label})); }catch(e){}
+  $('login').classList.add('hide'); $('app').classList.remove('hide');
+  $('ident').textContent = (S.me.label||'审核医生') + ' · ' + S.me.username;
+  loadList();
+}
+/* 跨页会话恢复：从首页一键进入时免再登录；非医生会话忽略 */
+function restoreSession(){
+  let s=null;
+  try{ s = JSON.parse(localStorage.getItem('dsh_session')||'null'); }catch(e){ return false; }
+  if(!s || !s.token || s.role!=='doctor') return false;
+  S.token=s.token; S.me={username:s.username, label:s.label, role:s.role};
+  enterApp();
+  return true;
+}
+
+/* ===================== 导航 ===================== */
+function go(screen){
+  S.screen = screen;
+  ['list','overview','triage','evidence','mdt','review','history'].forEach(s=>{
+    $('s-'+s).classList.toggle('hide', s!==screen);
+  });
+  document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on', a.dataset.s===screen));
+  if(screen==='list') loadList();
+  if(screen==='overview') renderOverview();
+  if(screen==='triage') renderTriage();
+  if(screen==='evidence') renderEvidence();
+  if(screen==='mdt') renderMdt();
+  if(screen==='review') renderReview();
+  if(screen==='history') renderHistory();
+}
+function navCase(screen){
+  if(!S.caseId){ return; }
+  go(screen);
+}
+function enableCaseNav(on){
+  document.querySelectorAll('#nav a').forEach(a=>{
+    if(a.dataset.s!=='list') a.classList.toggle('dis', !on);
+  });
+}
+
+/* ===================== 屏 A：病例列表 ===================== */
+async function loadList(){
+  const state = $('f-state').value;
+  const r = await api('/api/v2/cases' + (state?('?state='+encodeURIComponent(state)):''));
+  if(r.status!==200){ $('list-body').innerHTML = `<div class="banner danger">${esc(r.data.error||'加载失败')}</div>`; return; }
+  S.cases = r.data.cases || [];
+  $('list-note').textContent = `共 ${S.cases.length} 例（按待审条数排序）`;
+  if(!S.cases.length){
+    $('list-body').innerHTML = '<div class="banner warn">暂无待办病例。可切换筛选条件，或先在患者端提交一份就诊资料。</div>';
+    return;
+  }
+  const rows = S.cases.map(c=>`
+    <div class="case-row" onclick="openCase('${esc(c.case_id)}')">
+      <div class="head" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div class="t">病例 #${esc(c.case_id)}　${esc(c.sex||'—')} ${esc(c.age||'—')}</div>
+        <div>
+          ${c.behavior_type?`<span class="pill info">行为类型 ${esc(c.behavior_type)}</span>`:''}
+          <span class="pill ${c.reliability==='高'?'ok':(c.reliability==='中'?'warn':'danger')}">可靠性 ${esc(c.reliability||'—')}</span>
+          <span class="pill gray">${esc(c.case_state_label||c.case_state||'')}</span>
+          ${c.pending_items?`<span class="pill danger"><span class="dot"></span>待审 ${c.pending_items}</span>`:'<span class="pill ok">已审完</span>'}
+        </div>
+      </div>
+      <div class="muted" style="margin-top:6px;">主诉：${esc(c.chief_complaint||'（未提供）')}</div>
+      <div class="tiny">牵头方向：${esc(c.primary_department||'—')}　版本 v${esc(c.report_version)}　${c.reviewed_by?('审核人 '+esc(c.reviewed_by)):''}</div>
+    </div>`).join('');
+  $('list-body').innerHTML = rows;
+  /* 左轨：待办病例紧凑列表（与主区列表同源，随时可切换病例） */
+  const rail = $('rail-cases');
+  if(rail){
+    rail.innerHTML = S.cases.slice(0,20).map(c=>`
+      <div class="case-row" onclick="openCase('${esc(c.case_id)}')">
+        <div class="t">#${esc(c.case_id)} ${c.pending_items?`<span class="pill danger">待审 ${c.pending_items}</span>`:'<span class="pill ok">已审完</span>'}</div>
+        <div class="sub">${esc(c.sex||'—')} ${esc(c.age||'—')} · 可靠性 ${esc(c.reliability||'—')} · ${esc(c.primary_department||'—')}</div>
+      </div>`).join('') || '<div class="tiny">暂无病例</div>';
+  }
+}
+
+/* ===================== 打开病例 ===================== */
+async function openCase(caseId){
+  S.caseId = caseId;
+  const [c, rev, aud] = await Promise.all([
+    api('/api/v2/case/'+caseId), api('/api/v2/case/'+caseId+'/review'), api('/api/v2/case/'+caseId+'/audit')
+  ]);
+  if(c.status!==200 || rev.status!==200){ alert('加载失败：'+((c.data&&c.data.error)||(rev.data&&rev.data.error)||c.status)); return; }
+  S.caseData = (c.data.case||{});
+  S.review = rev.data;
+  S.audit = (aud.status===200? aud.data : null);
+  const p = (S.caseData.payload||{}), t = p.triage||{};
+  $('ctx').textContent = `病例 #${caseId}　${t.behavior_type?('类型 '+t.behavior_type):''}　可靠性 ${(t.reliability||{}).level||'—'}　${S.review.published?'已审核':'未审核'}`;
+  updateBadge();
+  enableCaseNav(true);
+  renderReview();          // 右轨审核面板随病例刷新（含进度条）
+  go('overview');
+}
+function updateBadge(){
+  const published = S.review && S.review.published;
+  $('badge').className = 'pill ' + (published?'ok':'gray');
+  $('badge').textContent = published
+    ? ('已由 ' + (S.review.review.published_by||'医生') + ' 审核确认 · v' + S.review.review.version)
+    : 'AI 生成 · 尚未经医生审核';
+}
+
+/* ===================== 屏 B：病例总览 ===================== */
+function renderOverview(){
+  const c = S.caseData||{}, p = c.payload||{}, prof = p.profile||{}, t = p.triage||{};
+  $('ov-title').textContent = `病例 #${c.case_id} 总览`;
+  const rel = t.reliability||{};
+  const facts = (list, fmt) => (list&&list.length)
+      ? list.map(x=>`<div class="field"><div style="flex:1;">${fmt(x)}</div>
+          ${(x.source_refs||[]).map(r=>`<span class="ref" title="原文出处">${esc(r)}</span>`).join('')}</div>`).join('')
+      : '<div class="tiny">（未提供）</div>';
+  const pending = (S.review&&S.review.summary)||{};
+  let todo = [];
+  if(pending.pending) todo.push(`<div class="field"><div style="flex:1;">${pending.pending} 条决策条目待审核（[F]）</div>
+      <button class="mini" onclick="go('review')">去审核</button></div>`);
+  const agg = (p.mdt||{}).aggregation||{};
+  if((agg.disagreements||[]).length) todo.push(`<div class="field"><div style="flex:1;">${agg.disagreements.length} 条分歧待裁决（[E]）</div>
+      <button class="mini" onclick="go('mdt')">看过程</button></div>`);
+  if(!S.review.published) todo.push(`<div class="field"><div style="flex:1;">报告尚未生成审核版（[F]）</div>
+      <button class="mini" onclick="go('review')">去发布</button></div>`);
+  if((p.gaps||[]).length) todo.push(`<div class="field"><div style="flex:1;">仍有 ${p.gaps.length} 项信息缺口未补</div>
+      <button class="mini" onclick="go('evidence')">看证据</button></div>`);
+  if(!todo.length) todo.push('<div class="tiny">暂无待处理事项</div>');
+
+  $('ov-body').innerHTML = `
+    <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">
+      <div style="flex:1.3;min-width:280px;">
+        <div class="ai-block"><strong>画像卡（每条带原文出处；紫色=AI 推断，灰色=待确认）</strong></div>
+        <div class="field"><div style="min-width:88px;" class="muted">主诉</div><div style="flex:1;">${esc(prof.chief_complaint||c.main_issue||'（未提供）')}</div></div>
+        <h3>症状时间线</h3>${facts(prof.symptoms_timeline, s=>`${esc(s.symptom)} ${s.onset?('· '+esc(s.onset)):''} ${s.confidence==='low'?'<span class="pill info">AI 推断</span>':''}`)}
+        <h3>已知疾病</h3>${facts(prof.diseases, d=>`${esc(d.name)} ${d.duration?('（'+esc(d.duration)+'）'):''} ${d.confidence==='low'?'<span class="pill info">AI 推断</span>':''}`)}
+        <h3>检查异常</h3>${facts(prof.exams, e=>`${esc(e.item)} ${esc(e.value||'')} ${e.abnormal?'<span class="pill warn">异常</span>':''}`)}
+        <h3>用药</h3>${(prof.medications||[]).length?prof.medications.map(m=>`<div class="field"><div style="flex:1;">${esc(m.name)} ${esc(m.dose||'')}</div></div>`).join(''):'<div class="tiny">（未提供）</div>'}
+        <h3>信息缺口</h3>${(p.gaps||[]).length?p.gaps.map(g=>`<div class="field"><div style="flex:1;">${esc(g)}</div></div>`).join(''):'<div class="tiny">（无）</div>'}
+      </div>
+      <div style="flex:1;min-width:240px;">
+        <div class="card" style="margin:0;">
+          <h3 style="margin-top:0;">待处理事项</h3>${todo.join('')}
+          <h3>结果可靠性</h3>
+          <div><span class="pill ${rel.level==='高'?'ok':(rel.level==='中'?'warn':'danger')}">可靠性 ${esc(rel.level||'—')}</span>
+          ${(rel.reasons||[]).map(x=>`<div class="tiny">· ${esc(x)}</div>`).join('')}</div>
+          <h3>病例状态</h3>
+          <div><span class="pill gray">${esc(S.review.case_state_label||'')}</span></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ===================== 屏 C：分诊依据 ===================== */
+function renderTriage(){
+  const p = S.caseData.payload||{}, t = p.triage||{};
+  const ruleHits = t.rule_hits||[];
+  const primary = t.primary||{}, secondary = t.secondary||[];
+  const path = ruleHits.length ? ruleHits.map(h=>`
+      <div class="opcard"><strong>${esc(h.department||h.dept||'')}</strong>
+        <span class="pill ${(h.strength||h.weight)==='strong'?'ok':((h.strength||h.weight)==='medium'?'warn':'gray')}">${esc(h.strength||h.weight||'')}</span>
+        <div class="tiny">信号：${esc((h.signals||[]).join('；')||'—')}</div>
+        ${h.selected===false?'<div class="tiny">→ S3 已剔除（超出数量上限或权重不足）</div>':'<div class="tiny">→ S3 入选</div>'}
+      </div>`).join('') : '<div class="tiny">（无规则命中记录）</div>';
+  const conflicts = t.conflicts||[];
+  $('tri-body').innerHTML = `
+    <div class="mdt">
+      <div class="col">
+        <div class="rt" style="font-weight:600;color:var(--accent);">① S1 规则命中（确定性）</div>
+        ${ruleHits.length?ruleHits.length+' 条规则命中':'（无规则命中：本例未命中科室规则，走降级/兜底）'}
+        ${path}
+      </div>
+      <div class="col">
+        <div class="rt" style="font-weight:600;color:var(--accent);">② S2 模型受限发言</div>
+        ${p.s2?`<div class="tiny">方式：${esc(p.s2.method||'')}　状态：${esc(p.s2.status||'—')}</div>
+           ${(p.s2.speeches||[]).slice(0,6).map(s=>`<div class="opcard">${esc(s.department||'')}：${esc(s.stance||s.reason||'')}<div class="tiny">${esc((s.reason||'').slice(0,80))}</div></div>`).join('')}
+           ${(p.s2.orchestrator_picks||[]).length?'':'<div class="tiny">未提出新增科室</div>'}`
+          :'<div class="tiny">本例未启用模型发言（未配置模型时自动降级，仅规则分诊）</div>'}
+        ${(p.s2&&p.s2.orchestrator_picks||[]).map(x=>`<div class="tiny">模型建议新增：${esc(x.department||'')}（需过阈值与 S3 校验）</div>`).join('')}
+      </div>
+      <div class="col">
+        <div class="rt" style="font-weight:600;color:var(--accent);">③ S3 编排校验</div>
+        <div class="opcard">牵头：<strong>${esc(primary.department||'—')}</strong>
+          <div class="tiny">依据：${esc((primary.signals||[]).join('；')||'规则命中')}</div></div>
+        ${secondary.map(d=>`<div class="opcard">${esc(d.department)} <span class="pill">${esc(d.role||'协同')}</span>
+          <div class="tiny">${esc((d.signals||[]).join('；')||'相关方向')}</div></div>`).join('')}
+        <div class="tiny">入选科室数：${(t.selected||[]).length} / 上限 6　决策路径：<strong>${esc(t.decision_path||'—')}</strong></div>
+        ${(t.validator_notes||[]).map(n=>`<div class="tiny">· ${esc(n)}</div>`).join('')}
+      </div>
+    </div>
+    ${conflicts.length?`<div class="banner danger" style="margin-top:12px;">模型与规则存在分歧（${conflicts.length} 条）：分歧保留并进入报告分歧区，不由 AI 静默覆盖
+      ${conflicts.map(c=>`<div class="tiny">· ${esc(c.department||'')}：${esc(c.reason||'')}</div>`).join('')}</div>`:'<div class="banner ok" style="margin-top:12px;">S1/S2/S3 之间无冲突记录</div>'}`;
+}
+
+/* ===================== 屏 D：证据板 ===================== */
+function renderEvidence(){
+  const r = S.review||{}, p = S.caseData.payload||{};
+  const ev = p.evidence || {};
+  const timeline = ev.timeline || [];
+  const links = ev.judgements || ev.links || [];
+  if(!timeline.length && !links.length){
+    $('ev-body').innerHTML = '<div class="banner warn">本病例暂无证据板数据（证据板依赖画像 source_refs 与判断关联）。</div>' +
+      `<h3>画像中的原文出处</h3>` +
+      ((p.profile||{}).exams||[]).map(e=>`<div class="field"><div style="flex:1;">${esc(e.item)} ${esc(e.value||'')}</div>
+        ${(e.source_refs||[]).map(x=>`<span class="ref">${esc(x)}</span>`).join('')}</div>`).join('');
+    return;
+  }
+  $('ev-body').innerHTML = `
+    <h3>时间线</h3>
+    <div class="tl">${timeline.map(e=>`<div class="ev"><strong>${esc(e.time||e.onset||'—')}</strong>　${esc(e.label||e.symptom||e.item||'')}
+      <span class="pill gray">${esc(e.kind||'')}</span>
+      ${(e.source_refs||[]).map(x=>`<span class="ref">${esc(x)}</span>`).join('')}</div>`).join('')}</div>
+    <h3>判断 ↔ 证据关联</h3>
+    ${links.map(j=>`<div class="opcard">
+      <strong>${esc(j.judgement||j.text||'')}</strong> <span class="pill">${esc(j.department||'')}</span>
+      <span class="pill ${j.evidence_state==='direct'?'ok':(j.evidence_state==='conflict'?'danger':(j.evidence_state==='missing'?'gray':'warn'))}">${esc(j.evidence_state||'')}</span>
+      ${(j.support||[]).map(s=>`<div class="tiny">支持：${esc(s)}</div>`).join('')}
+      ${(j.missing||[]).map(s=>`<div class="tiny">缺失：${esc(s)}</div>`).join('')}
+      ${(j.against||[]).length?j.against.map(s=>`<div class="tiny">反向：${esc(s)}</div>`).join(''):'<div class="tiny">反向：无</div>'}
+    </div>`).join('')}`;
+}
+
+/* ===================== 屏 E：MDT 三栏审阅台 ===================== */
+function renderMdt(){
+  const p = S.caseData.payload||{}, prof = p.profile||{}, t = p.triage||{}, mdt = p.mdt||{};
+  const cards = mdt.analyses||mdt.cards||[];
+  const agg = mdt.aggregation||{};
+  const challenge = mdt.challenge||{};
+  const selected = t.selected||[];
+  $('mdt-body').innerHTML = `
+    <div class="mdt">
+      <div class="col">
+        <div class="rt" style="font-weight:600;">左栏 · 患者画像（客观资料）</div>
+        <div class="field"><div class="muted" style="min-width:66px;">主诉</div><div style="flex:1;">${esc(prof.chief_complaint||'—')}</div></div>
+        ${(prof.symptoms_timeline||[]).map(s=>`<div class="field"><div style="flex:1;">${esc(s.symptom)} ${esc(s.onset||'')}</div></div>`).join('')}
+        ${(prof.exams||[]).map(e=>`<div class="field"><div style="flex:1;">${esc(e.item)} ${esc(e.value||'')}</div>
+          ${(e.source_refs||[]).map(x=>`<span class="ref">${esc(x)}</span>`).join('')}</div>`).join('')}
+        <h3>信息缺口</h3>${(p.gaps||[]).length?p.gaps.map(g=>`<div class="tiny">· ${esc(g)}</div>`).join(''):'<div class="tiny">（无）</div>'}
+      </div>
+      <div class="col mid">
+        <div class="rt" style="font-weight:600;">中栏 · MDT 工作台（过程）</div>
+        <div class="round" data-step="1">
+          <div class="rt">第 1 轮：独立研判（互相不可见，仅基于画像）</div>
+          ${cards.length?cards.map(c=>`<div class="opcard"><strong>${esc(c.specialty_name||c.department||'')}</strong>
+             <div class="tiny">事实：${esc((c.facts||[]).slice(0,2).join('；')||'—')}</div>
+             ${(c.inferences||[]).slice(0,2).map(i=>`<div class="tiny">推断：${esc(i.text||i)} <span class="pill info">AI 推断</span></div>`).join('')}
+             ${(c.checks||[]).slice(0,2).map(k=>`<div class="tiny">建议向医生确认是否需要：${esc(k.content||k)}</div>`).join('')}
+           </div>`).join(''):'<div class="tiny">本例未运行多专科分析（未配置模型或无需 MDT）</div>'}
+        </div>
+        <div class="round" data-step="2">
+          <div class="rt">分歧</div>
+          ${(agg.disagreements||[]).length?agg.disagreements.map(d=>`<div class="opcard">${esc(d.topic||'')}
+            <div class="tiny">${Object.entries(d.positions||{}).map(([k,v])=>esc(k)+'：'+esc(v)).join('　')}</div>
+            <div class="tiny">${esc(d.resolving_info||'')}</div>
+            <button class="mini" onclick="addToQuestions('${esc((d.topic||'').replace(/'/g,""))}')">加入待确认问题</button></div>`).join('')
+            :'<div class="tiny">未检出方向性分歧</div>'}
+        </div>
+        <div class="round" data-step="3">
+          <div class="rt">质询（第 2 轮）</div>
+          ${challenge.questions&&challenge.questions.length?challenge.questions.map(q=>`<div class="opcard">Q：${esc(q.question||q)}
+            ${q.answered?'<div class="tiny">→ 各科已补答，结论：'+esc(q.outcome||'待医生裁决')+'</div>':'<div class="tiny">→ 待补答</div>'}</div>`).join('')
+            :'<div class="tiny">本例未触发质询（仅在存在分歧/低置信推断时按需触发）</div>'}
+          ${(challenge.notes||[]).map(n=>`<div class="tiny">· ${esc(n)}</div>`).join('')}
+        </div>
+        <div class="round" data-step="4">
+          <div class="rt">聚合结论（共识 / 不确定性 / 待确认）</div>
+          ${(agg.consensus||[]).map(c=>`<div class="tiny">共识：${esc(c.topic||'')}（${esc((c.supporters||[]).join('、'))}）</div>`).join('')}
+          ${(agg.uncertainties||[]).map(u=>`<div class="tiny">不确定：${esc(u.topic||'')}</div>`).join('')}
+          ${(agg.open_questions||[]).map(q=>`<div class="tiny">待确认：${esc(q)}</div>`).join('')}
+        </div>
+      </div>
+      <div class="col">
+        <div class="rt" style="font-weight:600;">右栏 · 证据与裁决</div>
+        <div class="opcard"><strong>支持证据</strong>
+          ${((p.evidence||{}).judgements||[]).slice(0,3).map(j=>`<div class="tiny">· ${esc(j.judgement||'')}</div>`).join('')||'<div class="tiny">（见证据板）</div>'}</div>
+        <div class="opcard"><strong>反对证据 / 不足</strong>
+          <div class="tiny">${(p.gaps||[]).slice(0,3).map(g=>'· 缺：'+esc(g)).join('<br>')||'· 无'}</div>
+          <div class="tiny muted">外部依据仅认白名单教材/共识；未命中时显示"暂无可靠外部依据"，不伪造文献。</div></div>
+        <div class="opcard"><strong>争议点</strong>
+          <div class="tiny">${(agg.disagreements||[]).length?agg.disagreements.length+' 条（见中栏）':'无'}</div></div>
+        <div class="opcard"><strong>待医生裁决</strong>
+          <div class="tiny">${(S.review&&S.review.summary&&S.review.summary.pending)||0} 条决策条目待审</div>
+          <button class="mini primary" onclick="go('review')">去逐条审核</button></div>
+        ${(S.review&&S.review.doctor_opinions||[]).length?`<div class="opcard"><strong>已录入线下医生意见</strong>
+          ${S.review.doctor_opinions.map(o=>`<div class="tiny">${esc(o.department||'')}：${esc(o.opinion||'')} ${o.is_verified?'<span class="pill ok">医生上传</span>':'<span class="pill warn">待确认</span>'}</div>`).join('')}</div>`:''}
+      </div>
+    </div>`;
+  document.querySelectorAll('#mdt-body [data-step]').forEach(el=>el.style.display='none');
+  $('mdt-note').textContent = '已暂停（点「播放过程」按顺序展开：独立研判 → 分歧 → 质询 → 聚合）';
+}
+function playMdt(){
+  const steps = document.querySelectorAll('#mdt-body [data-step]');
+  steps.forEach(el=>el.style.display='none');
+  let i = 0;
+  clearInterval(S.mdtTimer);
+  $('mdt-note').textContent = '播放中…';
+  S.mdtTimer = setInterval(()=>{
+    if(i >= steps.length){ clearInterval(S.mdtTimer); $('mdt-note').textContent = '播放完毕'; return; }
+    steps[i].style.display='block'; i++;
+  }, 900);
+}
+function addToQuestions(topic){
+  const box = $('rev-summary');
+  if(!box) return;
+  S.extraQuestion = topic;
+  go('review');
+}
+
+/* ===================== 屏 F：逐条审核 ===================== */
+function renderReview(){
+  const r = S.review||{};
+  const items = r.items||[];
+  const sum = r.summary||{};
+  const stateCls = {'awaiting':'st-awaiting','confirmed':'st-confirmed','modified':'st-modified','rejected':'st-rejected','uncertain':'st-uncertain'};
+  const bar = $('rev-bar'), note = $('rev-note');
+  if(bar) bar.style.width = Math.round((sum.human_touched||0)/(sum.total||1)*100) + '%';
+  if(note) note.textContent = sum.total
+      ? `人工操作 ${sum.human_touched||0} / ${sum.total} · 待审 ${sum.pending||0}`
+      : '该病例暂无可审条目';
+  $('pub-badge').className = 'banner ' + (r.published?'ok':'gray');
+  $('pub-badge').textContent = r.published
+      ? ('已发布审核版 · 审核人 ' + (r.review.published_by||'医生') + ' · ' + (r.review.published_at||'') + ' · v' + (r.review.version||''))
+      : 'AI 生成 · 尚未经医生审核（逐条确认后方可发布审核版）';
+  $('rev-summary').innerHTML = `
+    <div class="ai-block">共 ${sum.total||0} 条决策条目：待审 <strong>${sum.pending||0}</strong>　
+      已接受 ${sum.by_state.confirmed||0}　已修改 ${sum.by_state.modified||0}　
+      已驳回 ${sum.by_state.rejected||0}　暂不确定 ${sum.by_state.uncertain||0}　
+      （人工痕迹 ${sum.human_touched||0}/${sum.total||0}）
+      ${S.extraQuestion?`<div class="tiny">已从 MDT 审阅台加入待确认问题：${esc(S.extraQuestion)}（可在下方对应分歧条目上操作）</div>`:''}
+    </div>`;
+  if(!items.length){
+    $('rev-body').innerHTML = '<div class="banner warn">该病例暂无决策条目（需先完成分诊与路径生成）。</div>';
+    $('rev-publish').innerHTML = '';
+    return;
+  }
+  const typeLabel = {'department_selection':'科室入选','path_step':'路径步骤','consensus_item':'共识/分歧','patient_advice':'患者建议'};
+  $('rev-body').innerHTML = items.map((it,i)=>`
+    <div class="item ${stateCls[it.state]||''}">
+      <div class="head">
+        <div><strong>${i+1}. ${esc(it.title)}</strong>
+          <span class="pill gray">${esc(typeLabel[it.target_type]||it.target_type)}</span>
+          <span class="pill ${it.state==='confirmed'?'ok':(it.state==='modified'?'ok':(it.state==='rejected'?'danger':(it.state==='uncertain'?'warn':'gray')))}">${esc(it.state_label)}</span>
+          ${it.changed_by_doctor?'<span class="pill ok">医生已改写</span>':''}
+        </div>
+        <div class="tiny mono">${esc(it.item_id)}</div>
+      </div>
+      <div class="body">
+        <div class="field"><div class="muted" style="min-width:66px;">AI 原稿</div>
+          <div style="flex:1;" class="${it.changed_by_doctor?'old':''}">${esc(it.ai_content)}</div></div>
+        ${it.changed_by_doctor?`<div class="diff">医生改写为：${esc(it.reviewer_content)}
+          <div class="tiny">原因：${esc(it.decision_reason)}</div></div>`:''}
+        ${it.reason_hint?`<div class="field"><div class="muted" style="min-width:66px;">依据</div>
+          <div style="flex:1;" class="tiny">${esc(it.reason_hint)}</div></div>`:''}
+        ${(it.evidence_refs||[]).length?`<div class="field"><div class="muted" style="min-width:66px;">证据</div>
+          <div style="flex:1;">${it.evidence_refs.map(x=>`<span class="ref">${esc(x)}</span>`).join(' ')}</div></div>`:''}
+        ${it.decision_reason&&!it.changed_by_doctor?`<div class="tiny">审核记录：${esc(it.state_label)}｜原因：${esc(it.decision_reason)}｜${esc(it.reviewer||'')} ${esc(it.decided_at||'')}</div>`:''}
+      </div>
+      <div class="btnbar">
+        <button class="primary mini" onclick="decide('${esc(it.item_id)}','accept')">接受</button>
+        <button class="mini" onclick="openModal('modify','${esc(it.item_id)}')">修改</button>
+        <button class="mini" onclick="openModal('reject','${esc(it.item_id)}')">驳回</button>
+        <button class="mini" onclick="openModal('uncertain','${esc(it.item_id)}')">暂不确定</button>
+        <button class="mini" onclick="openModal('request_more_info','${esc(it.item_id)}')">请求补资料</button>
+      </div>
+    </div>`).join('');
+
+  const canPublish = sum.pending===0 && sum.total>0;
+  $('rev-publish').innerHTML = `
+    <div class="card" style="margin-top:6px;">
+      <h3 style="margin-top:0;">发布审核版报告</h3>
+      <div class="tiny">规则：仍有"待审"条目时不能发布；可点「全部接受并发布」（会为每条留一条审核记录，不是静默通过）。</div>
+      <div class="actions">
+        <button class="mini" onclick="publish(false)" ${canPublish?'':'disabled'}>确认发布审核版（${sum.pending} 条待审）</button>
+        <button class="primary mini" onclick="publish(true)" ${sum.total?'':'disabled'}>全部接受并发布</button>
+      </div>
+      <h3>录入线下实际意见（就诊后闭环）</h3>
+      <div class="tiny">由医生端录入线下真实医生意见（来源=医生上传），用于生成「AI 建议 vs 医生意见」对照；患者端不承担"替医生写意见"。</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <input id="op-dept" placeholder="科室（如 眼科）" style="flex:0 0 180px;">
+        <input id="op-text" placeholder="线下医生意见原文" style="flex:1;min-width:220px;">
+        <button class="mini" onclick="submitOpinion()">录入</button>
+      </div>
+      <div id="op-msg"></div>
+    </div>`;
+}
+
+/* ===================== 审核动作 ===================== */
+async function decide(itemId, action, after, reason){
+  const r = await api('/api/v2/case/'+S.caseId+'/decisions', {method:'POST',
+    body:JSON.stringify({item_id:itemId, action:action, after:after||'', reason:reason||'',
+                         reviewer: (S.me&&S.me.label)||'审核医生'})});
+  if(r.status!==200 || !r.data.ok){ alert(r.data.error||'操作失败'); return false; }
+  S.review.items = r.data.items; S.review.summary = r.data.summary;
+  S.review.pending_questions = S.review.pending_questions||[];
+  await refreshHeader();
+  renderReview();
+  return true;
+}
+function openModal(action, itemId){
+  const labels = {modify:'修改条目', reject:'驳回条目', uncertain:'标记为暂不确定', request_more_info:'请求补充资料'};
+  const needAfter = action==='modify';
+  S.modal = {action, itemId};
+  $('modal-title').textContent = labels[action] || '审核操作';
+  $('modal-body').innerHTML = `
+    ${needAfter?`<div class="muted">修改后内容（必填）</div><textarea id="m-after" placeholder="改写为面向患者/医生的中性表述"></textarea>`:''}
+    <div class="muted" style="margin-top:8px;">原因（修改/驳回必填，其他建议填写）</div>
+    <textarea id="m-reason" placeholder="例如：依据不足，需补充眼底检查结果"></textarea>
+    <div id="m-msg"></div>`;
+  $('modal').classList.remove('hide');
+}
+function closeModal(){ $('modal').classList.add('hide'); S.modal=null; }
+async function submitModal(){
+  if(!S.modal) return;
+  const after = $('m-after') ? $('m-after').value.trim() : '';
+  const reason = $('m-reason') ? $('m-reason').value.trim() : '';
+  const ok = await decide(S.modal.itemId, S.modal.action, after, reason);
+  if(ok) closeModal();
+}
+async function publish(acceptAll){
+  const r = await api('/api/v2/case/'+S.caseId+'/publish', {method:'POST',
+    body:JSON.stringify({accept_all: !!acceptAll, reviewer:(S.me&&S.me.label)||'审核医生'})});
+  if(r.status!==200 || !r.data.ok){ alert(r.data.error||'发布失败'); return; }
+  await openCase(S.caseId);
+  go('review');
+  alert('已发布审核版：病例状态 → 医生已确认，报告版本 v'+r.data.report_version+'，角标已转为"已审核"。');
+}
+async function submitOpinion(){
+  const dept = $('op-dept').value.trim(), text = $('op-text').value.trim();
+  if(!text){ msg('op-msg','请填写意见内容'); return; }
+  const r = await api('/api/v2/case/'+S.caseId+'/updates', {method:'POST',
+    body:JSON.stringify({kind:'医生意见', content:text, source:'医生上传', department:dept})});
+  if(r.status!==200 || !r.data.ok){ msg('op-msg', r.data.error||'录入失败'); return; }
+  msg('op-msg','已录入线下医生意见，并已生成「AI 建议 vs 医生意见」对照与变化摘要','ok');
+  await openCase(S.caseId); go('review');
+}
+async function refreshHeader(){
+  const rev = await api('/api/v2/case/'+S.caseId+'/review');
+  if(rev.status===200){ S.review = rev.data; updateBadge();
+    const p=(S.caseData.payload||{}), t=p.triage||{};
+    $('ctx').textContent = `病例 #${S.caseId}　${t.behavior_type?('类型 '+t.behavior_type):''}　可靠性 ${(t.reliability||{}).level||'—'}　${(S.review.published?'已审核':'未审核')}`;
+  }
+}
+
+/* ===================== 屏 G：审核记录与版本 ===================== */
+function renderHistory(){
+  const h = S.audit || {};
+  const decisions = h.decisions||[];
+  const timeline = h.timeline||[];
+  const items = h.items||[];
+  $('hist-body').innerHTML = `
+    <div class="ai-block">当前报告版本：<strong>v${esc(h.report_version||1)}</strong>　
+      ${h.review&&h.review.published?('已由 '+esc(h.review.published_by||'医生')+' 于 '+esc(h.review.published_at||'')+' 发布'):'尚未发布审核版'}</div>
+    <h3>审核操作（DoctorDecision，逐条留痕）</h3>
+    ${decisions.length?decisions.map(d=>`<div class="opcard">
+      <strong>${esc(d.action_label)}</strong> ${esc(d.target_type)}｜${esc(d.target_id)}
+      <span class="tiny">${esc(d.created_at||'')}　${esc(d.reviewer||'')}</span>
+      ${d.before?`<div class="tiny old">AI 原稿：${esc(String(d.before).slice(0,120))}</div>`:''}
+      ${d.after?`<div class="tiny">医生版：${esc(String(d.after).slice(0,120))}</div>`:''}
+      ${d.reason?`<div class="tiny">原因：${esc(d.reason)}</div>`:''}
+    </div>`).join(''):'<div class="tiny">暂无审核操作记录</div>'}
+    <h3>审计时间线</h3>
+    <div class="tl">${timeline.map(t=>`<div class="ev"><span class="mono tiny">${esc(t.at||'')}</span>
+      <span class="pill gray">${esc(t.event||'')}</span>
+      <div class="tiny">${esc(t.detail||'')}</div></div>`).join('')}</div>
+    <h3>条目状态快照</h3>
+    ${items.map(it=>`<div class="field"><div style="flex:1;">${esc(it.title)}</div>
+      <span class="pill ${it.state==='confirmed'||it.state==='modified'?'ok':(it.state==='rejected'?'danger':(it.state==='uncertain'?'warn':'gray'))}">${esc(it.state_label)}</span></div>`).join('')}`;
+}
+
+/* 启动：优先恢复跨页会话（从首页一键进入），否则显示登录页 */
+restoreSession();
+</script>
+</body>
+</html>

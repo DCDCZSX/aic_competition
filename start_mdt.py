@@ -56,7 +56,7 @@ def main():
             'services/mdt_agents.py',
             'services/mdt_service.py',
             'models/discussion.py',
-            'templates/index.html',
+            'templates/home.html',
             'templates/patient.html'
         ]
         

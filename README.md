@@ -1,168 +1,142 @@
-# 智能MDT多学科会诊系统
+# 多学科就医智助系统
 
-## 项目结构
-```
-mdt_project/
-├── backend/
-│   ├── models/          # 数据模型
-│   ├── services/        # 业务逻辑
-│   ├── app.py          # Flask应用入口
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   │   ├── components/  # React组件
-│   │   └── App.js      # 主应用
-│   └── package.json
-└── README.md
-```
+> AI 辅助就医信息整理与多学科决策协作平台
+> 把散乱的病历整理成医生看得懂的一页摘要，推演该看哪些科、还缺什么信息，再由医生逐条审核把关。
 
-## 功能特性
-- 患者信息录入（包含主要会诊问题）
-- 智能体围绕核心问题进行讨论
-- 实时会诊状态显示
-- 优化的可视化界面
-- 最终结论生成
+- 技术栈：Python 3.10+ / Flask / SQLite / 原生 HTML·CSS·JS（**零前端构建、零外链资源**）
+- 部署形态：单机本地部署（默认仅监听 `127.0.0.1`），病例数据不出本机
+- 定位：就医信息整理与决策辅助工具，**不提供诊断或处方，不替代医生判断**
 
-## 运行方式
-1. 后端：`cd backend && python app.py`
-2. 前端：`cd frontend && npm start`
+---
 
-## 使用说明
+## 1. 它解决什么问题
 
-### 1. 输入病历信息
-在文本框中输入患者的详细病历信息，包括：
-- 主诉
-- 现病史
-- 既往史
-- 体格检查
-- 辅助检查结果
-- 初步诊断
+就诊者常见的三件难事：
 
-### 2. 启动会诊
-点击"启动多学科会诊"按钮，系统将：
-1. 分析病历内容
-2. 识别相关专科
-3. 并行调用各专科智能体
-4. 整合分析结果
-5. 生成最终结论
+| 问题 | 系统怎么做 |
+|---|---|
+| 不知道该挂哪个科 | 规则引擎 + 模型受限发言 + 确定性编排三层决策，给出牵头方向与协同科室，每个方向都能展开看命中依据 |
+| 资料散乱，三分钟说不清病史 | 病历结构化（每条信息带原文出处）+ 信息缺口清单 + 不超过 3 个关键追问 + 一页摘要 / 完整报告（可打印） |
+| 多科意见不一致 | 各专科先独立研判（互相不可见），再聚合共识、单列分歧；分歧可被质询，最终由医生裁决 |
 
-### 3. 查看结果
-- **实时进度**：查看会诊进度和状态
-- **专科意见**：查看各专科的详细分析
-- **最终结论**：查看整合后的诊疗建议
-- **实时日志**：查看详细的处理过程
+## 2. 能力与边界
 
-## 系统架构
+**能做**：就医方向建议、资料结构化与摘要、信息缺口提示、就医路径与任务清单、多学科意见聚合与分歧呈现、医生逐条审核与留痕、就诊后资料更新与变化摘要。
 
-### 后端架构
-```
-app.py
-├── Flask应用主程序
-├── WebSocket实时通信
-├── 多线程专科会诊
-└── 智能结果整合
+**不做（产品红线，写死在代码里）**：
 
-主要组件：
-- ConsultationSession: 会诊会话管理
-- controller_agent: 主控智能体
-- specialist_agent: 专科智能体
-- coordinator_agent: 整合智能体
-```
+1. **不出诊断**：不给出疾病结论，只输出资料整理结果、方向建议与需要向医生确认的问题；
+2. **不出处方**：不涉及药物、剂量与治疗方案推荐；
+3. **不输出概率数字**：界面与报告不展示模型自报的置信度或概率；
+4. **AI 不覆盖医生**：医生意见与 AI 建议如实并列；患者转述的"医生说……"标为待确认，不作为医生意见采信。
 
-### 前端架构
-```
-templates/index.html
-├── 现代化UI界面
-├── WebSocket客户端
-├── 实时进度显示
-└── 结果可视化
-```
+合规话术统一为"建议向医生确认是否需要 ××"，不做指令式医疗行为。
 
-## API接口
+## 3. 快速开始
 
-### 1. 启动会诊
-```
-POST /mdt-consultation
-Content-Type: application/json
-
-{
-  "medical_record": "患者病历信息"
-}
-```
-
-### 2. 获取会诊状态
-```
-GET /consultation-status/<session_id>
-```
-
-### 3. 搜索知识库
-```
-POST /search-knowledge
-Content-Type: application/json
-
-{
-  "query": "搜索关键词"
-}
-```
-
-## WebSocket事件
-
-### 客户端发送
-- `join_session`: 加入会诊会话
-
-### 服务器推送
-- `progress_update`: 进度更新
-- `specialist_result`: 专科结果
-- `final_conclusion`: 最终结论
-
-## 配置说明
-
-在 `app.py` 中可以修改以下配置：
-
-```python
-class Config:
-    API_URL = "AI API地址"
-    API_KEY = "API密钥"
-    MODEL_NAME = "AI模型名称"
-    MAX_RETRIES = 3  # 重试次数
-    TIMEOUT = 3000   # 超时时间(秒)
-    MAX_CONCURRENT_SPECIALISTS = 5  # 最大并发专科数
-```
-
-## 故障排除
-
-### 1. 依赖安装失败
 ```bash
-# 升级pip
-python -m pip install --upgrade pip
+# 1) 依赖（无网络时可用离线包目录）
+pip install -r backend/requirements.txt
+# 离线：pip install --no-index --find-links=offline_packages -r backend/requirements.txt
 
-# 重新安装依赖
-pip install -r requirements.txt --force-reinstall
+# 2) 配置模型网关（可选：未配置时自动降级为纯规则分诊，功能仍可用）
+cp .env.example .env
+#   AI_API_KEY=...            模型密钥
+#   AI_API_URL=https://api.deepseek.com/chat/completions
+#   AI_MODEL_NAME=deepseek-chat
+
+# 3) 启动
+cd backend && python app.py
 ```
 
-### 2. 端口被占用
-修改 `app.py` 中的端口号：
-```python
-socketio.run(app, debug=True, port=5001, host='0.0.0.0')
+| 入口 | 地址 | 说明 |
+|---|---|---|
+| 首页 | http://127.0.0.1:5000/ | 产品介绍与两端入口 |
+| 患者端 | http://127.0.0.1:5000/patient | 录入 → 摘要 → 就诊后更新 |
+| 医生工作台 | http://127.0.0.1:5000/doctor | 病例审阅 → 逐条审核 → 发布审核版 |
+
+账号：`patient` / `doctor`（密码同账号名；本地部署可用，接入机构认证时替换 `services/auth.py`）。
+
+## 4. 一次完整流程
+
+```
+录入资料 → 脱敏确认 → 结构化画像 + 智能追问 → 就医方向（S1→S2→S3）
+        → 就医路径与任务 → 多学科分析 → 一页摘要 / 完整报告
+        → 医生工作台逐条审核并发布审核版 → 就诊后资料更新 → 变化摘要
 ```
 
-### 3. WebSocket连接失败
-检查防火墙设置，确保端口5000开放。
+- **增量原则**：追问回答、就诊后更新只重算受影响模块（分诊 + 路径），未受影响的多学科分析不重跑；
+- **状态可回溯**：病例 7 种状态、任务 5 种状态、审核决策逐条留痕，审计时间线可回放。
 
-## 开发说明
+## 5. 技术架构
 
-### 添加新专科
-1. 在 `SPECIALISTS` 字典中添加新专科
-2. 在 `SPECIALIST_DATA` 中添加前端配置
-3. 在 `get_suggested_exams` 中添加检查建议
+### 决策链（可解释优先）
 
-### 自定义AI模型
-修改 `Config` 类中的 `API_URL` 和 `MODEL_NAME`。
+| 段 | 实现 | 作用 |
+|---|---|---|
+| **S1 规则引擎** | `services/rule_engine.py`（56 条规则 + 科室域 37 门类 + 否定语境识别） | 确定性、可审计；命中强规则即为必选 |
+| **S2 模型受限发言** | `services/s2_analyst.py`（仅逐科表态，不得改写规则结论） | 补充规则未覆盖的方向；失败自动降级 |
+| **S3 安全约束与编排** | `services/triage.py` | 阈值校验、冲突留痕、数量上限 6、辅助科不做牵头、可靠性分级 |
 
-## 许可证
+### 主要模块
 
-MIT License
+| 模块 | 职责 |
+|---|---|
+| `services/guardrail.py` | 危象拦截（48 条规则 + 组合规则）与非医学内容识别 |
+| `services/privacy.py` / `intake.py` | PII 识别打码、录入校验、就医目标 |
+| `services/portrait_extractor.py` | 病历结构化（带原文出处 + 直引覆盖率门禁） |
+| `services/dependency_matrix.py` | 字段 ↔ 专科映射（追问、路径、缺口填补、影响面分析共用） |
+| `services/mdt_analyst.py` / `challenge_service.py` | 独立研判意见卡、聚合与分歧检测、按需质询 |
+| `services/evidence_service.py` | 时间线、判断↔证据关联、证据卡（外部依据白名单，不接 RAG） |
+| `services/report_service.py` | 一页摘要 + 完整报告（13 段结构，含未审核角标与免责声明） |
+| `services/path_service.py` / `task_service.py` | 就医路径与任务中心（显式状态机 + 留痕） |
+| `services/review_service.py` | 医生工作台：决策条目枚举、逐条审核状态、发布条件 |
+| `services/update_service.py` | 就诊后更新：受影响科室判定、缺口填补、变化摘要 |
+| `services/store.py` | SQLite 落盘：病例、审计日志、审核决策、状态流转 |
+| `services/case_flow.py` | 编排接线层：把上述模块串成完整业务流程 |
 
-## 贡献
+### 存储与隐私
 
-欢迎提交Issue和Pull Request来改进系统。 
+- 病例、审计、审核记录保存于本地 SQLite（已在 `.gitignore` 中）；
+- 进入分析前先做 PII 打码，发送给模型的是脱敏文本，不含身份信息；
+- 审计表记录每次流程事件与状态流转，异常流转单独标记。
+
+## 6. 质量与评测
+
+```bash
+cd backend
+python -m unittest discover -s tests -t .        # 单元测试
+python verify_update_http.py                     # 患者端全流程 HTTP 断言
+python verify_doctor_http.py                     # 医生工作台全流程 HTTP 断言
+python eval_triage_v1.py                         # 分诊评测（规则 / 模型 / 完整链路三方法对比）
+```
+
+- 单元测试覆盖：护栏、脱敏、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新；
+- 分诊评测（自建小样本集，n=9）：完整链路 Macro 召回 **0.900**、纯规则 **0.872**，早期基线 0.447–0.513；
+- 完整报告结构完整性 13 / 13，无空段与占位。
+
+> **能力边界**：以上为自建小样本评测，混合公开脱敏病例与按临床场景构造的验收集，**不代表临床准确率**，不能外推到真实门急诊人群；仅用于对比不同方法链的相对表现。所有输出均标注"未经医生审核"。
+
+## 7. 项目结构
+
+```
+backend/
+├── app.py                    # Flask 入口与路由（首页 / 患者端 / 医生工作台 / v2 API）
+├── schemas.py                # 权威数据结构与枚举
+├── services/                 # 业务模块（见上表）
+├── templates/
+│   ├── home.html             # 产品首页
+│   ├── patient.html          # 患者端
+│   └── doctor.html           # 医生工作台
+├── tests/                    # 单元测试
+├── verify_update_http.py     # 患者端端到端断言
+├── verify_doctor_http.py     # 医生工作台端到端断言
+└── requirements.txt
+_legacy/                      # 历史版本归档（只读，不参与运行）
+```
+
+## 8. 许可与声明
+
+- 本项目为 **2026 第八届全球校园人工智能算法精英大赛 · 算法创新赛参赛作品**；
+- 界面设计语言与视觉规范为自有实现：字体使用系统字体栈，插画与图标为自绘 SVG，**不含任何第三方品牌素材**，全站零外链资源；
+- 医学免责声明：本系统为就医辅助工具，不提供诊断或处方，不能替代医生面诊与专业判断；出现胸痛、呼吸困难、意识障碍、大出血等急症表现时请立即拨打急救电话或前往急诊。
