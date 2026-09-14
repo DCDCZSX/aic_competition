@@ -330,6 +330,23 @@ input:focus,textarea:focus,select:focus{border-color:var(--gray-300);}
         margin:6px 0;font-size:var(--caption);background:var(--gray-000);}
 .opcard .tiny{margin-top:2px;}
 
+/* 4.9b 结构化内容展示（报告段落 / 证据卡 / 路径步骤 / 审核记录） */
+.def{
+  display:grid;grid-template-columns:minmax(92px,auto) minmax(0,1fr);
+  gap:4px var(--sp-16);margin:0;padding:8px 0;border-bottom:1px dashed var(--line);
+}
+.def:last-child{border-bottom:0;}
+.def dt{margin:0;color:var(--ink3);font-size:var(--micro);line-height:1.7;white-space:nowrap;}
+.def dd{margin:0;min-width:0;font-size:var(--caption);color:var(--ink2);line-height:1.7;word-break:break-word;}
+.def dd .def{padding:4px 0;border-bottom:0;}
+ul.bullet{margin:0;padding-left:18px;list-style:disc;}
+ul.bullet li{font-size:var(--caption);color:var(--ink2);margin-bottom:4px;}
+.rec{border:1px solid var(--line);border-radius:var(--br-8);background:var(--gray-000);
+     padding:var(--sp-12) var(--sp-16);margin-bottom:var(--sp-8);}
+.rec:last-child{margin-bottom:0;}
+.rec > .def{padding:0;border-bottom:0;}
+.rec > .def > dt:first-of-type,.rec > .def > dd:first-of-type{font-weight:500;color:var(--ink);}
+
 /* 4.10 决策条目（报告审核） */
 .item{border:1px solid var(--line);border-radius:var(--br-12);padding:var(--sp-16);
       margin-bottom:var(--sp-12);background:var(--gray-000);}

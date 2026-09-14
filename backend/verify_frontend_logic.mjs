@@ -58,8 +58,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 
 /* -------------------------------------------------------------- 患者端断言 */
 {
-  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, STEPS };');
-  const { S, renderSteps, renderContext, STEPS } = globalThis.__P;
+  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner };');
+  const { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner } = globalThis.__P;
 
   check('患者端主流程为 9 步', STEPS.length === 9, String(STEPS.length));
 
@@ -104,6 +104,65 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('窄屏整宽上下文与右轨同源', el('ctx-inline-panel').innerHTML === rail, '');
   check('顶栏病例号同步', el('ctx-case').textContent.includes('C1234ABCD'), el('ctx-case').textContent);
   check('右轨声明未经医生审核', rail.includes('尚未经医生审核'), '');
+
+  /* 报告段落渲染器：绝不能把对象拼成 [object Object]（"报告里冒出英文/乱码"缺陷的回归） */
+  const nested = {
+    '时间线': [{ '时间': '3月前', '类型': '症状', '内容': '视物模糊', '原文出处': 'S-1:8' }],
+    '信息缺口': ['眼底检查：信息不足'],
+    '是否需医生复核': true,
+    '空字段': null,
+    '证据卡片': [{
+      '判断': '建议就诊方向：眼科（协作）', '证据状态': '证据间接支持',
+      '支持证据': [{ '证据': '视物模糊 3 月', '原文出处': 'S-1:8', '强度': '直接引证' }],
+      '反向 / 不足证据': ['（未发现反向证据）'],
+      '外部依据': [{ '依据': '糖尿病视网膜病变防治专家共识', '来源': '中华医学会眼科学分会' }],
+    }],
+  };
+  const html = renderSectionValue(nested);
+  check('段落渲染不出现 [object Object]', !html.includes('[object Object]'), '');
+  check('段落渲染不出现 undefined/NaN', !html.includes('undefined') && !html.includes('NaN'), '');
+  check('对象渲染成定义列表', html.includes('<dl class="def">') && html.includes('<dt>证据状态</dt>'), '');
+  check('对象数组渲染成卡片', (html.match(/class="rec"/g) || []).length >= 1,
+    String((html.match(/class="rec"/g) || []).length));
+  check('字符串数组渲染成列表', html.includes('<ul class="bullet">') && html.includes('眼底检查：信息不足'), '');
+  check('布尔渲染成中文', html.includes('>是<'), '');
+  check('空字段被跳过而不是显示怪值', !html.includes('空字段'), '');
+  check('整段为空时显示（无）', renderSectionValue(null).includes('（无）')
+    && renderSectionValue([]).includes('（无）') && renderSectionValue('').includes('（无）'), '');
+  check('文本内容完整保留', html.includes('建议就诊方向：眼科（协作）') && html.includes('糖尿病视网膜病变防治专家共识'), '');
+  check('纯字符串输入可直接渲染', renderSectionValue('一句话').includes('一句话'), '');
+  check('数字输入用等宽展示', renderSectionValue(0.62).includes('class="mono"'), '');
+
+  /* 后台 MDT 进度渲染（两段式）：必须显示"第几科/共几科"，失败时如实说明 */
+  const running = mdtProgressHtml({ state: 'running', done: 1, total: 3, current: '眼科' });
+  check('进度显示正在分析的科室', running.includes('正在分析 眼科') && running.includes('第 2 科'),
+    running.slice(0, 80));
+  check('进度显示已完成科数', running.includes('已完成 1 / 3'), '');
+  check('进度条按科数计算', running.includes('width:33%'), '');
+  check('进度文案解释为什么不显示概率', running.includes('独立研判'), '');
+  /* 后台分析任务的状态横幅（渐进式）：三相位 + MDT 子步骤 + 失败可重试 */
+  const bannerRun = analysisBanner({ state: 'running',
+    phases: { profile: { state: 'done' }, triage: { state: 'running' }, mdt: { state: 'pending' } },
+    mdt: { state: 'running', done: 1, total: 3, current: '眼科', step: '正在读取资料并形成意见卡' } });
+  check('横幅显示三个相位', bannerRun.includes('画像模型增强') && bannerRun.includes('就医方向（模型发言）')
+    && bannerRun.includes('多学科独立意见'), bannerRun.slice(0, 90));
+  check('横幅区分完成/进行中', bannerRun.includes('已完成') && bannerRun.includes('进行中'), '');
+  check('横幅显示 MDT 子步骤与第几科', bannerRun.includes('眼科') && bannerRun.includes('第 2 科')
+    && bannerRun.includes('正在读取资料并形成意见卡'), '');
+  check('横幅说明规则优先', bannerRun.includes('模型不会推翻规则命中的强项'), '');
+  const single = analysisBanner({ state: 'done',
+    phases: { mdt: { state: 'skipped' } },
+    mdt: { state: 'skipped', step: '仅 1 个就医方向，无需多学科会诊' } });
+  check('单科跳过时不显示为失败', !single.includes('danger') && !single.includes('未完成'), single.slice(0, 60));
+  const bad = analysisBanner({ state: 'partial_failed',
+    phases: { profile: { state: 'failed', note: 'RuntimeError: 网关不可用' } },
+    mdt: { state: 'pending' } });
+  check('失败横幅给出原因与重试入口',
+    bad.includes('网关不可用') && bad.includes('retryAnalysis') && bad.includes('不会编造结论'),
+    bad.slice(0, 120));
+  const failed = mdtProgressHtml({ state: 'failed', error: 'ReadTimeout' });
+  check('失败时如实说明且不编造', failed.includes('未完成') && failed.includes('ReadTimeout')
+    && failed.includes('不会因此编造结论'), failed.slice(0, 80));
 }
 
 /* ----------------------------------------------------- 医生工作台断言 */

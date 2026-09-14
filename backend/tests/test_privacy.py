@@ -68,6 +68,83 @@ class TestDetection(unittest.TestCase):
         self.assertEqual(detect(text), [])
 
 
+class TestNameFalsePositives(unittest.TestCase):
+    """姓名的误报回归（真实缺陷）。
+
+    旧规则是 `(?:患者|病人|姓名|患者姓名)\\s*[:：]?\\s*([一-龥]{2,4})`——**冒号可选**，
+    于是正文里的「患者转运」「患者活动后」「患者出院」「患者反应」都被当成姓名打码：
+    既在脱敏预览里显示成莫名其妙的"姓名 → 转***"，又把送进分析链路的文本改坏了。
+    """
+
+    # 这些文本里没有任何人名，一个都不该打码
+    CLEAN_TEXTS = (
+        "患者转运至上级医院。",
+        "患者活动后气促，患者出院后反应良好，患者出现胸痛。",
+        "患者神志清楚，精神可，发育正常，营养中等。",
+        "病人既往体健，否认家族遗传病史。",
+        "患者一般情况可，查体合作。",
+        "病人入院后给予对症处理，症状好转。",
+        "患者：男，58岁。",                      # 标签后直接是性别，不是姓名
+        "家属：无陪同人员。",
+        "联系人：不详。",
+        "患者主诉：视物模糊3月，双下肢浮肿1周。",
+    )
+
+    def test_no_false_positive_names(self):
+        for text in self.CLEAN_TEXTS:
+            with self.subTest(text=text):
+                hits = [h for h in detect(text) if h.kind == "name"]
+                self.assertEqual(hits, [], f"误判姓名：{[h.original for h in hits]}")
+
+    def test_clean_text_kept_intact(self):
+        """误报会改坏送进分析的文本，这里断言原文一字不动。"""
+        for text in self.CLEAN_TEXTS:
+            with self.subTest(text=text):
+                self.assertEqual(mask_for_display(text), text)
+
+
+class TestNameTruePositives(unittest.TestCase):
+    """真的人名必须仍然识别（且给出命中规则，便于解释"为什么打码"）。"""
+
+    CASES = (
+        ("患者：李某某，男，58岁。", "李某某", {"name_labelled"}),
+        ("姓名：张三", "张三", {"name_labelled"}),
+        ("病人姓名：王五，女，30岁。", "王五", {"name_labelled"}),
+        ("联系人：赵六，电话 13812345678", "赵六", {"name_labelled"}),
+        ("我叫王小明，今年 58 岁。", "王小明", {"name_self"}),
+        # "张某某，男，58岁" 同时符合「姓氏+某」与「姓氏+性别年龄上下文」，两条规则都算对
+        ("张某某，男，58岁，因视物模糊就诊。", "张某某", {"name_mou", "name_age_context"}),
+        ("李某某，女，30岁。", "李某某", {"name_mou", "name_age_context"}),
+        ("患者：欧阳某某，女，30岁。", "欧阳某某", {"name_labelled"}),
+    )
+
+    def test_true_positive_names(self):
+        for text, expected, rules in self.CASES:
+            with self.subTest(text=text):
+                hits = [h for h in detect(text) if h.kind == "name"]
+                self.assertTrue(hits, f"漏掉了人名：{expected}")
+                hit = hits[0]
+                self.assertEqual(hit.original, expected)
+                self.assertIn(hit.rule, rules)
+                self.assertTrue(hit.masked.startswith(expected[0]))
+                self.assertNotIn(expected, mask_for_display(text), "人名必须被打码")
+
+    def test_surname_gate_blocks_non_surnames(self):
+        """姓氏白名单是最后一道闸：非姓氏开头的一律不当作姓名。"""
+        from services.privacy import _looks_like_name  # noqa: PLC0415
+        for word in ("视物", "转运", "活动", "出院", "反应", "神志", "精神", "既往", "家族"):
+            with self.subTest(word=word):
+                self.assertFalse(_looks_like_name(word), f"{word} 不应被判为姓名")
+        for name in ("张伟", "李某某", "欧阳某某", "陈明", "刘洋"):
+            with self.subTest(name=name):
+                self.assertTrue(_looks_like_name(name))
+
+    def test_latin_name_after_label(self):
+        hits = [h for h in detect("患者：John Smith，男，40岁") if h.kind == "name"]
+        self.assertTrue(hits, "外文姓名也应打码")
+        self.assertNotIn("John Smith", mask_for_display("患者：John Smith，男，40岁"))
+
+
 class TestMasking(unittest.TestCase):
     def test_id_card_masked_keeps_edges(self):
         masked = mask_for_display(f"身份证 {ID_CARD}")

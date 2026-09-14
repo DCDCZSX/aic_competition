@@ -25,6 +25,10 @@ from services.evidence_service import (  # noqa: E402
     build_timeline,
     summarize_evidence,
 )
+from services.review_service import (  # noqa: E402
+    ACTION_LABELS as REVIEW_ACTION_LABELS,
+    TARGET_TYPE_LABELS,
+)
 
 # 未审核角标 / 免责（固定文案，所有导出件必带）
 AI_BADGE = "AI 生成，尚未经医生审核"
@@ -43,6 +47,202 @@ REQUIRED_SECTIONS = (
     "共识", "分歧", "不确定性", "关键待解决问题", "证据关联",
     "医生最终意见", "AI 与医生意见差异", "审核记录与版本",
 )
+
+# ---------------------------------------------------------------------------
+# 报告展示层：把内部数据结构与代码值翻成"人看得懂的中文"
+# ---------------------------------------------------------------------------
+# 设计约束（对外呈现）：
+# - 报告里**不得**出现内部字段名（judgement / evidence_state / supports …）或代码值
+#   （direct / rule-dominant / awaiting_doctor …），也不得出现 `[object Object]` 式的残渣；
+# - **不得**输出模型自报置信度（规格书 §4.3 红线）——原始数据里的 confidence 一律丢弃；
+# - 结构保持"中文键 → 字符串 / 字符串数组 / 卡片对象数组"，供前端逐条渲染。
+
+TIMELINE_KIND_LABELS: Dict[str, str] = {
+    "symptom": "症状", "diagnosis": "既往疾病", "exam": "检查结果", "medication": "当前用药",
+}
+STEP_KIND_LABELS: Dict[str, str] = {
+    "prepare": "资料准备", "visit": "就诊", "check": "检查", "followup": "复诊",
+}
+SCOPE_LABELS: Dict[str, str] = {
+    "triage": "就医方向判断", "specialty": "专科分析判断", "disagreement": "分歧条目",
+}
+LEVEL_LABELS: Dict[str, str] = {"direct": "直接引证", "indirect": "间接支持"}
+SOURCE_KIND_LABELS: Dict[str, str] = {"check": "检查类建议", "gap": "信息缺口"}
+DECISION_PATH_LABELS: Dict[str, str] = {
+    "rule-dominant": "以规则为主（模型仅作补充）",
+    "model-dominant": "以模型为主（规则未命中强项）",
+    "mixed": "规则与模型共同决定",
+    "refused": "已拒绝作答（触发安全约束）",
+    "degraded": "降级运行（模型未生效，仅规则链路）",
+}
+CASE_STATE_LABELS: Dict[str, str] = {
+    "pending_materials": "资料待确认", "analyzing": "AI 分析中",
+    "awaiting_doctor": "AI 分析完成 / 待医生审核", "need_more_info": "退回补资料",
+    "doctor_reviewed": "医生已审阅", "doctor_confirmed": "医生已确认",
+    "awaiting_recheck": "新资料进入后待复核",
+}
+BEHAVIOR_LABELS: Dict[str, str] = {
+    "A": "A 型（单科为主）", "B": "B 型（多病共病）", "C": "C 型（诊断未明）",
+    "D": "D 型（围术期）", "E": "E 型（其他）",
+}
+
+
+def _refs_text(refs: Any) -> str:
+    refs = list(refs or [])
+    return "、".join(str(r) for r in refs) if refs else "（无原文出处）"
+
+
+def _yes_no(value: Any) -> str:
+    return "是" if value else "否"
+
+
+def timeline_for_report(events: Any) -> List[Dict[str, Any]]:
+    """时间线 → 中文键事件列表（丢弃模型自报置信度）。"""
+    out: List[Dict[str, Any]] = []
+    for event in events or []:
+        row: Dict[str, Any] = {
+            "时间": event.get("when") or "时间不详",
+            "类型": TIMELINE_KIND_LABELS.get(str(event.get("kind")), "事件"),
+            "内容": event.get("title") or "",
+        }
+        if event.get("detail"):
+            row["说明"] = event["detail"]
+        row["原文出处"] = _refs_text(event.get("source_refs"))
+        out.append(row)
+    return out
+
+
+def path_steps_for_report(steps: Any) -> List[Dict[str, Any]]:
+    """就医路径步骤 → 中文键列表。"""
+    out: List[Dict[str, Any]] = []
+    for index, step in enumerate(steps or [], start=1):
+        row: Dict[str, Any] = {
+            "步骤": step.get("step_id") or f"S{index}",
+            "类型": STEP_KIND_LABELS.get(str(step.get("kind")), "步骤"),
+            "内容": step.get("title") or "",
+        }
+        if step.get("detail"):
+            row["说明"] = step["detail"]
+        if step.get("condition"):
+            row["执行条件"] = step["condition"]
+        if step.get("depends_on"):
+            row["依赖步骤"] = "、".join(str(x) for x in step["depends_on"])
+        notes = []
+        if step.get("parallel"):
+            notes.append("可与前一步并行")
+        if step.get("requires_doctor"):
+            notes.append("需医生决定")
+        if notes:
+            row["备注"] = "；".join(notes)
+        out.append(row)
+    return out
+
+
+def evidence_cards_for_report(cards: Any) -> List[Dict[str, Any]]:
+    """证据卡片 → 中文键卡片（支持 / 反向不足 / 外部依据 三块，缺就写明缺）。"""
+    out: List[Dict[str, Any]] = []
+    for card in cards or []:
+        row: Dict[str, Any] = {
+            "判断": card.get("judgement") or "",
+            "判断类型": SCOPE_LABELS.get(str(card.get("scope")), "判断"),
+        }
+        if card.get("department"):
+            row["科室"] = card["department"]
+        if card.get("reason"):
+            row["依据"] = card["reason"]
+        row["证据状态"] = STATE_LABELS.get(str(card.get("evidence_state")),
+                                       str(card.get("evidence_state") or "—"))
+        supports = [{"证据": s.get("text") or "",
+                     "原文出处": _refs_text(s.get("source_refs")),
+                     "强度": LEVEL_LABELS.get(str(s.get("level")), "支持")}
+                    for s in (card.get("supports") or [])]
+        row["支持证据"] = supports or ["（暂无支持证据：该判断的依据不足）"]
+        opposes = [{"证据": o.get("text") or "", "说明": o.get("reason") or ""}
+                   for o in (card.get("opposes") or [])]
+        row["反向 / 不足证据"] = opposes or ["（未发现反向证据）"]
+        external = [{"依据": e.get("title") or "", "来源": e.get("source") or "",
+                     "要点": e.get("note") or ""}
+                    for e in (card.get("external") or [])]
+        row["外部依据"] = external or ["（暂无可靠外部依据，本版不做文献检索）"]
+        if card.get("resolving_info"):
+            row["如何收敛"] = card["resolving_info"]
+        row["医生确认"] = "已确认" if card.get("doctor_confirmed") else "尚未确认"
+        out.append(row)
+    return out
+
+
+def specialty_views_for_report(analyses: Any) -> List[Dict[str, Any]]:
+    """各专科 AI 视角 → 中文键卡片（**不含模型自报置信度**）。"""
+    out: List[Dict[str, Any]] = []
+    for analysis in analyses or []:
+        dept = analysis.get("department") or "（未知科室）"
+        if analysis.get("status") != "ok":
+            out.append({"科室": dept, "状态": "本版未生成（模型未配置或调用失败）"})
+            continue
+        row: Dict[str, Any] = {"科室": dept}
+        if analysis.get("focus"):
+            row["关注点"] = analysis["focus"]
+        row["客观事实"] = list(analysis.get("facts") or []) or ["（无）"]
+        row["分析判断"] = [str(i.get("text") or "") for i in (analysis.get("inferences") or [])] or ["（无）"]
+        row["待确认事项"] = [str(k.get("content") or "") for k in (analysis.get("checks") or [])] or ["（无）"]
+        row["该科信息缺口"] = list(analysis.get("information_gaps") or []) or ["（无）"]
+        if analysis.get("referral"):
+            row["建议转诊协作"] = analysis["referral"]
+        out.append(row)
+    return out
+
+
+def consensus_for_report(items: Any) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in items or []:
+        row: Dict[str, Any] = {
+            "共识主题": item.get("topic") or "",
+            "支持科室": "、".join(str(x) for x in (item.get("supporters") or [])) or "（无）",
+        }
+        sources = [SOURCE_KIND_LABELS.get(str(s), str(s)) for s in (item.get("sources") or [])]
+        if sources:
+            row["来源类型"] = "、".join(sources)
+        if item.get("example"):
+            row["原始表述"] = item["example"]
+        out.append(row)
+    return out
+
+
+def disagreements_for_report(items: Any) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in items or []:
+        positions = item.get("positions") or {}
+        out.append({
+            "分歧主题": item.get("topic") or "",
+            "各方立场": "；".join(f"{k}：{v}" for k, v in positions.items()) or "（未记录）",
+            "分歧原因": item.get("reason") or "（未记录）",
+            "如何收敛": item.get("resolving_info") or "（未记录）",
+            "证据状态": STATE_LABELS.get(str(item.get("evidence_state")), "—"),
+        })
+    return out
+
+
+def uncertainties_for_report(items: Any) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in items or []:
+        out.append({
+            "不确定事项": item.get("topic") or "",
+            "影响范围": "、".join(str(x) for x in (item.get("impact") or [])) or "（未标注）",
+        })
+    return out
+
+
+def recent_decisions_for_report(decisions: Any, limit: int = 3) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for decision in list(decisions or [])[-limit:]:
+        out.append({
+            "时间": decision.get("created_at") or "",
+            "动作": REVIEW_ACTION_LABELS.get(str(decision.get("action")), str(decision.get("action"))),
+            "条目": TARGET_TYPE_LABELS.get(str(decision.get("target_type")),
+                                          str(decision.get("target_type"))),
+            "原因": decision.get("reason") or "（未填写）",
+        })
+    return out
 
 
 @dataclass
@@ -172,48 +372,60 @@ def build_full_report(case: Dict[str, Any]) -> Report:
                     generated_at=_now(),
                     doctor_confirmed=(case.get("case_state") == "doctor_confirmed"))
 
+    reliability = triage.get("reliability") or {}
     sections: Dict[str, Any] = {
         "病例画像": {
-            "基本信息": f"{profile.get('sex') or ''} {profile.get('age') or ''}".strip(),
-            "主诉": profile.get("chief_complaint") or "",
+            "基本信息": f"{profile.get('sex') or ''} {profile.get('age') or ''}".strip() or "（未提供）",
+            "主诉": profile.get("chief_complaint") or "（未提供）",
             "既往疾病": [f"{d.get('name')} {d.get('duration') or ''}".strip()
-                       for d in (profile.get("diseases") or [])],
+                       for d in (profile.get("diseases") or [])] or ["（未提供）"],
             "检查异常": [f"{e.get('item')} {e.get('value') or ''}".strip()
-                       for e in (profile.get("exams") or [])],
+                       for e in (profile.get("exams") or [])] or ["（未提供）"],
             "当前用药": [f"{m.get('name')} {m.get('dose') or ''}".strip()
-                       for m in (profile.get("medications") or [])],
-            "信息缺口": payload.get("gaps") or [],
-            "完整度": payload.get("completeness"),
+                       for m in (profile.get("medications") or [])] or ["（未提供）"],
+            "信息缺口": list(payload.get("gaps") or []) or ["（无）"],
+            "资料完整度": payload.get("completeness"),
             "原文直引覆盖率": payload.get("direct_quote_coverage"),
         },
-        "时间线": build_timeline(profile),
+        "时间线": timeline_for_report(build_timeline(profile)),
         "分诊结果": {
-            "行为类型": triage.get("behavior_type"),
-            "牵头方向": (triage.get("primary") or {}).get("department"),
-            "协同方向": [d.get("department") for d in (triage.get("secondary") or [])],
-            "决策路径": triage.get("decision_path"),
-            "可靠性": triage.get("reliability"),
-            "是否需医生复核": triage.get("needs_doctor_review"),
-            "规则校验说明": triage.get("validator_notes") or [],
+            "病例类型": BEHAVIOR_LABELS.get(str(triage.get("behavior_type")), "（未判定）"),
+            "牵头方向": (triage.get("primary") or {}).get("department") or "（未给出）",
+            "协同方向": [d.get("department") for d in (triage.get("secondary") or [])] or ["（无）"],
+            "决策路径": DECISION_PATH_LABELS.get(str(triage.get("decision_path")), "（未记录）"),
+            "结果可靠性": reliability.get("level") or "（未评估）",
+            "可靠性说明": list(reliability.get("reasons") or []) or ["（无）"],
+            "是否需医生复核": _yes_no(triage.get("needs_doctor_review")),
+            "规则校验说明": list(triage.get("validator_notes") or []) or ["（无）"],
         },
-        "就医路径": path.get("steps") or [],
-        "各专科 AI 视角": mdt.get("analyses") or [],
-        "共识": aggregation.get("consensus") or [],
-        "分歧": aggregation.get("disagreements") or [],
-        "不确定性": aggregation.get("uncertainties") or [],
-        "关键待解决问题": aggregation.get("open_questions") or [],
+        "就医路径": path_steps_for_report(path.get("steps")),
+        "各专科 AI 视角": specialty_views_for_report(mdt.get("analyses")),
+        "共识": consensus_for_report(aggregation.get("consensus")),
+        "分歧": disagreements_for_report(aggregation.get("disagreements")),
+        "不确定性": uncertainties_for_report(aggregation.get("uncertainties")),
+        "关键待解决问题": list(aggregation.get("open_questions") or []),
         "证据关联": {
-            "统计": evidence_stat,
-            "状态说明": {k: v for k, v in STATE_LABELS.items()},
-            "证据卡片": cards,
+            "证据状态统计": [
+                (f"{STATE_LABELS[k]}：{v} 条" if k in STATE_LABELS else f"卡片合计：{v} 张")
+                for k, v in sorted(evidence_stat.items(), key=lambda kv: kv[0] not in STATE_LABELS)
+            ],
+            "状态说明": [f"{label}：{desc}" for label, desc in {
+                "有明确证据": "有可溯源的原文或检查直接支持",
+                "证据间接支持": "仅有间接依据或规则信号",
+                "缺少证据": "当前资料不足以支持该判断",
+                "与现有证据冲突": "存在相反倾向的判断或缺失项",
+                "已被医生确认": "医生已在审核台确认",
+                "等待医生确认": "尚未审核，需医生判断",
+            }.items()],
+            "证据卡片": evidence_cards_for_report(cards),
         },
         "医生最终意见": _doctor_opinions(decisions),
         "AI 与医生意见差异": _differences(decisions),
         "审核记录与版本": {
-            "版本": case.get("report_version", 1),
-            "病例状态": case.get("case_state"),
+            "报告版本": case.get("report_version", 1),
+            "病例状态": CASE_STATE_LABELS.get(str(case.get("case_state")), "（未记录）"),
             "审核条目数": len(decisions),
-            "最近操作": decisions[-3:] if decisions else [],
+            "最近操作": recent_decisions_for_report(decisions),
         },
     }
 
@@ -229,9 +441,12 @@ def build_full_report(case: Dict[str, Any]) -> Report:
 
 
 def _doctor_opinions(decisions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [{"条目": d.get("target_type"), "操作": d.get("action"),
-             "内容": d.get("after") or d.get("before"), "原因": d.get("reason"),
-             "审核人": (d.get("reviewer") or {}).get("role")}
+    return [{"条目": TARGET_TYPE_LABELS.get(str(d.get("target_type")), str(d.get("target_type"))),
+             "操作": REVIEW_ACTION_LABELS.get(str(d.get("action")), str(d.get("action"))),
+             "内容": d.get("after") or d.get("before"),
+             "原因": d.get("reason") or "（未填写）",
+             "审核人": (d.get("reviewer") or {}).get("role") or "（未记录）",
+             "时间": d.get("created_at") or ""}
             for d in decisions if d.get("action") in ("accept", "modify", "supplement_opinion")]
 
 
@@ -241,9 +456,9 @@ def _differences(decisions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for d in decisions:
         if d.get("action") in ("modify", "reject"):
             out.append({
-                "条目": d.get("target_type"),
+                "条目": TARGET_TYPE_LABELS.get(str(d.get("target_type")), str(d.get("target_type"))),
                 "AI 原意见": d.get("before"),
-                "医生意见": d.get("after"),
+                "医生意见": d.get("after") or "（已驳回，不进入报告）",
                 "差异类型": "医生修改" if d.get("action") == "modify" else "医生驳回",
                 "原因": d.get("reason") or "（未填写）",
             })

@@ -212,11 +212,31 @@ def main():
           (r.json().get("case") or {}).get("case_state") == "need_more_info",
           str((r.json().get("case") or {}).get("case_state")))
 
-    print("\n[11] 页面可达性")
+    print("\n[12] 医生端批处理：补齐未完成的分析 + 列表分析状态")
+    r = doctor.get(f"{BASE}/api/v2/cases", timeout=60)
+    rows = r.json().get("cases") or []
+    check("列表带分析状态字段", bool(rows) and all("analysis_state" in c for c in rows),
+          json.dumps(rows[0].get("analysis_state") if rows else None, ensure_ascii=False))
+    check("分析状态取值合法",
+          all(c.get("analysis_state") in ("running", "done", "partial_failed", "failed", "none")
+              for c in rows),
+          json.dumps(sorted({c.get("analysis_state") for c in rows}), ensure_ascii=False))
+    r = doctor.post(f"{BASE}/api/v2/cases/analyze", json={"limit": 3}, timeout=60)
+    body = r.json() or {}
+    check("批处理接口 200", r.status_code == 200 and body.get("ok"),
+          json.dumps(body, ensure_ascii=False)[:160])
+    check("返回已排入与已跳过清单",
+          isinstance(body.get("started"), list) and isinstance(body.get("skipped"), list),
+          json.dumps(body, ensure_ascii=False)[:160])
+    check("同一条病例不会既排入又跳过",
+          not (set(body.get("started") or []) & set(body.get("skipped") or [])),
+          json.dumps(body, ensure_ascii=False)[:160])
+
+    print("\n[13] 页面可达性")
     r = requests.get(f"{BASE}/doctor", timeout=30)
     check("/doctor 200", r.status_code == 200, str(r.status_code))
     for token in ("s-list", "s-overview", "s-triage", "s-evidence", "s-mdt", "s-review", "s-history",
-                  "playMdt", "submitOpinion", "publish(", "openModal"):
+                  "playMdt", "submitOpinion", "publish(", "openModal", "analyzePending", "analysisBadge"):
         check(f"页面含 {token}", token in r.text)
 
     print(f"\n===== 结果：{ok_count} 通过 / {fail_count} 失败 =====")

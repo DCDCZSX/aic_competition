@@ -166,6 +166,7 @@
             <option value="doctor_confirmed">医生已确认</option>
           </select>
           <button class="ghost mini" onclick="loadList()">刷新</button>
+          <button class="ghost mini" onclick="analyzePending()">批量补齐分析</button>
           <span class="tiny" id="list-note"></span>
         </div>
         <div id="list-body"><div class="skeleton">加载中…</div></div>
@@ -345,6 +346,7 @@ async function loadList(){
           <span class="pill ${c.reliability==='高'?'ok':(c.reliability==='中'?'warn':'danger')}">可靠性 ${esc(c.reliability||'—')}</span>
           <span class="pill gray">${esc(c.case_state_label||c.case_state||'')}</span>
           ${c.pending_items?`<span class="pill danger"><span class="dot"></span>待审 ${c.pending_items}</span>`:'<span class="pill ok">已审完</span>'}
+          ${analysisBadge(c)}
         </div>
       </div>
       <div class="muted" style="margin-top:6px;">主诉：${esc(c.chief_complaint||'（未提供）')}</div>
@@ -360,6 +362,28 @@ async function loadList(){
         <div class="sub">${esc(c.sex||'—')} ${esc(c.age||'—')} · 可靠性 ${esc(c.reliability||'—')} · ${esc(c.primary_department||'—')}</div>
       </div>`).join('') || '<div class="tiny">暂无病例</div>';
   }
+}
+
+/* 分析状态徽章：医生一眼看出这条病例的模型分析是否就绪（批处理依赖它） */
+function analysisBadge(c){
+  const state = c.analysis_state || 'none';
+  const label = {running:'分析中', done:'分析就绪', partial_failed:'部分未完成',
+                 failed:'分析失败', none:'未分析'}[state] || state;
+  const cls = state==='done' ? 'ok' : (state==='running' ? 'warn' : (state==='none' ? 'gray' : 'danger'));
+  return `<span class="pill ${cls}">${esc(label)}</span>`;
+}
+
+/* 批量补齐分析：把"分析未完成"的病例排进后台任务（逐例可见进度，不阻塞当前操作） */
+async function analyzePending(){
+  const r = await api('/api/v2/cases/analyze', {method:'POST', body:JSON.stringify({limit:3})});
+  const d = r.data||{};
+  if(r.status!==200 || !d.ok){ alert(d.error||'启动失败'); return; }
+  alert(d.started_count
+      ? `已排入后台分析：${(d.started||[]).join('、')}\n可以继续操作，列表里的状态会自动变为"分析中 → 分析就绪"。`
+      : '没有需要补齐分析的病例（都在分析中或已就绪）。');
+  loadList();
+  setTimeout(loadList, 4000);
+  setTimeout(loadList, 10000);
 }
 
 /* ===================== 打开病例 ===================== */
@@ -732,9 +756,9 @@ function renderHistory(){
   $('hist-body').innerHTML = `
     <div class="ai-block">当前报告版本：<strong>v${esc(h.report_version||1)}</strong>　
       ${h.review&&h.review.published?('已由 '+esc(h.review.published_by||'医生')+' 于 '+esc(h.review.published_at||'')+' 发布'):'尚未发布审核版'}</div>
-    <h3>审核操作（DoctorDecision，逐条留痕）</h3>
+    <h3>审核操作（逐条留痕）</h3>
     ${decisions.length?decisions.map(d=>`<div class="opcard">
-      <strong>${esc(d.action_label)}</strong> ${esc(d.target_type)}｜${esc(d.target_id)}
+      <strong>${esc(d.action_label)}</strong> ${esc(d.target_label||d.target_type)}｜${esc(d.target_id)}
       <span class="tiny">${esc(d.created_at||'')}　${esc(d.reviewer||'')}</span>
       ${d.before?`<div class="tiny old">AI 原稿：${esc(String(d.before).slice(0,120))}</div>`:''}
       ${d.after?`<div class="tiny">医生版：${esc(String(d.after).slice(0,120))}</div>`:''}

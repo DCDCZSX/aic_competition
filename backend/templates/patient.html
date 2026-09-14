@@ -289,16 +289,28 @@
     <div id="mask-summary"></div>
     <div class="masked" id="mask-text"></div>
     <p class="tiny">打码不可逆（不提供"撤销打码"）；原始资料与脱敏资料分开存储。</p>
+    <div id="create-progress" class="hide">
+      <div class="col" style="margin-top:var(--sp-12);">
+        <div class="rt">正在整理资料</div>
+        <div class="progress"><i id="create-bar" style="width:6%"></i></div>
+        <div class="tiny" id="create-stage">正在提交…</div>
+        <div class="tiny" id="create-hint" style="margin-top:6px;">
+          提交后约 3 秒生成画像与追问；多学科分析会在后台自动继续（约 15–30 秒），不占用你的操作。
+        </div>
+      </div>
+    </div>
     <div id="mask-msg"></div>
     <div class="actions">
       <button class="ghost" onclick="go('intake')">← 返回修改</button>
-      <button class="primary" onclick="doCreateCase()">确认脱敏并提交 →</button>
+      <button class="primary" id="btn-create" onclick="doCreateCase()">确认脱敏并提交 →</button>
     </div>
   </section>
 
   <!-- P4 画像确认 -->
   <section id="s-profile" class="card hide">
     <h2>第四步 · 系统先把资料整理成画像，请核对</h2>
+    <p class="muted">下面先给你<strong>规则抽取</strong>的结果（几乎瞬时）；模型增强与多学科意见在后台继续，完成后会自动替换。</p>
+    <div id="analysis-note"></div>
     <div id="profile-body"></div>
     <div id="gap-body"></div>
     <div class="actions">
@@ -341,6 +353,7 @@
   <!-- P8 多学科分析 -->
   <section id="s-mdt" class="card hide">
     <h2>AI 多学科分析（各科意见摘要）</h2>
+    <div id="mdt-note-inline"></div>
     <div id="mdt-body"></div>
     <div class="actions">
       <button class="ghost" onclick="go('path')">← 返回路径与任务</button>
@@ -453,7 +466,7 @@
 /* ===================== 状态 ===================== */
 const S = { token:null, role:null, label:null, goals:[], caseId:null, questions:[], answers:{}, gaps:[],
             profile:null, mode:'paste', triage:null, path:null, mdt:null, report:null,
-            reportView:'summary' };
+            mdtPending:false, mdtStatus:null, reportView:'summary' };
 const STEPS = [['goal','就医目标'],['intake','录入资料'],['mask','脱敏预览'],
                ['profile','画像确认'],['ask','智能追问'],['triage','就医方向'],
                ['path','路径与任务'],['mdt','多学科分析'],['report','就医报告']];
@@ -523,6 +536,23 @@ function renderContext(){
       ${gaps.length ? gaps.slice(0,5).map(g=>`<div class="tiny" style="margin-bottom:4px;">· ${esc(g)}</div>`).join('')
                     + (gaps.length>5?`<div class="tiny">…另有 ${gaps.length-5} 项</div>`:'')
                     : '<div class="tiny">暂无缺口记录</div>'}
+    </div>
+    <div class="panel">
+      <div class="panel-title">分析进度</div>
+      ${S.analysisStatus ? Object.entries(S.analysisStatus.phases||{}).map(([k,v])=>
+          `<div class="field"><div style="flex:1;" class="tiny">${esc(PHASE_LABELS[k]||k)}</div>
+           <span class="pill ${v.state==='done'?'ok':(v.state==='failed'?'danger':(v.state==='running'?'warn':'gray'))}">${
+             v.state==='done'?'已完成':(v.state==='failed'?'未完成':(v.state==='running'?'进行中':'排队中'))}</span></div>`).join('')
+          + ((S.analysisStatus.mdt||{}).state==='running'
+              ? `<div class="progress" style="margin-top:8px;"><i style="width:${Math.round(((S.analysisStatus.mdt.done||0)/Math.max(((S.analysisStatus.mdt.total)||1),1))*100)}%"></i></div>
+                 <div class="tiny">多学科 ${S.analysisStatus.mdt.done||0}/${S.analysisStatus.mdt.total||'—'} 科${
+                   S.analysisStatus.mdt.current ? ' · 当前 ' + esc(S.analysisStatus.mdt.current) : ''}</div>`
+              : ((S.analysisStatus.mdt||{}).state==='skipped' ? '<div class="tiny">多学科：已跳过（仅 1 个就医方向）</div>' : ''))
+          + ((S.analysisStatus.state==='failed'||S.analysisStatus.state==='partial_failed')
+              ? '<button class="btn btn-sm btn-block" style="margin-top:8px;" onclick="retryAnalysis()">重新分析</button>' : '')
+        : (S.mdtPending ? '<div class="tiny">正在启动后台分析…</div>'
+                        : (S.mdt ? '<div class="tiny">已完成</div>' : '<div class="tiny">尚未开始</div>'))}
+      <button class="btn btn-sm btn-block" style="margin-top:10px;" onclick="goMdt()">查看多学科分析</button>
     </div>
     <div class="panel">
       <div class="panel-title">我的任务</div>
@@ -646,42 +676,194 @@ async function doPreview(){
   }
 
   const hits = d.hits||[];
+  const blocking = d.blocking_hit_count || 0;
   document.getElementById('mask-summary').innerHTML =
     hits.length
-      ? `<div class="banner warn">共识别 ${hits.length} 处需要打码的信息（其中需清除 ${d.blocking_hit_count} 处）：`
+      ? `<div class="banner warn"><strong>共识别 ${hits.length} 处敏感信息，已自动打码。</strong><br>`
+        + (blocking
+            ? `其中 <strong>${blocking} 处属于可直接定位个人的标识</strong>，请先删掉原文再提交（否则会被拦下）。`
+            : `其中没有可直接定位个人的标识，可以继续提交。`)
+        + `<div class="tiny" style="margin-top:8px;">逐条说明：</div>`
         + hits.map(h=>`<div class="tiny">· ${esc(h.label)} → <code>${esc(h.masked)}</code> — ${esc(h.reason)}</div>`).join('')
+        + `<div class="tiny" style="margin-top:8px;">姓名只在有明确信号时才打码（如「姓名：张三」「患者：李某某，男，58岁」「我叫王小明」）；
+            "患者转运""患者活动后"这类正文不会被误判。若发现误判请把原句发给我们。</div>`
         + `</div>`
-      : `<div class="banner ok">未识别到需要打码的敏感信息。</div>`;
+      : `<div class="banner ok">未识别到需要打码的敏感信息，可以继续。</div>`;
   document.getElementById('mask-text').textContent = d.masked_text || '（无内容）';
   msg('mask-msg','');
   go('mask');
 }
 
-/* ===================== P4/P5 创建病例 ===================== */
+/* ===================== P4/P5 创建病例（带阶段进度 + 防重复提交）===================== */
+/* 提交阶段的本地文案（真实进度由后端阶段事件驱动；这里只负责"别让用户以为卡死"） */
+const CREATE_TICKS = [
+  [1200, '正在校验并脱敏…'],
+  [2600, '正在结构化病例画像（模型）…'],
+  [4200, '正在生成关键追问…'],
+  [7000, '正在推演就医方向（模型）…'],
+];
+let createTimer = null;
+
+function showCreateProgress(){
+  const box = document.getElementById('create-progress');
+  const btn = document.getElementById('btn-create');
+  if(box) box.classList.remove('hide');
+  if(btn){ btn.disabled = true; btn.textContent = '正在整理资料…'; }
+  const t0 = Date.now();
+  clearInterval(createTimer);
+  createTimer = setInterval(()=>{
+    const ms = Date.now() - t0;
+    const pct = Math.min(6 + ms/120, 88);          // 只到 88%，完成时才满
+    const bar = document.getElementById('create-bar');
+    const stage = document.getElementById('create-stage');
+    if(bar) bar.style.width = pct.toFixed(0) + '%';
+    if(stage){
+      const tick = CREATE_TICKS.filter(([t])=>ms>=t).pop();
+      stage.textContent = `${(tick ? tick[1] : '正在提交…')}　已用 ${(ms/1000).toFixed(1)} 秒`;
+    }
+  }, 200);
+}
+function hideCreateProgress(){
+  clearInterval(createTimer); createTimer = null;
+  const box = document.getElementById('create-progress');
+  const btn = document.getElementById('btn-create');
+  if(box) box.classList.add('hide');
+  if(btn){ btn.disabled = false; btn.textContent = '确认脱敏并提交 →'; }
+}
+
 async function doCreateCase(){
+  if(createTimer) return;                          // 防重复提交（连点会建出两个病例）
   const history=document.getElementById('history').value.trim();
   const issue=document.getElementById('main-issue').value.trim();
-  const r = await api('/api/v2/case', {method:'POST', body:JSON.stringify({
-    medical_history:history, main_issue:issue, goals:S.goals,
-    age:document.getElementById('f-age').value||null,
-    gender:document.getElementById('f-sex').value||''
-  })});
-  const d=r.data;
-  if(d.blocked){
-    msg('mask-msg', `<strong>已拦截</strong><br>${esc(d.advice||(d.errors||[]).join('；'))}`,'danger');
-    return;
-  }
-  if(!d.ok && !d.passes_gate){
-    S.caseId=d.case_id; renderProfile(d);
-    msg('mask-msg','画像信息不足，请返回补充后再分析（G4 门禁）','warn');
-    go('profile'); return;
-  }
-  if(!d.ok){ msg('mask-msg', esc((d.errors||[]).join('；'))); return; }
+  showCreateProgress();
+  try{
+    const r = await api('/api/v2/case', {method:'POST', body:JSON.stringify({
+      medical_history:history, main_issue:issue, goals:S.goals,
+      age:document.getElementById('f-age').value||null,
+      gender:document.getElementById('f-sex').value||'',
+      progressive:true      // 渐进式：0.2 秒级先给规则结果，模型三相后台自动替换
+    })});
+    const d=r.data||{};
+    hideCreateProgress();
+    if(d.blocked){
+      msg('mask-msg', `<strong>已拦截</strong><br>${esc(d.advice||(d.errors||[]).join('；'))}`,'danger');
+      return;
+    }
+    if(!d.ok && !d.passes_gate){
+      S.caseId=d.case_id; renderProfile(d);
+      msg('mask-msg','画像信息不足，请返回补充后再分析（G4 门禁）','warn');
+      go('profile'); return;
+    }
+    if(!d.ok){ msg('mask-msg', esc((d.errors||[]).join('；'))); return; }
 
-  S.caseId=d.case_id; S.profile=d.profile; S.questions=d.questions||[];
-  S.triage=d.triage||null; S.path=d.path||null; S.mdt=d.mdt||null;
-  renderProfile(d); renderQuestions();
-  go('profile');
+    S.caseId=d.case_id; S.profile=d.profile; S.questions=d.questions||[];
+    S.triage=d.triage||null; S.path=d.path||null; S.mdt=d.mdt||null;
+    S.mdtPending = !!d.mdt_pending || !!d.analysis_pending;
+    S.mdtStatus = null;
+    S.analysisStatus = null;
+    S.profileRulesOnly = !!d.profile_is_rules_only;
+    renderProfile(d); renderQuestions();
+    msg('mask-msg','');
+    go('profile');
+    if(d.analysis_pending) pollAnalysis();     // 模型结果到了自动替换，不需要用户刷新
+  }catch(err){
+    hideCreateProgress();
+    msg('mask-msg','提交失败：'+esc(err && err.message ? err.message : '网络异常')+'，请重试','danger');
+  }
+}
+
+/* 分析任务相关函数（插到 renderProfile 之前）：轮询 + 增量替换 + 重试 */
+const PHASE_LABELS = {profile:'画像模型增强', triage:'就医方向（模型发言）', mdt:'多学科独立意见'};
+function phaseRow(name, entry){
+  const state = (entry||{}).state || 'pending';
+  const pill = state==='done' ? '<span class="pill ok">已完成</span>'
+             : state==='running' ? '<span class="pill warn">进行中</span>'
+             : state==='failed' ? '<span class="pill danger">未完成</span>'
+             : state==='skipped' ? '<span class="pill gray">已跳过</span>'
+             : '<span class="pill gray">排队中</span>';
+  return `<div class="field"><div style="flex:1;">${esc(name)}</div>${pill}</div>`;
+}
+function analysisBanner(analysis){
+  const a = analysis || {};
+  const phases = a.phases || {};
+  const mdt = a.mdt || {};
+  const state = a.state || 'running';
+  const mdtLine = mdt.state === 'running'
+      ? `<div class="tiny">多学科：${esc(mdt.current||'')}${mdt.current?'（第 '+((mdt.done||0)+1)+' 科）':''} · ${esc(mdt.step||'')} · 已完成 ${mdt.done||0} / ${mdt.total||'—'} 科</div>`
+      : mdt.state === 'skipped' ? `<div class="tiny">多学科：${esc(mdt.step||'已跳过')}</div>`
+      : mdt.state === 'done' ? '<div class="tiny">多学科：已完成</div>' : '';
+  if(state === 'running'){
+    return `<div class="col" style="margin-bottom:var(--sp-12);">
+      <div class="rt">模型分析正在进行（结果到了会自动替换，你可以先核对当前内容）</div>
+      ${phaseRow(PHASE_LABELS.profile, phases.profile)}
+      ${phaseRow(PHASE_LABELS.triage, phases.triage)}
+      ${phaseRow(PHASE_LABELS.mdt, phases.mdt)}
+      ${mdtLine}
+      <div class="tiny" style="margin-top:6px;">规则结果先给你看，模型只做补充；模型不会推翻规则命中的强项。</div>
+    </div>`;
+  }
+  if(state === 'failed' || state === 'partial_failed'){
+    const failedList = Object.entries(phases).filter(([,v])=>v.state==='failed')
+      .map(([k,v])=>`${PHASE_LABELS[k]||k}：${v.note||'未完成'}`);
+    return `<div class="banner warn" style="margin-bottom:var(--sp-12);">
+      <strong>部分模型分析未完成</strong>（已就绪的规则结果照常可用，系统不会编造结论）
+      ${failedList.map(x=>`<div class="tiny">· ${esc(x)}</div>`).join('')}
+      <div style="margin-top:var(--sp-8);"><button class="ghost btn-sm" onclick="retryAnalysis()">重新分析</button></div>
+    </div>`;
+  }
+  return '';
+}
+async function retryAnalysis(){
+  const r = await api(`/api/v2/case/${S.caseId}/analysis/retry`, {method:'POST', body:'{}'});
+  const d = r.data||{};
+  if(!d.ok){ alert(d.error||'重试失败'); return; }
+  S.analysisStatus = null;
+  renderContext();
+  pollAnalysis();
+}
+async function pollAnalysis(budgetMs){
+  if(!S.caseId) return;
+  const deadline = Date.now() + (budgetMs || 240000);
+  while(Date.now() < deadline){
+    let data = null;
+    try{
+      const ctrl = new AbortController();
+      const timer = setTimeout(()=>ctrl.abort(), 12000);
+      const res = await fetch(`/api/v2/case/${S.caseId}/analysis`, {signal: ctrl.signal});
+      clearTimeout(timer);
+      data = await res.json();
+    }catch(e){ data = null; }                    // 超时/断连：退避重试，不冻结界面
+    if(data){
+      S.analysisStatus = data.analysis || null;
+      const a = data.analysis || {};
+      // 增量替换：哪个相位好了就用哪个结果重绘（不打断用户正在看的内容）
+      if(data.profile){ S.profile = data.profile; S.profileRulesOnly = false; }
+      if(data.gaps) S.gaps = data.gaps;
+      if(data.questions && data.questions.length) S.questions = data.questions;
+      if(data.triage) S.triage = data.triage;
+      if(data.path) S.path = data.path;
+      if(data.mdt_ready){ S.mdt = data.mdt; S.mdtPending = false; }
+      S.analysisWarnings = data.warnings || [];
+      renderContext();
+      const state = a.state || 'running';
+      const note = document.getElementById('analysis-note');
+      if(state === 'done' || state === 'partial_failed'){
+        if(S.profile) renderProfile({profile:S.profile, gaps:S.gaps,
+                                     completeness:S.profile.completeness,
+                                     direct_quote_coverage:S.profile.direct_quote_coverage,
+                                     passes_gate:true, warnings:S.analysisWarnings});
+        if(S.triage) renderTriage();
+        if(S.path) renderPath();
+        if(S.mdt) renderMdt();
+        if(note) note.innerHTML = state === 'done'
+          ? '<div class="banner ok">模型分析已全部完成，上面内容已更新为最新结果。</div>'
+          : analysisBanner(a);
+        return;
+      }
+      if(note) note.innerHTML = analysisBanner(a);
+    }
+    await new Promise(r=>setTimeout(r, 2000));
+  }
 }
 
 function renderProfile(d){
@@ -711,6 +893,11 @@ function renderProfile(d){
   html += `<div class="ai-block" style="margin-top:var(--sp-16);"><span class="pill ${d.passes_gate?'ok':'danger'}">原文直引覆盖率 ${cov}</span>
          <span class="pill">关键字段完整度 ${cmp}</span>
          <div class="tiny" style="margin-top:6px;">灰色为 AI 推断或待确认项，请核对；出处 chip 可悬停查看原文位置。</div></div>`;
+  /* 降级/异常要如实可见（例：模型未生效时只跑规则链路） */
+  if((d.warnings||[]).length){
+    html += `<div class="banner warn" style="margin-top:var(--sp-12);"><strong>以下情况需要你知道（系统如实说明，不隐瞒降级）：</strong>` +
+      (d.warnings||[]).map(x=>`<div class="tiny">· ${esc(x)}</div>`).join('') + `</div>`;
+  }
   document.getElementById('profile-body').innerHTML = html;
 
   const gaps = d.gaps||[];
@@ -749,11 +936,14 @@ async function submitAnswers(){
     const v=(document.getElementById('ans-'+i).value||'').trim();
     if(v) answers[q.field]=v;
   });
-  const r=await api(`/api/v2/case/${S.caseId}/answers`, {method:'POST', body:JSON.stringify({answers})});
+  const r=await api(`/api/v2/case/${S.caseId}/answers`, {method:'POST',
+    body:JSON.stringify({answers, defer_mdt:true})});   // 科室变化时 MDT 交后台任务
   const d=r.data||{};
   S.triage = d.triage || S.triage;
   S.path = d.path || S.path;
-  if(d.mdt) S.mdt = d.mdt;
+  S.mdtPending = !!d.mdt_pending || S.mdtPending;
+  if(d.mdt) { S.mdt = d.mdt; S.mdtPending = false; }
+  if(d.mdt_pending) { S.mdtStatus = null; pollAnalysis(); }
   S.answerSummary = {resolved:(d.resolved_fields||[]).length,
                      unresolved:(d.unresolved_fields||[]).length,
                      downgrade:!!d.reliability_downgrade};
@@ -761,7 +951,85 @@ async function submitAnswers(){
   go('triage');
 }
 
-function goMdt(){ renderMdt(); go('mdt'); }
+/* ===================== P8 多学科分析（两段式：后台跑，前台看真实进度）===================== */
+let mdtTimer = null;
+
+/* 进度文案（纯函数，便于单测）：把后端状态渲染成"第几科 / 共几科" */
+function mdtProgressHtml(status){
+  const st = status || {};
+  const total = st.total || 0, done = st.done || 0;
+  const pct = total ? Math.round(done/total*100) : 0;
+  const state = st.state || 'running';
+  if(state === 'failed'){
+    return `<div class="banner warn"><strong>多学科分析未完成</strong><br>
+      原因：${esc(st.error||'模型调用失败或超时')}<br>
+      <span class="tiny">这不影响已生成的画像、就医方向与报告；可稍后在医生端复核时补充。系统不会因此编造结论。</span></div>`;
+  }
+  const label = st.current ? `正在分析 ${esc(st.current)}（第 ${done+1} 科）` : '正在启动多学科分析…';
+  return `<div class="col">
+      <div class="rt">多学科意见正在后台整理</div>
+      <div class="progress"><i style="width:${pct}%"></i></div>
+      <div class="tiny">${label}　已完成 ${done} / ${total || '—'} 科</div>
+      <div class="tiny" style="margin-top:6px;">
+        各专科是<strong>独立研判</strong>（互相看不到对方结论），完成后才会做共识与分歧聚合。
+        这一步要逐科调用模型，实测约 15–30 秒；页面会自动刷新，你不用等在这里。
+      </div>
+      <div style="margin-top:var(--sp-12);">
+        <button class="ghost" onclick="go('report')">先看就医报告 →</button>
+        <button class="ghost" onclick="go('path')">看路径与任务 →</button>
+      </div>
+    </div>`;
+}
+
+/* 轮询后台 MDT：每次请求带 12 秒超时（避免连接异常时界面卡死），最多等约 3 分钟 */
+async function pollMdt(budgetMs){
+  if(!S.caseId) return;
+  const deadline = Date.now() + (budgetMs || 180000);
+  const body = document.getElementById('mdt-body');
+  while(Date.now() < deadline){
+    let data = null;
+    try{
+      const ctrl = new AbortController();
+      const timer = setTimeout(()=>ctrl.abort(), 12000);
+      const res = await fetch(`/api/v2/case/${S.caseId}/mdt`, {signal: ctrl.signal});
+      clearTimeout(timer);
+      data = await res.json();
+    }catch(e){ data = null; }                       // 超时/断连：退避后重试，不冻结界面
+    if(data){
+      S.mdtStatus = data.status || null;
+      renderContext();
+      if(data.ready){
+        S.mdt = data.mdt; S.mdtPending = false; S.report = null;
+        renderMdt(); renderContext();
+        return;
+      }
+      if((data.status||{}).state === 'failed'){
+        S.mdtPending = false;
+        if(body) body.innerHTML = mdtProgressHtml(data.status);
+        renderContext();
+        return;
+      }
+      if(body) body.innerHTML = mdtProgressHtml(data.status);
+    }
+    await new Promise(r=>setTimeout(r, 2000));
+  }
+  if(body){
+    body.innerHTML = `<div class="banner warn">多学科分析仍在后台进行（超过 3 分钟）。
+      可以先去查看就医报告或路径任务，稍后回到本页会自动刷新。</div>`;
+  }
+}
+
+function goMdt(){
+  if(S.mdt){ renderMdt(); go('mdt'); return; }
+  if(S.caseId && (S.mdtPending || S.mdtStatus)){
+    const body = document.getElementById('mdt-body');
+    if(body) body.innerHTML = mdtProgressHtml(S.mdtStatus);
+    go('mdt');
+    pollMdt();
+    return;
+  }
+  renderMdt(); go('mdt');
+}
 
 /* ===================== 任务状态操作（P7）===================== */
 async function updateTask(taskId, state){
@@ -861,27 +1129,28 @@ function bindReportToc(){
   document.querySelectorAll('.doc-body section').forEach(s=>_tocObserver.observe(s));
 }
 
+/* 段落渲染：字符串 / 数字 / 布尔 / 字符串数组 / 对象 / 对象数组 都渲染成中文可读结构。
+   约束：不出现 [object Object]，也不暴露内部英文键；未知结构降级为"（无法展示）"。 */
 function renderSectionValue(v){
-  if(v==null || v==='') return '<div class="tiny">（无）</div>';
+  if(v===null || v===undefined || v==='') return '<div class="tiny">（无）</div>';
+  if(typeof v==='boolean') return `<div>${v?'是':'否'}</div>`;
+  if(typeof v==='number') return `<div class="mono">${v}</div>`;
   if(typeof v==='string') return `<div>${esc(v)}</div>`;
   if(Array.isArray(v)){
     if(!v.length) return '<div class="tiny">（无）</div>';
-    return v.map(item=>{
-      if(typeof item==='object'){
-        const txt = Object.entries(item).filter(([k,x])=>x!==null&&x!==''&&!(Array.isArray(x)&&!x.length))
-          .map(([k,x])=>`<strong>${esc(k)}</strong>：${esc(Array.isArray(x)?x.join('、'):x)}`).join('；');
-        return `<div class="field"><div style="flex:1;">· ${txt||'（空）'}</div></div>`;
-      }
-      return `<div class="field"><div style="flex:1;">· ${esc(item)}</div></div>`;
-    }).join('');
+    const primitive = v.every(x=>x===null || ['string','number','boolean'].includes(typeof x));
+    if(primitive){
+      return `<ul class="bullet">` + v.map(x=>`<li>${esc(x===null?'（无）':String(x))}</li>`).join('') + `</ul>`;
+    }
+    /* 对象数组：每条一张卡片（证据卡 / 路径步骤 / 专科视角 / 审核记录 都走这条路径） */
+    return v.map(item=>`<div class="rec">${renderSectionValue(item)}</div>`).join('');
   }
   if(typeof v==='object'){
-    return Object.entries(v).map(([k,x])=>{
-      if(Array.isArray(x)||typeof x==='object') return `<div style="margin-top:6px;"><strong>${esc(k)}</strong>${renderSectionValue(x)}</div>`;
-      return `<div class="field"><div class="muted" style="min-width:110px;">${esc(k)}</div><div style="flex:1;">${esc(x)}</div></div>`;
-    }).join('');
+    const rows = Object.entries(v).filter(([,x])=>x!==null && x!==undefined && x!=='');
+    if(!rows.length) return '<div class="tiny">（无）</div>';
+    return `<dl class="def">` + rows.map(([k,x])=>`<dt>${esc(k)}</dt><dd>${renderSectionValue(x)}</dd>`).join('') + `</dl>`;
   }
-  return `<div>${esc(v)}</div>`;
+  return '<div class="tiny">（无法展示）</div>';
 }
 
 function printReport(){

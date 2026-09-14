@@ -60,6 +60,14 @@ ACTION_LABELS: Dict[str, str] = {
     "request_more_info": "请求补资料",
 }
 
+# 审核对象类型中文标签（报告与审核记录对外展示用，避免暴露内部英文枚举）
+TARGET_TYPE_LABELS: Dict[str, str] = {
+    "department_selection": "科室入选",
+    "path_step": "路径步骤",
+    "consensus_item": "共识 / 分歧条目",
+    "patient_advice": "患者建议",
+}
+
 # 医生动作 → 条目状态
 ACTION_TO_STATE: Dict[str, str] = {
     "accept": CONFIRMED,

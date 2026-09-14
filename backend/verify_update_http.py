@@ -149,13 +149,142 @@ def main():
     check("无概率数字/置信度泄露",
           not any(t in text for t in ("概率", "置信度", "可能性为")), text[:120])
 
-    print("\n[8] 非法输入被拒")
+    print("\n[8] 报告可读性（不得出现内部英文字段名 / 代码值 / 置信度 / 裸对象）")
+    r = s.get(f"{BASE}/api/v2/case/{case_id}/report", timeout=60)
+    full = (r.json() or {}).get("full") or {}
+    sections = full.get("sections") or {}
+    check("报告 200 且有段落", r.status_code == 200 and bool(sections), f"{len(sections)} 段")
+    report_text = json.dumps(sections, ensure_ascii=False)
+    forbidden_keys = ("judgement", "evidence_state", "supports", "opposes", "external",
+                      "confidence", "scope", "resolving_info", "doctor_confirmed",
+                      "step_id", "depends_on", "requires_doctor", "information_gaps",
+                      "source_refs", "behavior_type", "decision_path", "target_type",
+                      "supporters", "positions", "reliability")
+    leaked = [k for k in forbidden_keys if k in report_text]
+    check("无内部英文字段名泄漏", not leaked, json.dumps(leaked, ensure_ascii=False))
+    leaked_values = [v for v in ("rule-dominant", "awaiting_doctor", "department_selection",
+                                 "consensus_item", "patient_advice", "specialty")
+                     if f'"{v}"' in report_text]
+    check("无内部代码值泄漏", not leaked_values, json.dumps(leaked_values, ensure_ascii=False))
+    check("不展示模型自报置信度",
+          not any(t in report_text for t in ("置信度", "confidence", "概率")), "")
+    cards = (sections.get("证据关联") or {}).get("证据卡片") or []
+    check("证据卡片为中文键结构",
+          bool(cards) and all("判断" in c and "证据状态" in c for c in cards),
+          json.dumps(list(cards[0].keys()) if cards else [], ensure_ascii=False))
+    timeline = sections.get("时间线") or []
+    check("时间线为中文键事件",
+          bool(timeline) and all({"时间", "内容"} <= set(e.keys()) for e in timeline),
+          json.dumps(timeline[:1], ensure_ascii=False)[:110])
+    steps = sections.get("就医路径") or []
+    check("就医路径为中文键步骤",
+          bool(steps) and all({"步骤", "内容"} <= set(t.keys()) for t in steps),
+          json.dumps(steps[:1], ensure_ascii=False)[:110])
+
+    print("\n[11] 两段式：先交付画像，MDT 后台跑并有真实进度")
+    import time as _time
+    t0 = _time.time()
+    r = s.post(f"{BASE}/api/v2/case", json={
+        "medical_history": CASE, "main_issue": "该看哪个科", "age": 61, "sex": "男",
+        "defer_mdt": True}, timeout=120)
+    fast = _time.time() - t0
+    two = r.json() or {}
+    check("建病例返回 200", r.status_code == 200 and two.get("ok"), str(r.status_code))
+    check("标记 MDT 仍在后台", two.get("mdt_pending") is True, str(two.get("mdt_pending")))
+    check("主请求不带 MDT 结果", two.get("mdt") is None, str(two.get("mdt"))[:60])
+    check("画像/分诊/路径已就绪",
+          bool(two.get("profile")) and bool(two.get("triage")) and bool(two.get("path")), "")
+    check("交付够快（<10 秒）", fast < 10, f"{fast:.2f}s")
+
+    case2 = two.get("case_id")
+    seen = []
+    ready = False
+    t1 = _time.time()
+    while _time.time() - t1 < 150:
+        d = s.get(f"{BASE}/api/v2/case/{case2}/mdt", timeout=60).json()
+        st = d.get("status") or {}
+        seen.append(st.get("state"))
+        if d.get("ready"):
+            ready = True
+            check("后台 MDT 完成", True, f"用时 {_time.time()-t1:.1f}s，"
+                  f"卡片 {len((d.get('mdt') or {}).get('analyses') or [])} 张")
+            break
+        if st.get("state") == "failed":
+            check("后台 MDT 完成", False, str(st.get("error"))[:120])
+            break
+        _time.sleep(2)
+    check("轮询能看到 running 状态", "running" in seen, json.dumps(seen[:6], ensure_ascii=False))
+    check("结束后 ready=true", ready)
+
+    print("\n[12] 渐进式：规则秒开 + 模型三相后台 + 可重试")
+    t0 = _time.time()
+    r = s.post(f"{BASE}/api/v2/case", json={
+        "medical_history": CASE, "main_issue": "该看哪个科", "age": 61, "sex": "男",
+        "progressive": True}, timeout=60)
+    first = _time.time() - t0
+    prog = r.json() or {}
+    check("渐进式建病例 200", r.status_code == 200 and prog.get("ok"), str(r.status_code))
+    check("首屏为规则画像", prog.get("profile_is_rules_only") is True, str(prog.get("profile_is_rules_only")))
+    check("后台任务已排入", prog.get("analysis_pending") is True, str(prog.get("analysis_pending")))
+    check("规则分诊/路径/追问已就绪",
+          bool(prog.get("triage")) and bool(prog.get("path")) and bool(prog.get("questions")), "")
+    check("首屏足够快（<2 秒）", first < 2, f"{first*1000:.0f} ms")
+
+    case3 = prog.get("case_id")
+    a = s.get(f"{BASE}/api/v2/case/{case3}/analysis", timeout=30).json()
+    check("analysis 接口可用", bool(a.get("analysis")), "")
+    check("三个相位齐备", set((a["analysis"].get("phases") or {})) == {"profile", "triage", "mdt"},
+          json.dumps(list((a["analysis"].get("phases") or {}).keys()), ensure_ascii=False))
+    seen_states = []
+    t1 = _time.time()
+    while _time.time() - t1 < 180:
+        a = s.get(f"{BASE}/api/v2/case/{case3}/analysis", timeout=30).json()
+        st = a["analysis"]
+        seen_states.append(st.get("state"))
+        if st.get("state") != "running":
+            break
+        _time.sleep(2)
+    check("相位全部完成", st.get("state") in ("done", "partial_failed"), str(st.get("state")))
+    check("画像模型增强完成", st["phases"]["profile"]["state"] == "done", st["phases"]["profile"])
+    check("就医方向相位完成", st["phases"]["triage"]["state"] == "done", st["phases"]["triage"])
+    check("多学科已就绪", a.get("mdt_ready") is True and st["mdt"]["state"] == "done",
+          json.dumps(st.get("mdt"), ensure_ascii=False))
+    check("完成后病例状态推进",
+          a.get("case_state") in ("awaiting_doctor", "analyzing"), str(a.get("case_state")))
+    check("结果可被前端直接替换渲染",
+          bool(a.get("profile")) and bool(a.get("triage")) and bool(a.get("path")), "")
+    r = s.post(f"{BASE}/api/v2/case/{case3}/analysis/retry", json={}, timeout=30)
+    check("全部完成后重试被拒（400 且有说明）",
+          r.status_code == 400 and "无需重试" in (r.json().get("error") or ""),
+          json.dumps(r.json(), ensure_ascii=False)[:120])
+
+    print("\n[9] 非法输入被拒")
     r = s.post(f"{BASE}/api/v2/case/{case_id}/updates",
                json={"kind": "胡编", "content": "x", "source": "患者上传"}, timeout=30)
     check("非法类别 400", r.status_code == 400, str(r.status_code))
     r = s.post(f"{BASE}/api/v2/case/{case_id}/updates",
                json={"kind": "检查结果", "content": "  ", "source": "患者上传"}, timeout=30)
     check("空内容 400", r.status_code == 400, str(r.status_code))
+
+    print("\n[10] 脱敏预览（姓名误报回归：正文里的「患者转运」不该被当人名）")
+    clean = "患者转运至上级医院。患者活动后气促，患者出院后反应良好，患者出现胸痛。"
+    r = s.post(f"{BASE}/api/v2/preview", json={"medical_history": clean, "main_issue": "该看哪个科"}, timeout=30)
+    preview = r.json() or {}
+    check("预览 200", r.status_code == 200, str(r.status_code))
+    check("正文无误报", not (preview.get("hits") or []),
+          json.dumps(preview.get("hits"), ensure_ascii=False)[:160])
+    check("脱敏文本未改动正文", clean in (preview.get("masked_text") or ""),
+          (preview.get("masked_text") or "")[:80])
+
+    with_name = "患者：李某某，男，58岁。视物模糊3月。"
+    r = s.post(f"{BASE}/api/v2/preview", json={"medical_history": with_name, "main_issue": "该看哪个科"}, timeout=30)
+    preview2 = r.json() or {}
+    name_hits = [h for h in (preview2.get("hits") or []) if h.get("kind") == "name"]
+    check("真人名仍被识别", len(name_hits) == 1, json.dumps(name_hits, ensure_ascii=False)[:160])
+    check("给出命中规则", bool(name_hits and "命中规则" in (name_hits[0].get("reason") or "")),
+          (name_hits[0].get("reason") if name_hits else ""))
+    check("打码后不含原名", "李某某" not in (preview2.get("masked_text") or ""),
+          (preview2.get("masked_text") or "")[:80])
 
     print(f"\n===== 结果：{ok_count} 通过 / {fail_count} 失败 =====")
     return 1 if fail_count else 0
