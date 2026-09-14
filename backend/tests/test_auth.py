@@ -11,7 +11,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.auth import (  # noqa: E402
-    DEMO_ACCOUNTS,
+    ACCOUNTS,
     ROLE_DOCTOR,
     ROLE_PATIENT,
     AuthError,
@@ -26,14 +26,14 @@ class TestLogin(unittest.TestCase):
         self.auth = AuthService()
 
     def test_account_login_success(self):
-        session = self.auth.login(username="patient_demo", password="patient_demo")
+        session = self.auth.login(username="patient", password="patient")
         self.assertEqual(session.role, ROLE_PATIENT)
         self.assertTrue(session.token)
         self.assertTrue(session.label)
 
     def test_wrong_password_rejected(self):
         with self.assertRaises(AuthError):
-            self.auth.login(username="doctor_demo", password="wrong")
+            self.auth.login(username="doctor", password="wrong")
 
     def test_unknown_account_rejected(self):
         with self.assertRaises(AuthError):
@@ -54,12 +54,12 @@ class TestLogin(unittest.TestCase):
         with self.assertRaises(AuthError):
             self.auth.login()
 
-    def test_demo_accounts_are_the_only_ones(self):
-        self.assertEqual(set(DEMO_ACCOUNTS), {"patient_demo", "doctor_demo"})
+    def test_accounts_are_the_only_ones(self):
+        self.assertEqual(set(ACCOUNTS), {"patient", "doctor"})
 
     def test_real_auth_not_implemented(self):
         """比赛版明确不做真实认证：账号表里没有实名/短信相关字段。"""
-        for account in DEMO_ACCOUNTS.values():
+        for account in ACCOUNTS.values():
             self.assertNotIn("phone", account)
             self.assertNotIn("id_card", account)
 
@@ -70,7 +70,7 @@ class TestSession(unittest.TestCase):
         self.session = self.auth.login(role=ROLE_PATIENT)
 
     def test_verify_valid_token(self):
-        self.assertEqual(self.auth.verify(self.session.token).username, "patient_demo")
+        self.assertEqual(self.auth.verify(self.session.token).username, "patient")
 
     def test_verify_unknown_token(self):
         self.assertIsNone(self.auth.verify("not-a-token"))

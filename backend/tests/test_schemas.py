@@ -248,7 +248,7 @@ class TestDoctorDecision(unittest.TestCase):
         d = DoctorDecision(decision_id="DD-1", case_id="C001",
                            target_type="department_selection", target_id="oph",
                            action="modify", before="先看眼科", after="先查眼底再看眼科",
-                           reason="补充检查优先级", reviewer=Reviewer(role="演示审核人", dept="眼科"),
+                           reason="补充检查优先级", reviewer=Reviewer(role="审核医生", dept="眼科"),
                            version=3)
         d.validate()
 

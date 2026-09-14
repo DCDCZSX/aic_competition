@@ -433,7 +433,7 @@ class TaskItem:
 
 @dataclass
 class Reviewer:
-    role: str = "演示审核人"
+    role: str = "审核医生"
     dept: str = ""
 
     def validate(self) -> None:
