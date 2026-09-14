@@ -778,7 +778,10 @@ class CaseFlow:
             "decisions": [
                 {"decision_id": d.get("decision_id"), "action": d.get("action"),
                  "action_label": review_service.ACTION_LABELS.get(str(d.get("action")), d.get("action")),
-                 "target_type": d.get("target_type"), "target_id": d.get("target_id"),
+                 "target_type": d.get("target_type"),
+                 "target_label": review_service.TARGET_TYPE_LABELS.get(
+                     str(d.get("target_type")), d.get("target_type")),
+                 "target_id": d.get("target_id"),
                  "before": d.get("before"), "after": d.get("after"),
                  "reason": d.get("reason"),
                  "reviewer": (d.get("reviewer") or {}).get("role"),

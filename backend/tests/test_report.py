@@ -6,6 +6,7 @@
 验收对应规格书 §10：报告必填结构字段完整率 100%；主文档 §9（证据板红线）。
 """
 
+import json
 import os
 import sys
 import unittest
@@ -74,6 +75,46 @@ def sample_case():
             "mdt": None,
         },
     }
+
+
+def sample_case_with_mdt():
+    """带多学科分析的样本（用于报告展示层测试：专科视角 / 共识 / 分歧 / 证据卡都要有内容）。"""
+    case = sample_case()
+    case["payload"]["path"]["steps"] = [
+        {"step_id": "S1", "title": "整理近 3 个月血糖记录", "detail": "就诊前准备",
+         "kind": "prepare", "parallel": False, "requires_doctor": False},
+        {"step_id": "S2", "title": "向医生确认是否需要完善眼底检查",
+         "detail": "医疗行为需医生确认", "kind": "check", "condition": "若血糖控制不佳",
+         "depends_on": ["S1"], "requires_doctor": True},
+    ]
+    case["payload"]["mdt"] = {
+        "analyses": [
+            {"department": "眼科", "status": "ok", "focus": "眼底与视网膜",
+             "facts": ["视物模糊 3 月"],
+             "inferences": [{"text": "需排查糖尿病视网膜病变", "confidence": "medium",
+                             "evidence_refs": ["视物模糊 3 月"]}],
+             "checks": [{"priority": "high", "content": "建议向医生确认是否需要完善眼底检查"}],
+             "information_gaps": ["眼底检查：信息不足"]},
+            {"department": "肾内科", "status": "ok", "focus": "尿蛋白与肾功能",
+             "facts": ["尿蛋白 ++"],
+             "inferences": [{"text": "需评估糖尿病肾病可能", "confidence": "low",
+                             "evidence_refs": ["尿蛋白 ++"]}],
+             "checks": [{"priority": "high", "content": "建议向医生确认是否需要查肌酐与 eGFR"}],
+             "information_gaps": ["肾功能：信息不足"]},
+        ],
+        "aggregation": {
+            "consensus": [{"topic": "眼底检查", "supporters": ["眼科", "内分泌科"],
+                           "sources": ["check", "gap"], "example": "建议向医生确认是否需要眼底检查"}],
+            "disagreements": [{"topic": "先查眼底 vs 先查肾功",
+                               "positions": {"眼科": "先查眼底", "肾内科": "先查肾功"},
+                               "reason": "两个专科在同一方向上给出了相反倾向",
+                               "resolving_info": "需补充更明确的检查依据后再判断",
+                               "evidence_state": "conflict"}],
+            "uncertainties": [{"topic": "眼底检查", "impact": ["眼科", "内分泌科"]}],
+            "open_questions": ["是否需要眼科随诊"],
+        },
+    }
+    return case
 
 
 class TestTimeline(unittest.TestCase):
@@ -194,6 +235,87 @@ class TestFullReport(unittest.TestCase):
         for word in ("立即停药", "自行加量", "必须手术"):
             self.assertNotIn(word, markdown)
 
+    # ------------------------------------------------------------ 展示层（对外可读）
+    def test_report_sections_are_chinese_labelled(self):
+        """报告段落不得出现内部英文字段名 —— 这是"报告里冒出英文"缺陷的回归。
+
+        允许出现的英文只有医学/技术白名单（如 CT、MRI、eGFR、AI）；
+        内部结构键（judgement / evidence_state / supports / scope / confidence …）
+        与内部代码值（direct / rule-dominant / awaiting_doctor / department_selection …）一律不得出现。
+        """
+        case = sample_case_with_mdt()
+        report = build_full_report(case)
+        text = json.dumps(report.sections, ensure_ascii=False)
+
+        forbidden_keys = (
+            "judgement", "evidence_state", "supports", "opposes", "external",
+            "confidence", "scope", "reason\"", "resolving_info", "doctor_confirmed",
+            "step_id", "depends_on", "requires_doctor", "specialty_name",
+            "information_gaps", "source_refs", "target_type", "action",
+            "behavior_type", "decision_path", "reliability", "case_state",
+            "supporters", "positions", "impact", "topic",
+        )
+        for key in forbidden_keys:
+            self.assertNotIn(key, text, f"报告里泄漏了内部字段名：{key}")
+
+        forbidden_values = (
+            "rule-dominant", "model-dominant", "awaiting_doctor", "doctor_confirmed",
+            "department_selection", "path_step", "consensus_item", "patient_advice",
+            "direct", "indirect", "missing", "specialty",
+        )
+        for value in forbidden_values:
+            self.assertNotIn(f'"{value}"', text, f"报告里泄漏了内部代码值：{value}")
+
+    def test_report_does_not_expose_model_confidence(self):
+        """红线：报告不得出现模型自报置信度（规格书 §4.3）。"""
+        report = build_full_report(sample_case_with_mdt())
+        text = json.dumps(report.sections, ensure_ascii=False)
+        for token in ("置信度", "confidence", "概率"):
+            self.assertNotIn(token, text, f"报告里出现了不该展示的 {token}")
+
+    def test_nested_structures_stay_renderable(self):
+        """证据卡 / 路径步骤 / 专科视角必须是"中文键 → 字符串或字符串数组/卡片数组"，
+        不能再出现裸对象（前端旧渲染会把它显示成 [object Object]）。"""
+        report = build_full_report(sample_case_with_mdt())
+        for section in ("时间线", "就医路径", "各专科 AI 视角", "证据关联"):
+            value = report.sections[section]
+            self.assertIsInstance(value, (list, dict), f"{section} 结构异常：{type(value)}")
+        cards = report.sections["证据关联"]["证据卡片"]
+        self.assertTrue(cards, "样本病例应产出证据卡")
+        for card in cards:
+            self.assertIsInstance(card, dict)
+            for key, value in card.items():
+                self.assertIsInstance(key, str)
+                self.assertIn(type(value), (str, int, float, bool, list),
+                              f"证据卡字段 {key} 是裸对象，前端会渲染成 [object Object]")
+            self.assertIn("证据状态", card)
+            self.assertIn("支持证据", card)
+            self.assertIn("外部依据", card)
+            # 支持证据必须是"卡片形状"的列表（含中文键），而不是裸 dict 列表
+            supports = card["支持证据"]
+            self.assertIsInstance(supports, list)
+            for item in supports:
+                self.assertIn(type(item), (str, dict))
+                if isinstance(item, dict):
+                    self.assertIn("证据", item)
+
+    def test_timeline_and_path_have_chinese_labels(self):
+        report = build_full_report(sample_case_with_mdt())
+        timeline = report.sections["时间线"]
+        self.assertTrue(timeline, "样本病例应产出时间线")
+        for event in timeline:
+            self.assertIn("时间", event)
+            self.assertIn("类型", event)
+            self.assertIn("内容", event)
+            self.assertNotIn("confidence", event, "时间线不得带模型自报置信度")
+
+        steps = report.sections["就医路径"]
+        self.assertTrue(steps, "样本病例应产出就医路径")
+        for step in steps:
+            self.assertIn("步骤", step)
+            self.assertIn("内容", step)
+            self.assertNotIn("step_id", step)
+
     def test_markdown_has_badge_and_disclaimer(self):
         markdown = render_markdown(build_full_report(sample_case()))
         self.assertIn(AI_BADGE, markdown)
@@ -221,8 +343,8 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIsNotNone(reports)
         self.assertTrue(reports["full"]["complete"])
         self.assertEqual(reports["summary"]["badge"], AI_BADGE)
-        # 就医咨询任务已生成且去重
-        consult = [t for t in reports["full"]["sections"]["就医路径"] if t.get("kind") == "visit"]
+        # 就医咨询任务已生成且去重（报告段已是中文键结构：类型 = 就诊 / 检查 / 资料准备 / 复诊）
+        consult = [t for t in reports["full"]["sections"]["就医路径"] if t.get("类型") == "就诊"]
         self.assertTrue(consult)
         tasks = r.path["tasks"]
         consult_tasks = [t["content"] for t in tasks if t["type"] == "就医咨询"]

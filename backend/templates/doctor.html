@@ -732,9 +732,9 @@ function renderHistory(){
   $('hist-body').innerHTML = `
     <div class="ai-block">当前报告版本：<strong>v${esc(h.report_version||1)}</strong>　
       ${h.review&&h.review.published?('已由 '+esc(h.review.published_by||'医生')+' 于 '+esc(h.review.published_at||'')+' 发布'):'尚未发布审核版'}</div>
-    <h3>审核操作（DoctorDecision，逐条留痕）</h3>
+    <h3>审核操作（逐条留痕）</h3>
     ${decisions.length?decisions.map(d=>`<div class="opcard">
-      <strong>${esc(d.action_label)}</strong> ${esc(d.target_type)}｜${esc(d.target_id)}
+      <strong>${esc(d.action_label)}</strong> ${esc(d.target_label||d.target_type)}｜${esc(d.target_id)}
       <span class="tiny">${esc(d.created_at||'')}　${esc(d.reviewer||'')}</span>
       ${d.before?`<div class="tiny old">AI 原稿：${esc(String(d.before).slice(0,120))}</div>`:''}
       ${d.after?`<div class="tiny">医生版：${esc(String(d.after).slice(0,120))}</div>`:''}

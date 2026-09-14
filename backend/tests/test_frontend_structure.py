@@ -176,6 +176,17 @@ class FrontendStructureTest(unittest.TestCase):
                 self.assertNotIn(f'<span class="t">进入{"医生工作台" if own == "patient" else "患者端"}</span>',
                                  login, f"{path} 不应出现对端入口卡")
 
+    def test_json_key_order_is_preserved(self):
+        """报告段落内部字段是"给人读的顺序"，JSON 序列化不得按字母重排。
+
+        回归背景：Flask 默认 `sort_keys=True`，会把"判断 → 依据 → 证据状态 → 支持证据"
+        打乱成字母序（中文按码点排），读起来莫名其妙。
+        """
+        with flask_app.app.app_context():
+            payload = flask_app.app.json.dumps({"判断": 1, "依据": 2, "z_last": 3}, ensure_ascii=False)
+        self.assertLess(payload.index("判断"), payload.index("依据"), "字段顺序被打乱")
+        self.assertLess(payload.index("依据"), payload.index("z_last"), "字段顺序被打乱")
+
     def test_no_external_resources(self):
         for path in ("/", "/patient", "/doctor"):
             with self.subTest(path=path):

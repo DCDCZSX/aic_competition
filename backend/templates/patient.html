@@ -861,27 +861,28 @@ function bindReportToc(){
   document.querySelectorAll('.doc-body section').forEach(s=>_tocObserver.observe(s));
 }
 
+/* 段落渲染：字符串 / 数字 / 布尔 / 字符串数组 / 对象 / 对象数组 都渲染成中文可读结构。
+   约束：不出现 [object Object]，也不暴露内部英文键；未知结构降级为"（无法展示）"。 */
 function renderSectionValue(v){
-  if(v==null || v==='') return '<div class="tiny">（无）</div>';
+  if(v===null || v===undefined || v==='') return '<div class="tiny">（无）</div>';
+  if(typeof v==='boolean') return `<div>${v?'是':'否'}</div>`;
+  if(typeof v==='number') return `<div class="mono">${v}</div>`;
   if(typeof v==='string') return `<div>${esc(v)}</div>`;
   if(Array.isArray(v)){
     if(!v.length) return '<div class="tiny">（无）</div>';
-    return v.map(item=>{
-      if(typeof item==='object'){
-        const txt = Object.entries(item).filter(([k,x])=>x!==null&&x!==''&&!(Array.isArray(x)&&!x.length))
-          .map(([k,x])=>`<strong>${esc(k)}</strong>：${esc(Array.isArray(x)?x.join('、'):x)}`).join('；');
-        return `<div class="field"><div style="flex:1;">· ${txt||'（空）'}</div></div>`;
-      }
-      return `<div class="field"><div style="flex:1;">· ${esc(item)}</div></div>`;
-    }).join('');
+    const primitive = v.every(x=>x===null || ['string','number','boolean'].includes(typeof x));
+    if(primitive){
+      return `<ul class="bullet">` + v.map(x=>`<li>${esc(x===null?'（无）':String(x))}</li>`).join('') + `</ul>`;
+    }
+    /* 对象数组：每条一张卡片（证据卡 / 路径步骤 / 专科视角 / 审核记录 都走这条路径） */
+    return v.map(item=>`<div class="rec">${renderSectionValue(item)}</div>`).join('');
   }
   if(typeof v==='object'){
-    return Object.entries(v).map(([k,x])=>{
-      if(Array.isArray(x)||typeof x==='object') return `<div style="margin-top:6px;"><strong>${esc(k)}</strong>${renderSectionValue(x)}</div>`;
-      return `<div class="field"><div class="muted" style="min-width:110px;">${esc(k)}</div><div style="flex:1;">${esc(x)}</div></div>`;
-    }).join('');
+    const rows = Object.entries(v).filter(([,x])=>x!==null && x!==undefined && x!=='');
+    if(!rows.length) return '<div class="tiny">（无）</div>';
+    return `<dl class="def">` + rows.map(([k,x])=>`<dt>${esc(k)}</dt><dd>${renderSectionValue(x)}</dd>`).join('') + `</dl>`;
   }
-  return `<div>${esc(v)}</div>`;
+  return '<div class="tiny">（无法展示）</div>';
 }
 
 function printReport(){

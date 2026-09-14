@@ -23,6 +23,9 @@ import time
 
 app = Flask(__name__)
 CORS(app)
+# 不按字母排序 JSON 键：报告段落内部的字段顺序（判断 → 依据 → 证据状态 → 支持证据 …）
+# 是给人读的，排序后会被打乱（例如"证据卡片"跑到"证据状态统计"前面）。
+app.json.sort_keys = False
 
 mdt_service = MDTService()
 auth_service = AuthService()

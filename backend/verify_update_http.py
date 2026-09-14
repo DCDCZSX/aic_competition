@@ -149,7 +149,39 @@ def main():
     check("无概率数字/置信度泄露",
           not any(t in text for t in ("概率", "置信度", "可能性为")), text[:120])
 
-    print("\n[8] 非法输入被拒")
+    print("\n[8] 报告可读性（不得出现内部英文字段名 / 代码值 / 置信度 / 裸对象）")
+    r = s.get(f"{BASE}/api/v2/case/{case_id}/report", timeout=60)
+    full = (r.json() or {}).get("full") or {}
+    sections = full.get("sections") or {}
+    check("报告 200 且有段落", r.status_code == 200 and bool(sections), f"{len(sections)} 段")
+    report_text = json.dumps(sections, ensure_ascii=False)
+    forbidden_keys = ("judgement", "evidence_state", "supports", "opposes", "external",
+                      "confidence", "scope", "resolving_info", "doctor_confirmed",
+                      "step_id", "depends_on", "requires_doctor", "information_gaps",
+                      "source_refs", "behavior_type", "decision_path", "target_type",
+                      "supporters", "positions", "reliability")
+    leaked = [k for k in forbidden_keys if k in report_text]
+    check("无内部英文字段名泄漏", not leaked, json.dumps(leaked, ensure_ascii=False))
+    leaked_values = [v for v in ("rule-dominant", "awaiting_doctor", "department_selection",
+                                 "consensus_item", "patient_advice", "specialty")
+                     if f'"{v}"' in report_text]
+    check("无内部代码值泄漏", not leaked_values, json.dumps(leaked_values, ensure_ascii=False))
+    check("不展示模型自报置信度",
+          not any(t in report_text for t in ("置信度", "confidence", "概率")), "")
+    cards = (sections.get("证据关联") or {}).get("证据卡片") or []
+    check("证据卡片为中文键结构",
+          bool(cards) and all("判断" in c and "证据状态" in c for c in cards),
+          json.dumps(list(cards[0].keys()) if cards else [], ensure_ascii=False))
+    timeline = sections.get("时间线") or []
+    check("时间线为中文键事件",
+          bool(timeline) and all({"时间", "内容"} <= set(e.keys()) for e in timeline),
+          json.dumps(timeline[:1], ensure_ascii=False)[:110])
+    steps = sections.get("就医路径") or []
+    check("就医路径为中文键步骤",
+          bool(steps) and all({"步骤", "内容"} <= set(t.keys()) for t in steps),
+          json.dumps(steps[:1], ensure_ascii=False)[:110])
+
+    print("\n[9] 非法输入被拒")
     r = s.post(f"{BASE}/api/v2/case/{case_id}/updates",
                json={"kind": "胡编", "content": "x", "source": "患者上传"}, timeout=30)
     check("非法类别 400", r.status_code == 400, str(r.status_code))
