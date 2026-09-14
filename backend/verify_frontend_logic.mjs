@@ -58,8 +58,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 
 /* -------------------------------------------------------------- 患者端断言 */
 {
-  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, STEPS, renderSectionValue };');
-  const { S, renderSteps, renderContext, STEPS, renderSectionValue } = globalThis.__P;
+  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml };');
+  const { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml } = globalThis.__P;
 
   check('患者端主流程为 9 步', STEPS.length === 9, String(STEPS.length));
 
@@ -132,6 +132,17 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('文本内容完整保留', html.includes('建议就诊方向：眼科（协作）') && html.includes('糖尿病视网膜病变防治专家共识'), '');
   check('纯字符串输入可直接渲染', renderSectionValue('一句话').includes('一句话'), '');
   check('数字输入用等宽展示', renderSectionValue(0.62).includes('class="mono"'), '');
+
+  /* 后台 MDT 进度渲染（两段式）：必须显示"第几科/共几科"，失败时如实说明 */
+  const running = mdtProgressHtml({ state: 'running', done: 1, total: 3, current: '眼科' });
+  check('进度显示正在分析的科室', running.includes('正在分析 眼科') && running.includes('第 2 科'),
+    running.slice(0, 80));
+  check('进度显示已完成科数', running.includes('已完成 1 / 3'), '');
+  check('进度条按科数计算', running.includes('width:33%'), '');
+  check('进度文案解释为什么不显示概率', running.includes('独立研判'), '');
+  const failed = mdtProgressHtml({ state: 'failed', error: 'ReadTimeout' });
+  check('失败时如实说明且不编造', failed.includes('未完成') && failed.includes('ReadTimeout')
+    && failed.includes('不会因此编造结论'), failed.slice(0, 80));
 }
 
 /* ----------------------------------------------------- 医生工作台断言 */

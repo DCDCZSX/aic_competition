@@ -1,4 +1,7 @@
-from flask import Flask, request, jsonify, render_template
+import json
+import queue as queue_module
+import threading
+from flask import Flask, request, jsonify, render_template, Response
 from flask_cors import CORS
 import sys
 import os
@@ -148,22 +151,75 @@ def preview_intake():
 
 @app.route('/api/v2/case', methods=['POST'])
 def create_case():
-    """创建病例：返回脱敏预览、画像卡、信息缺口与追问列表。"""
+    """创建病例：返回脱敏预览、画像卡、信息缺口与追问列表。
+
+    带 `?stream=1`（或 body 里 `"stream": true`）时改为 **SSE 流式返回阶段进度**：
+    这条链路含 3 次模型调用（画像增强 / S2 受限发言 / 多专科意见卡 + 质询），实测 10-20 秒，
+    流式推送"当前在第几步、在做什么"，前端据此显示真实进度条，不让用户以为卡死。
+    """
     session, error = _guard('intake')
     if error:
         return error
     data = request.get_json(silent=True) or {}
-    result = case_flow.create_case(
-        medical_history=data.get('medical_history', ''),
-        main_issue=data.get('main_issue', ''),
-        goals=data.get('goals') or [],
-        age=data.get('age'),
-        sex=data.get('gender') or data.get('sex') or '',
-        name=data.get('name') or '',
-        case_id=data.get('case_id'),
+    wants_stream = (request.args.get('stream') in ('1', 'true', 'yes')) or bool(data.get('stream'))
+    # 两段式：画像/追问/分诊/路径先返回（约 3 秒），多学科分析放后台继续（实测约 26 秒）
+    defer_mdt = (request.args.get('defer_mdt') in ('1', 'true', 'yes')) or bool(data.get('defer_mdt'))
+
+    def _create(on_progress=None):
+        return case_flow.create_case(
+            medical_history=data.get('medical_history', ''),
+            main_issue=data.get('main_issue', ''),
+            goals=data.get('goals') or [],
+            age=data.get('age'),
+            sex=data.get('gender') or data.get('sex') or '',
+            name=data.get('name') or '',
+            case_id=data.get('case_id'),
+            on_progress=on_progress,
+            defer_mdt=defer_mdt,
+        )
+
+    if not wants_stream:
+        result = _create()
+        status = 200 if result.ok else 400
+        return jsonify(result.to_dict()), status
+
+    def _events():
+        queue: "queue.Queue" = queue_module.Queue()
+
+        def on_progress(payload):
+            queue.put({"type": "progress", **payload})
+
+        def worker():
+            try:
+                result = _create(on_progress=on_progress)
+                queue.put({"type": "done", "status": 200 if result.ok else 400,
+                           "result": result.to_dict()})
+            except Exception as exc:                       # noqa: BLE001 - 兜底，不让流悬挂
+                queue.put({"type": "error", "error": f"{type(exc).__name__}: {exc}"})
+            finally:
+                queue.put(None)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        yield "retry: 60000\n\n"
+        while True:
+            item = queue.get()
+            if item is None:
+                break
+            yield "data: " + json.dumps(item, ensure_ascii=False) + "\n\n"
+
+    return Response(
+        _events(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            # 必须显式关闭连接：流式响应结束后若客户端复用这条 keep-alive 连接发下一个请求，
+            # werkzeug 开发服务器不会处理（实测会一直挂到客户端超时）。
+            'Connection': 'close',
+        },
     )
-    status = 200 if result.ok else 400
-    return jsonify(result.to_dict()), status
 
 
 @app.route('/api/v2/case/<case_id>/answers', methods=['POST'])
@@ -173,7 +229,9 @@ def submit_answers(case_id):
     if error:
         return error
     data = request.get_json(silent=True) or {}
-    outcome = case_flow.submit_answers(case_id, data.get('answers') or {})
+    # 科室集合变化时会重跑多学科分析（15-30 秒）：同样支持两段式，先返回分诊结果
+    defer_mdt = (request.args.get('defer_mdt') in ('1', 'true', 'yes')) or bool(data.get('defer_mdt'))
+    outcome = case_flow.submit_answers(case_id, data.get('answers') or {}, defer_mdt=defer_mdt)
     return jsonify(outcome), (200 if outcome.get('ok') else 404)
 
 
@@ -187,6 +245,22 @@ def get_case(case_id):
     if not case:
         return jsonify({'error': f'病例不存在：{case_id}'}), 404
     return jsonify({'case': case, 'audit': _shared_store.list_audit(case_id, limit=50)})
+
+
+@app.route('/api/v2/case/<case_id>/mdt', methods=['GET'])
+def get_mdt(case_id):
+    """多学科分析进度与结果（P8 轮询用）。
+
+    两段式下多学科分析在后台跑，前端进 P8 时轮询这里：
+    `status.state` ∈ running / done / failed / none，`ready=true` 时 `mdt` 可用。
+    """
+    session, error = _guard()
+    if error:
+        return error
+    data = case_flow.get_mdt_status(case_id)
+    if data is None:
+        return jsonify({'error': f'病例不存在：{case_id}'}), 404
+    return jsonify(data)
 
 
 @app.route('/api/v2/case/<case_id>/report', methods=['GET'])

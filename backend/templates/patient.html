@@ -289,16 +289,27 @@
     <div id="mask-summary"></div>
     <div class="masked" id="mask-text"></div>
     <p class="tiny">打码不可逆（不提供"撤销打码"）；原始资料与脱敏资料分开存储。</p>
+    <div id="create-progress" class="hide">
+      <div class="col" style="margin-top:var(--sp-12);">
+        <div class="rt">正在整理资料</div>
+        <div class="progress"><i id="create-bar" style="width:6%"></i></div>
+        <div class="tiny" id="create-stage">正在提交…</div>
+        <div class="tiny" id="create-hint" style="margin-top:6px;">
+          提交后约 3 秒生成画像与追问；多学科分析会在后台自动继续（约 15–30 秒），不占用你的操作。
+        </div>
+      </div>
+    </div>
     <div id="mask-msg"></div>
     <div class="actions">
       <button class="ghost" onclick="go('intake')">← 返回修改</button>
-      <button class="primary" onclick="doCreateCase()">确认脱敏并提交 →</button>
+      <button class="primary" id="btn-create" onclick="doCreateCase()">确认脱敏并提交 →</button>
     </div>
   </section>
 
   <!-- P4 画像确认 -->
   <section id="s-profile" class="card hide">
     <h2>第四步 · 系统先把资料整理成画像，请核对</h2>
+    <p class="muted">这一步只用了几秒；多学科意见正在后台整理，不影响你现在核对画像。</p>
     <div id="profile-body"></div>
     <div id="gap-body"></div>
     <div class="actions">
@@ -453,7 +464,7 @@
 /* ===================== 状态 ===================== */
 const S = { token:null, role:null, label:null, goals:[], caseId:null, questions:[], answers:{}, gaps:[],
             profile:null, mode:'paste', triage:null, path:null, mdt:null, report:null,
-            reportView:'summary' };
+            mdtPending:false, mdtStatus:null, reportView:'summary' };
 const STEPS = [['goal','就医目标'],['intake','录入资料'],['mask','脱敏预览'],
                ['profile','画像确认'],['ask','智能追问'],['triage','就医方向'],
                ['path','路径与任务'],['mdt','多学科分析'],['report','就医报告']];
@@ -523,6 +534,16 @@ function renderContext(){
       ${gaps.length ? gaps.slice(0,5).map(g=>`<div class="tiny" style="margin-bottom:4px;">· ${esc(g)}</div>`).join('')
                     + (gaps.length>5?`<div class="tiny">…另有 ${gaps.length-5} 项</div>`:'')
                     : '<div class="tiny">暂无缺口记录</div>'}
+    </div>
+    <div class="panel">
+      <div class="panel-title">多学科分析</div>
+      ${S.mdt ? '<div class="tiny">已完成 · 各科意见与共识分歧已生成</div>'
+              : (S.mdtPending
+                  ? `<div class="progress"><i style="width:${Math.round(((S.mdtStatus||{}).done||0)/Math.max(((S.mdtStatus||{}).total||1),1)*100)}%"></i></div>
+                     <div class="tiny">后台整理中 ${((S.mdtStatus||{}).done||0)}/${((S.mdtStatus||{}).total||'—')} 科${
+                       (S.mdtStatus||{}).current ? ' · 当前 ' + esc((S.mdtStatus||{}).current) : ''}</div>`
+                  : '<div class="tiny">尚未开始</div>')}
+      <button class="btn btn-sm btn-block" style="margin-top:10px;" onclick="goMdt()">查看多学科分析</button>
     </div>
     <div class="panel">
       <div class="panel-title">我的任务</div>
@@ -664,31 +685,79 @@ async function doPreview(){
   go('mask');
 }
 
-/* ===================== P4/P5 创建病例 ===================== */
+/* ===================== P4/P5 创建病例（带阶段进度 + 防重复提交）===================== */
+/* 提交阶段的本地文案（真实进度由后端阶段事件驱动；这里只负责"别让用户以为卡死"） */
+const CREATE_TICKS = [
+  [1200, '正在校验并脱敏…'],
+  [2600, '正在结构化病例画像（模型）…'],
+  [4200, '正在生成关键追问…'],
+  [7000, '正在推演就医方向（模型）…'],
+];
+let createTimer = null;
+
+function showCreateProgress(){
+  const box = document.getElementById('create-progress');
+  const btn = document.getElementById('btn-create');
+  if(box) box.classList.remove('hide');
+  if(btn){ btn.disabled = true; btn.textContent = '正在整理资料…'; }
+  const t0 = Date.now();
+  clearInterval(createTimer);
+  createTimer = setInterval(()=>{
+    const ms = Date.now() - t0;
+    const pct = Math.min(6 + ms/120, 88);          // 只到 88%，完成时才满
+    const bar = document.getElementById('create-bar');
+    const stage = document.getElementById('create-stage');
+    if(bar) bar.style.width = pct.toFixed(0) + '%';
+    if(stage){
+      const tick = CREATE_TICKS.filter(([t])=>ms>=t).pop();
+      stage.textContent = `${(tick ? tick[1] : '正在提交…')}　已用 ${(ms/1000).toFixed(1)} 秒`;
+    }
+  }, 200);
+}
+function hideCreateProgress(){
+  clearInterval(createTimer); createTimer = null;
+  const box = document.getElementById('create-progress');
+  const btn = document.getElementById('btn-create');
+  if(box) box.classList.add('hide');
+  if(btn){ btn.disabled = false; btn.textContent = '确认脱敏并提交 →'; }
+}
+
 async function doCreateCase(){
+  if(createTimer) return;                          // 防重复提交（连点会建出两个病例）
   const history=document.getElementById('history').value.trim();
   const issue=document.getElementById('main-issue').value.trim();
-  const r = await api('/api/v2/case', {method:'POST', body:JSON.stringify({
-    medical_history:history, main_issue:issue, goals:S.goals,
-    age:document.getElementById('f-age').value||null,
-    gender:document.getElementById('f-sex').value||''
-  })});
-  const d=r.data;
-  if(d.blocked){
-    msg('mask-msg', `<strong>已拦截</strong><br>${esc(d.advice||(d.errors||[]).join('；'))}`,'danger');
-    return;
-  }
-  if(!d.ok && !d.passes_gate){
-    S.caseId=d.case_id; renderProfile(d);
-    msg('mask-msg','画像信息不足，请返回补充后再分析（G4 门禁）','warn');
-    go('profile'); return;
-  }
-  if(!d.ok){ msg('mask-msg', esc((d.errors||[]).join('；'))); return; }
+  showCreateProgress();
+  try{
+    const r = await api('/api/v2/case', {method:'POST', body:JSON.stringify({
+      medical_history:history, main_issue:issue, goals:S.goals,
+      age:document.getElementById('f-age').value||null,
+      gender:document.getElementById('f-sex').value||'',
+      defer_mdt:true          // 两段式：先交付画像/追问/分诊/路径（约 3 秒），MDT 后台续跑
+    })});
+    const d=r.data||{};
+    hideCreateProgress();
+    if(d.blocked){
+      msg('mask-msg', `<strong>已拦截</strong><br>${esc(d.advice||(d.errors||[]).join('；'))}`,'danger');
+      return;
+    }
+    if(!d.ok && !d.passes_gate){
+      S.caseId=d.case_id; renderProfile(d);
+      msg('mask-msg','画像信息不足，请返回补充后再分析（G4 门禁）','warn');
+      go('profile'); return;
+    }
+    if(!d.ok){ msg('mask-msg', esc((d.errors||[]).join('；'))); return; }
 
-  S.caseId=d.case_id; S.profile=d.profile; S.questions=d.questions||[];
-  S.triage=d.triage||null; S.path=d.path||null; S.mdt=d.mdt||null;
-  renderProfile(d); renderQuestions();
-  go('profile');
+    S.caseId=d.case_id; S.profile=d.profile; S.questions=d.questions||[];
+    S.triage=d.triage||null; S.path=d.path||null; S.mdt=d.mdt||null;
+    S.mdtPending = !!d.mdt_pending;
+    S.mdtStatus = null;
+    renderProfile(d); renderQuestions();
+    msg('mask-msg','');
+    go('profile');
+  }catch(err){
+    hideCreateProgress();
+    msg('mask-msg','提交失败：'+esc(err && err.message ? err.message : '网络异常')+'，请重试','danger');
+  }
 }
 
 function renderProfile(d){
@@ -718,6 +787,11 @@ function renderProfile(d){
   html += `<div class="ai-block" style="margin-top:var(--sp-16);"><span class="pill ${d.passes_gate?'ok':'danger'}">原文直引覆盖率 ${cov}</span>
          <span class="pill">关键字段完整度 ${cmp}</span>
          <div class="tiny" style="margin-top:6px;">灰色为 AI 推断或待确认项，请核对；出处 chip 可悬停查看原文位置。</div></div>`;
+  /* 降级/异常要如实可见（例：模型未生效时只跑规则链路） */
+  if((d.warnings||[]).length){
+    html += `<div class="banner warn" style="margin-top:var(--sp-12);"><strong>以下情况需要你知道（系统如实说明，不隐瞒降级）：</strong>` +
+      (d.warnings||[]).map(x=>`<div class="tiny">· ${esc(x)}</div>`).join('') + `</div>`;
+  }
   document.getElementById('profile-body').innerHTML = html;
 
   const gaps = d.gaps||[];
@@ -756,11 +830,14 @@ async function submitAnswers(){
     const v=(document.getElementById('ans-'+i).value||'').trim();
     if(v) answers[q.field]=v;
   });
-  const r=await api(`/api/v2/case/${S.caseId}/answers`, {method:'POST', body:JSON.stringify({answers})});
+  const r=await api(`/api/v2/case/${S.caseId}/answers`, {method:'POST',
+    body:JSON.stringify({answers, defer_mdt:true})});
   const d=r.data||{};
   S.triage = d.triage || S.triage;
   S.path = d.path || S.path;
-  if(d.mdt) S.mdt = d.mdt;
+  S.mdtPending = !!d.mdt_pending || S.mdtPending;
+  if(d.mdt) { S.mdt = d.mdt; S.mdtPending = false; }
+  if(d.mdt_pending) S.mdtStatus = null;
   S.answerSummary = {resolved:(d.resolved_fields||[]).length,
                      unresolved:(d.unresolved_fields||[]).length,
                      downgrade:!!d.reliability_downgrade};
@@ -768,7 +845,85 @@ async function submitAnswers(){
   go('triage');
 }
 
-function goMdt(){ renderMdt(); go('mdt'); }
+/* ===================== P8 多学科分析（两段式：后台跑，前台看真实进度）===================== */
+let mdtTimer = null;
+
+/* 进度文案（纯函数，便于单测）：把后端状态渲染成"第几科 / 共几科" */
+function mdtProgressHtml(status){
+  const st = status || {};
+  const total = st.total || 0, done = st.done || 0;
+  const pct = total ? Math.round(done/total*100) : 0;
+  const state = st.state || 'running';
+  if(state === 'failed'){
+    return `<div class="banner warn"><strong>多学科分析未完成</strong><br>
+      原因：${esc(st.error||'模型调用失败或超时')}<br>
+      <span class="tiny">这不影响已生成的画像、就医方向与报告；可稍后在医生端复核时补充。系统不会因此编造结论。</span></div>`;
+  }
+  const label = st.current ? `正在分析 ${esc(st.current)}（第 ${done+1} 科）` : '正在启动多学科分析…';
+  return `<div class="col">
+      <div class="rt">多学科意见正在后台整理</div>
+      <div class="progress"><i style="width:${pct}%"></i></div>
+      <div class="tiny">${label}　已完成 ${done} / ${total || '—'} 科</div>
+      <div class="tiny" style="margin-top:6px;">
+        各专科是<strong>独立研判</strong>（互相看不到对方结论），完成后才会做共识与分歧聚合。
+        这一步要逐科调用模型，实测约 15–30 秒；页面会自动刷新，你不用等在这里。
+      </div>
+      <div style="margin-top:var(--sp-12);">
+        <button class="ghost" onclick="go('report')">先看就医报告 →</button>
+        <button class="ghost" onclick="go('path')">看路径与任务 →</button>
+      </div>
+    </div>`;
+}
+
+/* 轮询后台 MDT：每次请求带 12 秒超时（避免连接异常时界面卡死），最多等约 3 分钟 */
+async function pollMdt(budgetMs){
+  if(!S.caseId) return;
+  const deadline = Date.now() + (budgetMs || 180000);
+  const body = document.getElementById('mdt-body');
+  while(Date.now() < deadline){
+    let data = null;
+    try{
+      const ctrl = new AbortController();
+      const timer = setTimeout(()=>ctrl.abort(), 12000);
+      const res = await fetch(`/api/v2/case/${S.caseId}/mdt`, {signal: ctrl.signal});
+      clearTimeout(timer);
+      data = await res.json();
+    }catch(e){ data = null; }                       // 超时/断连：退避后重试，不冻结界面
+    if(data){
+      S.mdtStatus = data.status || null;
+      renderContext();
+      if(data.ready){
+        S.mdt = data.mdt; S.mdtPending = false; S.report = null;
+        renderMdt(); renderContext();
+        return;
+      }
+      if((data.status||{}).state === 'failed'){
+        S.mdtPending = false;
+        if(body) body.innerHTML = mdtProgressHtml(data.status);
+        renderContext();
+        return;
+      }
+      if(body) body.innerHTML = mdtProgressHtml(data.status);
+    }
+    await new Promise(r=>setTimeout(r, 2000));
+  }
+  if(body){
+    body.innerHTML = `<div class="banner warn">多学科分析仍在后台进行（超过 3 分钟）。
+      可以先去查看就医报告或路径任务，稍后回到本页会自动刷新。</div>`;
+  }
+}
+
+function goMdt(){
+  if(S.mdt){ renderMdt(); go('mdt'); return; }
+  if(S.caseId && (S.mdtPending || S.mdtStatus)){
+    const body = document.getElementById('mdt-body');
+    if(body) body.innerHTML = mdtProgressHtml(S.mdtStatus);
+    go('mdt');
+    pollMdt();
+    return;
+  }
+  renderMdt(); go('mdt');
+}
 
 /* ===================== 任务状态操作（P7）===================== */
 async function updateTask(taskId, state){

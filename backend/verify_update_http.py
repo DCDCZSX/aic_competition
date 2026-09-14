@@ -181,6 +181,41 @@ def main():
           bool(steps) and all({"步骤", "内容"} <= set(t.keys()) for t in steps),
           json.dumps(steps[:1], ensure_ascii=False)[:110])
 
+    print("\n[11] 两段式：先交付画像，MDT 后台跑并有真实进度")
+    import time as _time
+    t0 = _time.time()
+    r = s.post(f"{BASE}/api/v2/case", json={
+        "medical_history": CASE, "main_issue": "该看哪个科", "age": 61, "sex": "男",
+        "defer_mdt": True}, timeout=120)
+    fast = _time.time() - t0
+    two = r.json() or {}
+    check("建病例返回 200", r.status_code == 200 and two.get("ok"), str(r.status_code))
+    check("标记 MDT 仍在后台", two.get("mdt_pending") is True, str(two.get("mdt_pending")))
+    check("主请求不带 MDT 结果", two.get("mdt") is None, str(two.get("mdt"))[:60])
+    check("画像/分诊/路径已就绪",
+          bool(two.get("profile")) and bool(two.get("triage")) and bool(two.get("path")), "")
+    check("交付够快（<10 秒）", fast < 10, f"{fast:.2f}s")
+
+    case2 = two.get("case_id")
+    seen = []
+    ready = False
+    t1 = _time.time()
+    while _time.time() - t1 < 150:
+        d = s.get(f"{BASE}/api/v2/case/{case2}/mdt", timeout=60).json()
+        st = d.get("status") or {}
+        seen.append(st.get("state"))
+        if d.get("ready"):
+            ready = True
+            check("后台 MDT 完成", True, f"用时 {_time.time()-t1:.1f}s，"
+                  f"卡片 {len((d.get('mdt') or {}).get('analyses') or [])} 张")
+            break
+        if st.get("state") == "failed":
+            check("后台 MDT 完成", False, str(st.get("error"))[:120])
+            break
+        _time.sleep(2)
+    check("轮询能看到 running 状态", "running" in seen, json.dumps(seen[:6], ensure_ascii=False))
+    check("结束后 ready=true", ready)
+
     print("\n[9] 非法输入被拒")
     r = s.post(f"{BASE}/api/v2/case/{case_id}/updates",
                json={"kind": "胡编", "content": "x", "source": "患者上传"}, timeout=30)
