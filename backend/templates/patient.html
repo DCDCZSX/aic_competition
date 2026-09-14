@@ -646,12 +646,19 @@ async function doPreview(){
   }
 
   const hits = d.hits||[];
+  const blocking = d.blocking_hit_count || 0;
   document.getElementById('mask-summary').innerHTML =
     hits.length
-      ? `<div class="banner warn">共识别 ${hits.length} 处需要打码的信息（其中需清除 ${d.blocking_hit_count} 处）：`
+      ? `<div class="banner warn"><strong>共识别 ${hits.length} 处敏感信息，已自动打码。</strong><br>`
+        + (blocking
+            ? `其中 <strong>${blocking} 处属于可直接定位个人的标识</strong>，请先删掉原文再提交（否则会被拦下）。`
+            : `其中没有可直接定位个人的标识，可以继续提交。`)
+        + `<div class="tiny" style="margin-top:8px;">逐条说明：</div>`
         + hits.map(h=>`<div class="tiny">· ${esc(h.label)} → <code>${esc(h.masked)}</code> — ${esc(h.reason)}</div>`).join('')
+        + `<div class="tiny" style="margin-top:8px;">姓名只在有明确信号时才打码（如「姓名：张三」「患者：李某某，男，58岁」「我叫王小明」）；
+            "患者转运""患者活动后"这类正文不会被误判。若发现误判请把原句发给我们。</div>`
         + `</div>`
-      : `<div class="banner ok">未识别到需要打码的敏感信息。</div>`;
+      : `<div class="banner ok">未识别到需要打码的敏感信息，可以继续。</div>`;
   document.getElementById('mask-text').textContent = d.masked_text || '（无内容）';
   msg('mask-msg','');
   go('mask');

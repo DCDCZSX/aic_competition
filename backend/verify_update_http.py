@@ -189,6 +189,26 @@ def main():
                json={"kind": "检查结果", "content": "  ", "source": "患者上传"}, timeout=30)
     check("空内容 400", r.status_code == 400, str(r.status_code))
 
+    print("\n[10] 脱敏预览（姓名误报回归：正文里的「患者转运」不该被当人名）")
+    clean = "患者转运至上级医院。患者活动后气促，患者出院后反应良好，患者出现胸痛。"
+    r = s.post(f"{BASE}/api/v2/preview", json={"medical_history": clean, "main_issue": "该看哪个科"}, timeout=30)
+    preview = r.json() or {}
+    check("预览 200", r.status_code == 200, str(r.status_code))
+    check("正文无误报", not (preview.get("hits") or []),
+          json.dumps(preview.get("hits"), ensure_ascii=False)[:160])
+    check("脱敏文本未改动正文", clean in (preview.get("masked_text") or ""),
+          (preview.get("masked_text") or "")[:80])
+
+    with_name = "患者：李某某，男，58岁。视物模糊3月。"
+    r = s.post(f"{BASE}/api/v2/preview", json={"medical_history": with_name, "main_issue": "该看哪个科"}, timeout=30)
+    preview2 = r.json() or {}
+    name_hits = [h for h in (preview2.get("hits") or []) if h.get("kind") == "name"]
+    check("真人名仍被识别", len(name_hits) == 1, json.dumps(name_hits, ensure_ascii=False)[:160])
+    check("给出命中规则", bool(name_hits and "命中规则" in (name_hits[0].get("reason") or "")),
+          (name_hits[0].get("reason") if name_hits else ""))
+    check("打码后不含原名", "李某某" not in (preview2.get("masked_text") or ""),
+          (preview2.get("masked_text") or "")[:80])
+
     print(f"\n===== 结果：{ok_count} 通过 / {fail_count} 失败 =====")
     return 1 if fail_count else 0
 
