@@ -164,6 +164,8 @@ def create_case():
     wants_stream = (request.args.get('stream') in ('1', 'true', 'yes')) or bool(data.get('stream'))
     # 两段式：画像/追问/分诊/路径先返回（约 3 秒），多学科分析放后台继续（实测约 26 秒）
     defer_mdt = (request.args.get('defer_mdt') in ('1', 'true', 'yes')) or bool(data.get('defer_mdt'))
+    # 渐进式：连模型增强也不等，先给确定性规则结果（实测 0.2 秒级），模型三相全部后台
+    progressive = (request.args.get('progressive') in ('1', 'true', 'yes')) or bool(data.get('progressive'))
 
     def _create(on_progress=None):
         return case_flow.create_case(
@@ -176,6 +178,7 @@ def create_case():
             case_id=data.get('case_id'),
             on_progress=on_progress,
             defer_mdt=defer_mdt,
+            progressive=progressive,
         )
 
     if not wants_stream:
@@ -245,6 +248,46 @@ def get_case(case_id):
     if not case:
         return jsonify({'error': f'病例不存在：{case_id}'}), 404
     return jsonify({'case': case, 'audit': _shared_store.list_audit(case_id, limit=50)})
+
+
+@app.route('/api/v2/case/<case_id>/analysis', methods=['GET'])
+def get_analysis(case_id):
+    """后台分析任务状态（渐进式/两段式的统一下拉口）。
+
+    返回三个相位（画像增强 / 就医方向 / 多学科）的状态、MDT 细分进度（第几科 + 子步骤）、
+    已就绪的结果片段与警告 —— 前端据此**增量渲染**：规则结果先显示，模型结果到了再替换。
+    """
+    session, error = _guard()
+    if error:
+        return error
+    data = case_flow.get_analysis(case_id)
+    if data is None:
+        return jsonify({'error': f'病例不存在：{case_id}'}), 404
+    return jsonify(data)
+
+
+@app.route('/api/v2/case/<case_id>/analysis/retry', methods=['POST'])
+def retry_analysis(case_id):
+    """重试未完成/失败的分析相位（患者端"重新分析"按钮）。"""
+    session, error = _guard('case:own')
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    phases = data.get('phases') or None
+    result = case_flow.retry_analysis(case_id, phases=phases)
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/cases/analyze', methods=['POST'])
+def analyze_pending_cases():
+    """医生端批处理：把"分析未完成"的病例排进后台任务（不阻塞请求，逐例可见进度）。"""
+    session, error = _guard_doctor()
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    limit = int(data.get('limit') or 3)
+    result = case_flow.analyze_pending_cases(limit=max(1, min(limit, 10)))
+    return jsonify(result), (200 if result.get('ok') else 400)
 
 
 @app.route('/api/v2/case/<case_id>/mdt', methods=['GET'])

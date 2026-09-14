@@ -216,6 +216,48 @@ def main():
     check("轮询能看到 running 状态", "running" in seen, json.dumps(seen[:6], ensure_ascii=False))
     check("结束后 ready=true", ready)
 
+    print("\n[12] 渐进式：规则秒开 + 模型三相后台 + 可重试")
+    t0 = _time.time()
+    r = s.post(f"{BASE}/api/v2/case", json={
+        "medical_history": CASE, "main_issue": "该看哪个科", "age": 61, "sex": "男",
+        "progressive": True}, timeout=60)
+    first = _time.time() - t0
+    prog = r.json() or {}
+    check("渐进式建病例 200", r.status_code == 200 and prog.get("ok"), str(r.status_code))
+    check("首屏为规则画像", prog.get("profile_is_rules_only") is True, str(prog.get("profile_is_rules_only")))
+    check("后台任务已排入", prog.get("analysis_pending") is True, str(prog.get("analysis_pending")))
+    check("规则分诊/路径/追问已就绪",
+          bool(prog.get("triage")) and bool(prog.get("path")) and bool(prog.get("questions")), "")
+    check("首屏足够快（<2 秒）", first < 2, f"{first*1000:.0f} ms")
+
+    case3 = prog.get("case_id")
+    a = s.get(f"{BASE}/api/v2/case/{case3}/analysis", timeout=30).json()
+    check("analysis 接口可用", bool(a.get("analysis")), "")
+    check("三个相位齐备", set((a["analysis"].get("phases") or {})) == {"profile", "triage", "mdt"},
+          json.dumps(list((a["analysis"].get("phases") or {}).keys()), ensure_ascii=False))
+    seen_states = []
+    t1 = _time.time()
+    while _time.time() - t1 < 180:
+        a = s.get(f"{BASE}/api/v2/case/{case3}/analysis", timeout=30).json()
+        st = a["analysis"]
+        seen_states.append(st.get("state"))
+        if st.get("state") != "running":
+            break
+        _time.sleep(2)
+    check("相位全部完成", st.get("state") in ("done", "partial_failed"), str(st.get("state")))
+    check("画像模型增强完成", st["phases"]["profile"]["state"] == "done", st["phases"]["profile"])
+    check("就医方向相位完成", st["phases"]["triage"]["state"] == "done", st["phases"]["triage"])
+    check("多学科已就绪", a.get("mdt_ready") is True and st["mdt"]["state"] == "done",
+          json.dumps(st.get("mdt"), ensure_ascii=False))
+    check("完成后病例状态推进",
+          a.get("case_state") in ("awaiting_doctor", "analyzing"), str(a.get("case_state")))
+    check("结果可被前端直接替换渲染",
+          bool(a.get("profile")) and bool(a.get("triage")) and bool(a.get("path")), "")
+    r = s.post(f"{BASE}/api/v2/case/{case3}/analysis/retry", json={}, timeout=30)
+    check("全部完成后重试被拒（400 且有说明）",
+          r.status_code == 400 and "无需重试" in (r.json().get("error") or ""),
+          json.dumps(r.json(), ensure_ascii=False)[:120])
+
     print("\n[9] 非法输入被拒")
     r = s.post(f"{BASE}/api/v2/case/{case_id}/updates",
                json={"kind": "胡编", "content": "x", "source": "患者上传"}, timeout=30)

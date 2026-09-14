@@ -84,6 +84,9 @@ class CaseCreation:
     path: Optional[Dict[str, Any]] = None                           # 就医路径与任务（P7）
     mdt: Optional[Dict[str, Any]] = None                            # 多专科意见卡 + 聚合（P8）
     mdt_pending: bool = False                                       # 两段式：MDT 是否仍在后台跑
+    progressive: bool = False                                       # 渐进式：先给规则结果
+    analysis_pending: bool = False                                  # 后台分析任务是否在跑
+    profile_is_rules_only: bool = False                             # 画像是否仅为规则抽取（模型增强未回）
     s2: Optional[Dict[str, Any]] = None                             # S2 受限发言记录（可解释）
 
     def to_dict(self) -> Dict[str, Any]:
@@ -103,6 +106,9 @@ class CaseCreation:
             "path": self.path,
             "mdt": self.mdt,
             "mdt_pending": self.mdt_pending,
+            "progressive": self.progressive,
+            "analysis_pending": self.analysis_pending,
+            "profile_is_rules_only": self.profile_is_rules_only,
             "s2": self.s2,
         }
 
@@ -217,6 +223,7 @@ class CaseFlow:
         case_id: Optional[str] = None,
         on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
         defer_mdt: bool = False,
+        progressive: bool = False,
     ) -> CaseCreation:
         """执行"录入 → 校验 → 脱敏 → 画像 → 追问 → 分诊 → 路径 → 多学科"整条链路。
 
@@ -273,6 +280,69 @@ class CaseFlow:
             "main_issue": payload["main_issue"],
         }
         _progress("mask")
+
+        # ---- 2.5 渐进式（progressive）：先只跑确定性规则，模型相位全部放后台 ----
+        # 目的：让"点提交"到"看到自己的画像"从 3 秒进一步压到 0.2 秒级。
+        # 规则画像是确定性抽取（无模型调用），已经能给患者核对；模型增强随后自动替换。
+        if progressive:
+            case_id = case_id or new_case_id()
+            rule_extraction = extract(
+                payload["medical_history"], case_id=case_id, main_issue=payload["main_issue"],
+                use_llm=False, ai_service=None,
+            )
+            rule_profile = rule_extraction.profile
+            if age not in (None, ""):
+                try:
+                    rule_profile.age = int(age)
+                except (TypeError, ValueError):
+                    pass
+            if sex:
+                rule_profile.sex = sex
+
+            result.case_id = case_id
+            result.gaps = rule_extraction.gaps
+            result.completeness = rule_profile.completeness
+            result.direct_quote_coverage = rule_profile.direct_quote_coverage
+            result.passes_gate = rule_extraction.passes_gate
+            result.profile = self._profile_to_dict(rule_profile)
+            result.profile_is_rules_only = True
+            result.warnings.extend(rule_extraction.warnings)
+            _progress("profile")
+
+            if not rule_extraction.passes_gate:
+                result.ok = False
+                result.case_state = STATE_NEED_MORE_INFO
+                self._save_case(result, age=age, sex=sex)
+                return result
+
+            result.questions = [q.to_dict() for q in build_questions(gaps=result.gaps)]
+            _progress("questions")
+
+            # 规则分诊（S1 → S3，无模型发言）：先给一个可用的方向，模型到了再替换
+            masked_text = payload["medical_history"]
+            rule_eval = evaluate_rules(masked_text)
+            outcome = orchestrate(text=masked_text, case_id=case_id, evaluation=rule_eval,
+                                  model_picks=None, completeness=rule_profile.completeness,
+                                  unresolved_gaps=len(result.gaps))
+            result.triage = outcome.to_dict()
+            _progress("triage")
+
+            care_path = build_path(
+                outcome=outcome, gaps=result.gaps,
+                checks_by_department=self._checks_by_department(result.gaps, outcome.selected),
+                case_id=case_id)
+            result.path = care_path.to_dict()
+            _progress("path")
+
+            result.case_state = "analyzing"          # 状态机：AI 分析中（模型相位在后台跑）
+            result.progressive = True
+            result.analysis_pending = True
+            result.ok = True
+            _progress("mdt")
+            self._save_case(result, age=age, sex=sex)
+            self.start_analysis_job(case_id)         # profile → triage → mdt 全部后台
+            _progress("save")
+            return result
 
         # ---- 3. 病例结构化（P4：画像 + G4 门禁）----
         case_id = case_id or new_case_id()
@@ -345,13 +415,10 @@ class CaseFlow:
         _progress("mdt")
         if self.use_llm and self.ai_service is not None and outcome.selected:
             if defer_mdt:
-                # 两段式：先把病例交付给患者（画像/追问/分诊/路径已就绪），MDT 等落库后再后台续跑
-                deferred_mdt = {
-                    "case_id": case_id, "text": masked_history, "outcome": outcome,
-                    "profile": result.profile,
-                    "rejections": [c.get("department") for c in outcome.conflicts],
-                }
+                # 两段式：画像/追问/分诊/路径已就绪，MDT 等落库后由后台分析任务续跑
+                deferred_mdt = {"phase_only": True}
                 result.mdt_pending = True
+                result.analysis_pending = True
             else:
                 result.mdt = self._run_mdt(
                     text=masked_history, outcome=outcome, profile=result.profile,
@@ -367,7 +434,7 @@ class CaseFlow:
         self._save_case(result, age=age, sex=sex)
         if deferred_mdt:
             # 必须在落库之后启动：后台线程要能读到病例才能写进度
-            self._start_mdt_background(**deferred_mdt)
+            self.start_analysis_job(case_id, phases=["mdt"])
         _progress("save")
         return result
 
@@ -418,14 +485,9 @@ class CaseFlow:
         deferred_mdt: Optional[Dict[str, Any]] = None
         if self.use_llm and self.ai_service is not None and new_selected != old_selected:
             if defer_mdt:
-                # 科室集合变了要重跑 MDT —— 同样放后台（实测 15-30 秒），不卡住"看分诊结果"
+                # 科室集合变了要重跑 MDT —— 交给后台分析任务，不卡住"看分诊结果"
                 mdt = None
-                deferred_mdt = {
-                    "case_id": case_id, "text": recomputed_text, "outcome": outcome,
-                    "profile": profile,
-                    "answers": {k: v for k, v in (answers or {}).items() if str(v).strip()},
-                    "rejections": [c.get("department") for c in outcome.conflicts],
-                }
+                deferred_mdt = {"phase_only": True}
             else:
                 mdt = self._run_mdt(
                     text=recomputed_text, outcome=outcome, profile=profile,
@@ -466,7 +528,7 @@ class CaseFlow:
             )
         if deferred_mdt:
             # 必须在落库之后启动（后台线程要能读到病例）
-            self._start_mdt_background(**deferred_mdt)
+            self.start_analysis_job(case_id, phases=["mdt"])
 
         return {
             "ok": True,
@@ -481,84 +543,339 @@ class CaseFlow:
             "mdt_pending": bool(deferred_mdt),
         }
 
-    # ------------------------------------------------------------------ 多专科分析（两段式：后台续跑）
-    def _start_mdt_background(self, *, case_id: str, text: str, outcome: Any,
-                             profile: Optional[Dict[str, Any]],
-                             answers: Optional[Dict[str, str]] = None,
-                             rejections: Optional[List[str]] = None) -> None:
-        """在后台线程里跑多学科分析，并把进度/结果写回病例 payload。
+    # ------------------------------------------------------------------ 后台分析任务
+    # 设计：把"要模型参与的部分"从主请求里剥离，做成后台任务 + 阶段进度。
+    #  - 三个相位：profile（画像增强）→ triage（S2 受限发言 + 重新编排）→ mdt（多学科意见卡 + 质询）
+    #  - 进度落在 payload["analysis"]，`GET /api/v2/case/<id>/analysis` 可查，刷新页面也不丢
+    #  - 单科病例（只有 1 个就医方向）跳过 MDT：不需要多学科，如实写"已跳过"而不是假装分析过
+    #  - 失败不阻塞：前台保留已就绪的规则结果，如实写明失败原因，并提供重试
 
-        为什么要这样：MDT 要逐科调用模型（实测 3 科 + 质询 ≈ 26 秒），
-        如果和"看画像"卡在同一次请求里，患者要干等半分钟才看到自己的资料。
-        拆开之后画像/追问/分诊/路径约 3 秒就能交付，MDT 到 P8 再取。
-        """
-        if not self.store:
-            return
-        total = len(outcome.selected[:MAX_MDT_DEPARTMENTS])
-        self._save_mdt_status(case_id, {
-            "state": "running", "done": 0, "total": total, "current": "",
+    ANALYSIS_PHASES = ("profile", "triage", "mdt")
+    PHASE_LABELS = {
+        "profile": "结构化病例画像（模型增强）",
+        "triage": "就医方向（S2 受限发言 + 编排校验）",
+        "mdt": "多学科独立意见 + 质询",
+    }
+
+    @staticmethod
+    def _new_analysis_status(*, mdt_total: int = 0) -> Dict[str, Any]:
+        return {
+            "state": "running",
+            "phases": {phase: {"state": "pending", "label": CaseFlow.PHASE_LABELS[phase]}
+                       for phase in CaseFlow.ANALYSIS_PHASES},
+            "mdt": {"state": "pending", "done": 0, "total": mdt_total, "current": "", "step": ""},
+            "warnings": [],
             "started_at": _now(),
-        })
+            "finished_at": "",
+        }
 
-        def worker() -> None:
-            try:
-                def on_department(dept: str, done: int, total_: int) -> None:
-                    self._save_mdt_status(case_id, {
-                        "state": "running", "done": done - 1, "total": total_,
-                        "current": dept, "started_at": _now(),
-                    })
+    def _patch_payload(self, case_id: str, **updates: Any) -> Dict[str, Any]:
+        """读-改-写病例 payload（后台线程与主请求共用，Store 内部已串行化）。"""
+        if not self.store:
+            return {}
+        case = self.store.load_case(case_id)
+        if not case:
+            return {}
+        payload = dict(case.get("payload") or {})
+        payload.update(updates)
+        self.store.save_case(
+            case_id, patient_name=case.get("patient_name") or "",
+            main_issue=case.get("main_issue") or "", status=case.get("status") or "running",
+            case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
+            report_version=int(case.get("report_version") or 1), payload=payload)
+        return payload
 
-                mdt = self._run_mdt(text=text, outcome=outcome, profile=profile,
-                                    case_id=case_id, answers=answers,
-                                    rejections=rejections or [], on_department=on_department)
-                case = self.store.load_case(case_id)
-                payload = dict((case or {}).get("payload") or {})
-                payload["mdt"] = mdt
-                payload["mdt_status"] = {"state": "done", "done": total, "total": total,
-                                         "current": "", "finished_at": _now()}
-                self.store.save_case(
-                    case_id, patient_name=(case or {}).get("patient_name") or "",
-                    main_issue=(case or {}).get("main_issue") or "",
-                    status=(case or {}).get("status") or "running",
-                    case_state=(case or {}).get("case_state") or STATE_AWAITING_DOCTOR,
-                    report_version=int((case or {}).get("report_version") or 1),
-                    payload=payload)
-                self.store.add_audit(case_id, "mdt_completed",
-                                     f"后台多学科分析完成：{total} 科")
-            except Exception as exc:                       # noqa: BLE001 - 后台失败不能影响主链路
-                self._save_mdt_status(case_id, {
-                    "state": "failed", "done": 0, "total": total, "current": "",
-                    "error": f"{type(exc).__name__}: {exc}", "finished_at": _now(),
-                })
-                if self.store:
-                    self.store.add_audit(case_id, "mdt_failed", f"{type(exc).__name__}: {exc}"[:200])
-
-        threading.Thread(target=worker, daemon=True, name=f"mdt-{case_id}").start()
-
-    def _save_mdt_status(self, case_id: str, status: Dict[str, Any]) -> None:
+    def _update_analysis(self, case_id: str, mutate: Callable[[Dict[str, Any]], None]) -> None:
+        """对 payload["analysis"] 做增量修改后落库。"""
         if not self.store:
             return
         case = self.store.load_case(case_id)
         if not case:
             return
         payload = dict(case.get("payload") or {})
-        payload["mdt_status"] = status
+        status = dict(payload.get("analysis") or self._new_analysis_status())
+        mutate(status)
+        payload["analysis"] = status
         self.store.save_case(
             case_id, patient_name=case.get("patient_name") or "",
             main_issue=case.get("main_issue") or "", status=case.get("status") or "running",
             case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
             report_version=int(case.get("report_version") or 1), payload=payload)
 
+    def _set_phase(self, case_id: str, phase: str, state: str, *, note: str = "") -> None:
+        def mutate(status: Dict[str, Any]) -> None:
+            entry = status.setdefault("phases", {}).setdefault(phase, {})
+            entry["state"] = state
+            entry["label"] = self.PHASE_LABELS.get(phase, phase)
+            if note:
+                entry["note"] = note
+            entry[f"{state}_at"] = _now()
+        self._update_analysis(case_id, mutate)
+
+    def _append_analysis_warning(self, case_id: str, text: str) -> None:
+        if not text:
+            return
+        def mutate(status: Dict[str, Any]) -> None:
+            warnings = status.setdefault("warnings", [])
+            if text not in warnings:
+                warnings.append(text)
+        self._update_analysis(case_id, mutate)
+
+    def start_analysis_job(self, case_id: str, *, phases: Optional[List[str]] = None) -> bool:
+        """启动（或重试）后台分析任务。`phases` 指定只重跑哪些相位，默认全部。"""
+        if not self.store:
+            return False
+        case = self.store.load_case(case_id)
+        if not case:
+            return False
+        payload = case.get("payload") or {}
+        todo = list(phases or self.ANALYSIS_PHASES)
+        if not todo:
+            return False
+
+        # 重置状态（重试时保留已完成的相位结果，只把待跑的相位置为 pending）
+        status = dict(payload.get("analysis") or self._new_analysis_status())
+        status["state"] = "running"
+        status["finished_at"] = ""
+        phases_map = dict(status.get("phases") or {})
+        for phase in todo:
+            phases_map[phase] = {"state": "pending", "label": self.PHASE_LABELS[phase]}
+        status["phases"] = phases_map
+        if "mdt" in todo:
+            status["mdt"] = {"state": "pending", "done": 0,
+                             "total": len(payload.get("triage", {}).get("selected", [])[:MAX_MDT_DEPARTMENTS]),
+                             "current": "", "step": ""}
+        payload["analysis"] = status
+        self.store.save_case(
+            case_id, patient_name=case.get("patient_name") or "",
+            main_issue=case.get("main_issue") or "", status=case.get("status") or "running",
+            case_state="analyzing", report_version=int(case.get("report_version") or 1),
+            payload=payload)
+        self.store.add_audit(case_id, "analysis_started", f"后台分析任务启动：{'、'.join(todo)}")
+
+        threading.Thread(target=self._analysis_worker, args=(case_id, todo), daemon=True,
+                         name=f"analysis-{case_id}").start()
+        return True
+
+    def _analysis_worker(self, case_id: str, phases: List[str]) -> None:
+        """后台执行分析相位；每个相位结束就落库，前台可随时取用（部分结果也有用）。"""
+        case = self.store.load_case(case_id)
+        if not case:
+            return
+        payload = dict(case.get("payload") or {})
+        text = str(payload.get("masked_history") or "")
+        main_issue = str(case.get("main_issue") or "")
+        failed: List[str] = []
+
+        def guard(phase: str, fn: Callable[[], None]) -> None:
+            if phase not in phases:
+                return
+            self._set_phase(case_id, phase, "running")
+            try:
+                fn()
+                self._set_phase(case_id, phase, "done")
+            except Exception as exc:                        # noqa: BLE001 - 单相位失败不影响其他相位
+                failed.append(phase)
+                self._set_phase(case_id, phase, "failed",
+                                note=f"{type(exc).__name__}: {exc}"[:180])
+                self._append_analysis_warning(
+                    case_id, f"{self.PHASE_LABELS.get(phase, phase)}未完成："
+                             f"{type(exc).__name__}（已保留其它已就绪结果）")
+
+        # ---- 相位 1：画像增强（失败则保留规则画像）----
+        def do_profile() -> None:
+            refreshed = self.store.load_case(case_id)
+            pl = dict((refreshed or {}).get("payload") or {})
+            extraction = extract(text, case_id=case_id, main_issue=main_issue,
+                                 use_llm=True, ai_service=self.ai_service)
+            profile = extraction.profile
+            rules = pl.get("profile_rules") or {}
+            final = self._profile_to_dict(profile)
+            self._patch_payload(case_id, profile=final, profile_rules=rules,
+                                gaps=list(extraction.gaps),
+                                completeness=profile.completeness,
+                                direct_quote_coverage=profile.direct_quote_coverage,
+                                questions=[q.to_dict() for q in build_questions(gaps=extraction.gaps)])
+            for warning in extraction.warnings:
+                self._append_analysis_warning(case_id, warning)
+
+        # ---- 相位 2：S2 受限发言 + 重新编排 + 路径 ----
+        def do_triage() -> None:
+            refreshed = self.store.load_case(case_id)
+            pl = dict((refreshed or {}).get("payload") or {})
+            gaps = list(pl.get("gaps") or [])
+            profile_dict = pl.get("profile") or {}
+            evaluation = evaluate_rules(text)
+            s2 = s2_analyze(ai_service=self.ai_service, text=text, evaluation=evaluation,
+                            main_issue=main_issue, profile=profile_dict)
+            if s2.method != "llm":
+                self._append_analysis_warning(
+                    case_id, f"S2 受限发言未生效（{s2.error or s2.method}），本次仅规则链路")
+            outcome = orchestrate(text=text, case_id=case_id, evaluation=evaluation,
+                                 model_picks=s2.orchestrator_picks,
+                                 completeness=float(pl.get("completeness") or 0.0),
+                                 unresolved_gaps=len(gaps))
+            path = build_path(outcome=outcome, gaps=gaps,
+                              checks_by_department=self._checks_by_department(gaps, outcome.selected),
+                              case_id=case_id)
+            self._patch_payload(case_id, s2=s2.to_dict(), triage=outcome.to_dict(),
+                                path=path.to_dict(), tasks=path.to_dict().get("tasks", []))
+
+        # ---- 相位 3：多学科独立意见 + 质询（单科跳过；逐科上报子步骤）----
+        def do_mdt() -> None:
+            refreshed = self.store.load_case(case_id)
+            pl = dict((refreshed or {}).get("payload") or {})
+            triage = pl.get("triage") or {}
+            selected = list(triage.get("selected") or [])
+            if len(selected) < 2:
+                # 按需：只有一个就医方向 → 多学科会诊没有意义，如实标注"已跳过"
+                def mutate(status: Dict[str, Any]) -> None:
+                    status["mdt"] = {"state": "skipped", "done": 0, "total": 0, "current": "",
+                                     "step": "仅 1 个就医方向，无需多学科会诊"}
+                self._update_analysis(case_id, mutate)
+                self._patch_payload(case_id, mdt={"analyses": [], "aggregation": {
+                    "consensus": [], "disagreements": [], "uncertainties": [],
+                    "open_questions": [], "notes": ["仅 1 个就医方向，未运行多学科会诊"]}})
+                return
+
+            from services.triage import TriageOutcome  # noqa: PLC0415
+            evaluation = evaluate_rules(text)
+            outcome = orchestrate(text=text, case_id=case_id, evaluation=evaluation,
+                                  model_picks=None,
+                                  completeness=float(pl.get("completeness") or 0.0),
+                                  unresolved_gaps=len(pl.get("gaps") or []))
+
+            def on_step(dept: str, done: int, total: int, step: str) -> None:
+                def mutate(status: Dict[str, Any]) -> None:
+                    status["mdt"] = {"state": "running", "done": done, "total": total,
+                                     "current": dept, "step": step}
+                self._update_analysis(case_id, mutate)
+
+            def on_department(dept: str, done: int, total: int) -> None:
+                on_step(dept, done - 1, total, "正在读取资料并形成意见卡")
+
+            mdt = self._run_mdt(text=text, outcome=outcome, profile=pl.get("profile"),
+                                case_id=case_id, on_department=on_department)
+            if isinstance(mdt, dict):
+                notes = list(((mdt.get("aggregation") or {}).get("notes")) or [])
+                for note in notes:
+                    if "未完成" in note or "跳过" in note:
+                        self._append_analysis_warning(case_id, note)
+            self._patch_payload(case_id, mdt=mdt)
+            def mutate(status: Dict[str, Any]) -> None:
+                status["mdt"] = {"state": "done", "done": status["mdt"].get("total", 0),
+                                 "total": status["mdt"].get("total", 0), "current": "", "step": ""}
+            self._update_analysis(case_id, mutate)
+
+        guard("profile", do_profile)
+        guard("triage", do_triage)
+        guard("mdt", do_mdt)
+
+        # ---- 收尾：状态汇总 + 病例状态推进 ----
+        state = "failed" if len(failed) == len(phases) else ("partial_failed" if failed else "done")
+
+        def finish(status: Dict[str, Any]) -> None:
+            status["state"] = state
+            status["finished_at"] = _now()
+        self._update_analysis(case_id, finish)
+
+        refreshed = self.store.load_case(case_id)
+        payload_now = dict((refreshed or {}).get("payload") or {})
+        if payload_now.get("triage"):
+            self.store.save_case(
+                case_id, patient_name=(refreshed or {}).get("patient_name") or "",
+                main_issue=(refreshed or {}).get("main_issue") or "",
+                status=(refreshed or {}).get("status") or "running",
+                case_state=STATE_AWAITING_DOCTOR,
+                report_version=int((refreshed or {}).get("report_version") or 1),
+                payload=self._patch_payload(case_id, analysis=payload_now.get("analysis")))
+        self.store.add_audit(case_id, "analysis_finished",
+                             f"后台分析结束：{'、'.join(phases)}；失败相位={'、'.join(failed) or '无'}")
+
+    def get_analysis(self, case_id: str) -> Optional[Dict[str, Any]]:
+        """统一查询后台分析状态：三个相位 + MDT 细分进度 + 已就绪的结果（供前台增量渲染）。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return None
+        payload = case.get("payload") or {}
+        status = dict(payload.get("analysis") or {})
+        if not status:
+            # 老病例（同步分析，没有后台任务）：按"已完成"处理，避免前端一直转圈
+            status = {"state": "done", "phases": {}, "mdt": {"state": "done"}, "warnings": []}
+        mdt = payload.get("mdt")
+        return {
+            "case_id": case_id,
+            "case_state": case.get("case_state"),
+            "analysis": status,
+            "mdt_ready": bool(mdt),
+            "profile": payload.get("profile"),
+            "triage": payload.get("triage"),
+            "path": payload.get("path"),
+            "gaps": payload.get("gaps") or [],
+            "questions": payload.get("questions") or [],
+            "mdt": mdt,
+            "warnings": list(status.get("warnings") or []),
+        }
+
+    def retry_analysis(self, case_id: str, phases: Optional[List[str]] = None) -> Dict[str, Any]:
+        """重试失败/未完成的分析相位（默认只重跑没成功的那些）。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+        status = (case.get("payload") or {}).get("analysis") or {}
+        if not phases:
+            phases = [p for p in self.ANALYSIS_PHASES
+                      if (status.get("phases", {}).get(p, {}) or {}).get("state") != "done"]
+        if not phases:
+            return {"ok": False, "error": "所有分析相位都已完成，无需重试"}
+        started = self.start_analysis_job(case_id, phases=phases)
+        return {"ok": started, "retried": phases if started else [],
+                "error": "" if started else "无法启动后台任务"}
+
+    def analyze_pending_cases(self, limit: int = 3) -> Dict[str, Any]:
+        """医生端批处理：把"分析未完成"的病例排进后台任务（不阻塞请求）。"""
+        started: List[str] = []
+        skipped: List[str] = []
+        if not self.store:
+            return {"ok": False, "started": [], "skipped": [], "error": "无存储"}
+        for case in self.store.list_cases(limit=limit * 4):
+            if len(started) >= limit:
+                break
+            case_id = case.get("case_id") or ""
+            payload = case.get("payload") or {}
+            if not payload.get("triage"):
+                skipped.append(case_id)          # 连规则分诊都没有，不具备分析条件
+                continue
+            status = payload.get("analysis") or {}
+            if status.get("state") == "running":
+                skipped.append(case_id)          # 已在跑，避免重复排任务
+                continue
+            if payload.get("mdt") and status.get("state") in ("done", ""):
+                skipped.append(case_id)          # 已经分析完
+                continue
+            phases = [p for p in self.ANALYSIS_PHASES
+                      if (status.get("phases", {}).get(p, {}) or {}).get("state") != "done"]
+            if not phases:
+                skipped.append(case_id)
+                continue
+            if self.start_analysis_job(case_id, phases=phases):
+                started.append(case_id)
+        return {"ok": True, "started": started, "skipped": skipped[:10],
+                "started_count": len(started)}
+
+    # ------------------------------------------------------------------ 兼容入口（单看 MDT 的旧接口）
     def get_mdt_status(self, case_id: str) -> Optional[Dict[str, Any]]:
-        """查询多学科分析进度（P8 轮询用）：状态 + 进度 + 结果（完成后）。"""
+        """只查多学科分析：状态 + 进度 + 结果（保留给 P8 的轻量轮询）。"""
         case = self.store.load_case(case_id) if self.store else None
         if not case:
             return None
         payload = case.get("payload") or {}
         mdt = payload.get("mdt")
-        status = dict(payload.get("mdt_status") or {})
+        analysis = payload.get("analysis") or {}
+        status = dict(analysis.get("mdt") or {})
         if not status:
-            status = {"state": "done" if mdt else "none", "done": 0, "total": 0, "current": ""}
+            status = (dict(payload.get("mdt_status") or {})
+                      or {"state": "done" if mdt else "none", "done": 0, "total": 0, "current": ""})
         return {"case_id": case_id, "status": status, "ready": bool(mdt), "mdt": mdt}
 
     # ------------------------------------------------------------------ 查询
@@ -761,6 +1078,9 @@ class CaseFlow:
                 "review": summary,
                 "reviewed_by": (payload.get("review") or {}).get("published_by") or "",
                 "report_version": int(case.get("report_version") or 1),
+                "analysis_state": (payload.get("analysis") or {}).get("state") or ("done" if payload.get("mdt") else "none"),
+                "analysis_phases": {k: (v or {}).get("state")
+                                    for k, v in ((payload.get("analysis") or {}).get("phases") or {}).items()},
                 "created_at": case.get("created_at"),
                 "updated_at": case.get("updated_at"),
             })
@@ -1018,6 +1338,10 @@ class CaseFlow:
                 "direct_quote_coverage": result.direct_quote_coverage,
                 "questions": result.questions,
                 "profile": result.profile,
+                "profile_rules": result.profile if result.profile_is_rules_only else {},
+                "analysis": (self._new_analysis_status(
+                    mdt_total=len(((result.triage or {}).get("selected") or [])[:MAX_MDT_DEPARTMENTS])
+                ) if (result.progressive or result.mdt_pending) else {}),
                 "triage": result.triage,
                 "path": result.path,
                 "tasks": (result.path or {}).get("tasks", []),

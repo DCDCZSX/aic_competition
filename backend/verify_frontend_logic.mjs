@@ -58,8 +58,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 
 /* -------------------------------------------------------------- 患者端断言 */
 {
-  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml };');
-  const { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml } = globalThis.__P;
+  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner };');
+  const { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner } = globalThis.__P;
 
   check('患者端主流程为 9 步', STEPS.length === 9, String(STEPS.length));
 
@@ -140,6 +140,26 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('进度显示已完成科数', running.includes('已完成 1 / 3'), '');
   check('进度条按科数计算', running.includes('width:33%'), '');
   check('进度文案解释为什么不显示概率', running.includes('独立研判'), '');
+  /* 后台分析任务的状态横幅（渐进式）：三相位 + MDT 子步骤 + 失败可重试 */
+  const bannerRun = analysisBanner({ state: 'running',
+    phases: { profile: { state: 'done' }, triage: { state: 'running' }, mdt: { state: 'pending' } },
+    mdt: { state: 'running', done: 1, total: 3, current: '眼科', step: '正在读取资料并形成意见卡' } });
+  check('横幅显示三个相位', bannerRun.includes('画像模型增强') && bannerRun.includes('就医方向（模型发言）')
+    && bannerRun.includes('多学科独立意见'), bannerRun.slice(0, 90));
+  check('横幅区分完成/进行中', bannerRun.includes('已完成') && bannerRun.includes('进行中'), '');
+  check('横幅显示 MDT 子步骤与第几科', bannerRun.includes('眼科') && bannerRun.includes('第 2 科')
+    && bannerRun.includes('正在读取资料并形成意见卡'), '');
+  check('横幅说明规则优先', bannerRun.includes('模型不会推翻规则命中的强项'), '');
+  const single = analysisBanner({ state: 'done',
+    phases: { mdt: { state: 'skipped' } },
+    mdt: { state: 'skipped', step: '仅 1 个就医方向，无需多学科会诊' } });
+  check('单科跳过时不显示为失败', !single.includes('danger') && !single.includes('未完成'), single.slice(0, 60));
+  const bad = analysisBanner({ state: 'partial_failed',
+    phases: { profile: { state: 'failed', note: 'RuntimeError: 网关不可用' } },
+    mdt: { state: 'pending' } });
+  check('失败横幅给出原因与重试入口',
+    bad.includes('网关不可用') && bad.includes('retryAnalysis') && bad.includes('不会编造结论'),
+    bad.slice(0, 120));
   const failed = mdtProgressHtml({ state: 'failed', error: 'ReadTimeout' });
   check('失败时如实说明且不编造', failed.includes('未完成') && failed.includes('ReadTimeout')
     && failed.includes('不会因此编造结论'), failed.slice(0, 80));
