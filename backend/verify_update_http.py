@@ -253,6 +253,15 @@ def main():
           a.get("case_state") in ("awaiting_doctor", "analyzing"), str(a.get("case_state")))
     check("结果可被前端直接替换渲染",
           bool(a.get("profile")) and bool(a.get("triage")) and bool(a.get("path")), "")
+    # 逐科失败的前端契约（真实故障：血液科意见卡被 max_tokens 截断 → 永远"未完成"且无法重试）
+    check("多学科状态里带 failed 列表（前端据此提示哪一科没跑出来）",
+          isinstance((st.get("mdt") or {}).get("failed"), list),
+          json.dumps(st.get("mdt"), ensure_ascii=False))
+    check("mdt 相位取值合法（done/partial/failed/skipped）",
+          st["phases"]["mdt"]["state"] in ("done", "partial", "failed", "skipped"),
+          st["phases"]["mdt"]["state"])
+    check("全部科室成功时 failed 为空",
+          (st.get("mdt") or {}).get("failed") == [], json.dumps(st.get("mdt"), ensure_ascii=False))
     r = s.post(f"{BASE}/api/v2/case/{case3}/analysis/retry", json={}, timeout=30)
     check("全部完成后重试被拒（400 且有说明）",
           r.status_code == 400 and "无需重试" in (r.json().get("error") or ""),

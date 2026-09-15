@@ -24,11 +24,14 @@ from typing import Any, Dict, List, Optional, Sequence
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schemas import CHALLENGE_OUTCOMES, CHALLENGE_STANCES, ChallengeRound  # noqa: E402
+from services.ai_service import call_structured  # noqa: E402
+from services.json_recovery import loads_lenient  # noqa: E402
 
 MAX_CHALLENGES = 3            # P0：每例最多 3 条质询问题
 MAX_RESPONDERS = 2            # 每条问题最多问 2 个科室
 METHOD_LLM = "llm"
 METHOD_SKIPPED = "skipped"
+CHALLENGE_MAX_TOKENS = 2000   # 单条回应很短；被截断时如实标注，不静默
 
 CHALLENGE_SYSTEM_PROMPT = (
     "你是临床多学科讨论中的质询视角。你**不提出最终结论**，只负责检验当前判断的证据是否充分、"
@@ -169,10 +172,9 @@ def _build_respond_prompt(question: ChallengeQuestion, department: str,
 
 
 def _parse_response(raw: str) -> Dict[str, Any]:
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("未找到 JSON")
-    data = json.loads(raw[start:end + 1])
+    data, _ = loads_lenient(raw, fields=("stance", "reason", "follow_up_evidence"))
+    if data is None:
+        raise ValueError("未找到可解析的 JSON")
     stance = str(data.get("stance") or "").strip()
     if stance not in CHALLENGE_STANCES:
         stance = "维持原判断"
@@ -227,10 +229,18 @@ def run(
             prompt = _build_respond_prompt(question, dept, text,
                                            card_reasons.get(dept, ""))
             try:
-                raw = ai_service.call_ai_api(
-                    prompt, role_description=CHALLENGE_SYSTEM_PROMPT.format(dept=dept))
-                parsed = _parse_response(raw) if raw else {
-                    "stance": "维持原判断", "reason": "模型未返回内容", "follow_up_evidence": []}
+                content, truncated, _error = call_structured(
+                    ai_service, prompt,
+                    role_description=CHALLENGE_SYSTEM_PROMPT.format(dept=dept),
+                    max_tokens=CHALLENGE_MAX_TOKENS)
+                if content:
+                    parsed = _parse_response(content)
+                    if truncated:
+                        parsed["follow_up_evidence"] = list(parsed["follow_up_evidence"]) + [
+                            "模型输出被长度截断，建议向医生确认是否需要补齐相关检查"]
+                else:
+                    parsed = {"stance": "维持原判断", "reason": "模型未返回内容",
+                              "follow_up_evidence": []}
             except Exception as exc:  # pragma: no cover
                 parsed = {"stance": "维持原判断", "reason": f"回应失败：{exc}",
                           "follow_up_evidence": []}

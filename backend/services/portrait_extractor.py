@@ -31,6 +31,11 @@ from schemas import (  # noqa: E402
     SchemaError,
     SymptomEvent,
 )
+from services.ai_service import call_structured  # noqa: E402
+from services.json_recovery import loads_lenient, result_is_repaired  # noqa: E402
+
+# 画像增强的输出很短（主诉 + 缺口），2000 token 足够
+PORTRAIT_MAX_TOKENS = 2000
 
 # 常见慢性病（用于既往史抽取）
 COMMON_DISEASES: Tuple[str, ...] = (
@@ -291,7 +296,9 @@ def extract(
     # ---- LLM 增强（可选，失败即降级）----
     if use_llm and ai_service is not None:
         try:
-            enhanced = _extract_with_llm(ai_service, raw, main_issue)
+            enhanced, note = _extract_with_llm(ai_service, raw, main_issue)
+            if note:
+                warnings.append(note)
             if enhanced:
                 if enhanced.get("chief_complaint") and not chief:
                     chief = str(enhanced["chief_complaint"])
@@ -373,20 +380,31 @@ def _coverage(profile: PatientProfile, raw: str) -> float:
     return ok / len(items)
 
 
-def _extract_with_llm(ai_service: Any, text: str, main_issue: str) -> Optional[Dict[str, Any]]:
-    """调用模型做补充抽取（要求结构化 JSON；解析失败返回 None）。"""
+def _extract_with_llm(ai_service: Any, text: str,
+                      main_issue: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    """调用模型做补充抽取。
+
+    返回 `(抽取结果, 警告文案)`：失败时结果为空、**警告非空**，由调用方如实写进
+    warnings（不静默降级）；结果可用但经过格式修复时也会给出说明。
+    """
     prompt = (
         "你是病历结构化助手。请只提取病历中【明确写出】的信息，不要推断、不要补全。\n"
         "以 JSON 返回，字段：chief_complaint(string)、information_gaps(string[])。\n"
         f"病历：\n{text[:4000]}\n主要问题：{main_issue}\n"
     )
-    content = ai_service.call_ai_api(prompt, role_description="病历结构化助手")
+    # 结构化输出走 call_structured：不做 Markdown 清理（否则 ```json 包裹会被整段删掉），
+    # 并且能识别"输出被长度截断"，交给调用方按降级处理。
+    content, truncated, error = call_structured(
+        ai_service, prompt, role_description="病历结构化助手",
+        max_tokens=PORTRAIT_MAX_TOKENS)
     if not content:
-        return None
-    start, end = content.find("{"), content.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        return json.loads(content[start:end + 1])
-    except json.JSONDecodeError:
-        return None
+        return None, f"模型增强失败，已回退为规则抽取：{error or '模型未返回内容'}"
+    if truncated:
+        return None, "模型增强失败，已回退为规则抽取：模型输出被长度截断"
+    data, strategy = loads_lenient(content,
+                                   fields=("chief_complaint", "information_gaps"))
+    if data is None:
+        return None, "模型增强失败，已回退为规则抽取：模型输出无法解析"
+    if result_is_repaired(strategy):
+        return data, "模型增强输出格式异常，已按可读字段恢复"
+    return data, ""

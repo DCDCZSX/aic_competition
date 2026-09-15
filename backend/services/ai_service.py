@@ -12,13 +12,45 @@ import json
 import os
 import re
 import time
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 
 # 默认值：可被环境变量覆盖
 DEFAULT_API_URL = "https://openai.uniin.cn/openapi/v2/chat/completions"
 DEFAULT_MODEL_NAME = "qwen-max-latest"
+
+# 单次调用的输出预算（token）。结构化输出（多学科意见卡等）由调用方按需调大：
+# 实测 deepseek-chat 的血液科意见卡需要 ~2335 token，用 2000 会被截断成非法 JSON。
+DEFAULT_MAX_TOKENS = 2000
+
+
+def call_structured(ai_service: Any, prompt: str, role_description: str = None,
+                    max_tokens: int = None) -> Tuple[str, bool, str]:
+    """调用模型并返回 `(正文, 是否被 max_tokens 截断, 错误)`。
+
+    **结构化输出（JSON）的调用方统一用它**，原因：
+    - 优先走 `AIService.call_ai_api_raw`：不做 Markdown 清理（清理会把 ```json
+      包裹的整段内容删掉、也会改动字符串内容），并且能拿到 `finish_reason`
+      ——截断是"意见卡解析失败"的真实原因之一；
+    - 测试替身只实现 `call_ai_api` 时自动降级，行为不变；
+    - 网关异常按"错误"返回，由调用方决定降级方式，不让一个科室的失败连带整条链路。
+    """
+    raw_fn = getattr(ai_service, "call_ai_api_raw", None)
+    if callable(raw_fn):
+        try:
+            result = raw_fn(prompt, role_description=role_description, max_tokens=max_tokens)
+        except Exception as exc:  # noqa: BLE001
+            return "", False, f"{type(exc).__name__}: {exc}"
+        content = str(result.get("content") or "")
+        if result.get("ok"):
+            return content, bool(result.get("truncated")), ""
+        return content, bool(result.get("truncated")), str(result.get("error") or "调用失败")
+    try:
+        content = ai_service.call_ai_api(prompt, role_description=role_description)
+    except Exception as exc:  # noqa: BLE001
+        return "", False, f"{type(exc).__name__}: {exc}"
+    return str(content or ""), False, "" if content else "模型未返回内容"
 
 
 class AIService:
@@ -36,28 +68,48 @@ class AIService:
                 "           注意：不要把密钥写回代码或提交到 git。"
             )
 
-    def call_ai_api(self, prompt: str, role_description: str = None) -> Optional[str]:
-        """调用AI API"""
+    def call_ai_api(self, prompt: str, role_description: str = None,
+                    max_tokens: int = None) -> Optional[str]:
+        """调用AI API（返回正文，保留原有的 Markdown 清理，供纯文本用途）。"""
+        result = self.call_ai_api_raw(prompt, role_description=role_description,
+                                      max_tokens=max_tokens)
+        if not result.get("ok"):
+            return None
+        return self.markdown_to_text(result["content"])
+
+    def call_ai_api_raw(self, prompt: str, role_description: str = None,
+                        max_tokens: int = None) -> Dict[str, Any]:
+        """调用模型并返回结构化结果（**结构化输出的调用方必须用这个**）。
+
+        返回：`{"ok", "content", "finish_reason", "truncated", "error"}`
+
+        为什么必须区分：① 原来的接口会对正文做 Markdown 清理，而清理会把
+        ```json 包裹的整段内容**删掉**、也会改动字符串里的内容，对 JSON 输出有害；
+        ② 原来的接口拿不到 `finish_reason`，于是 `max_tokens` 截断（真实故障：
+        血液科意见卡 3780 字符被截断成非法 JSON）只能表现成"解析失败"，看不出真因。
+        """
         if not self.api_key:
             print("[AIService] 错误：缺少 AI_API_KEY，已跳过本次调用。")
-            return None
+            return {"ok": False, "content": "", "finish_reason": "", "truncated": False,
+                    "error": "未配置 AI_API_KEY"}
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
+
         messages = []
         if role_description:
             messages.append({"role": "system", "content": role_description})
         messages.append({"role": "user", "content": prompt})
-        
+
         data = {
             "model": self.model_name,
             "messages": messages,
             "temperature": 0.3,
-            "max_tokens": 2000
+            "max_tokens": int(max_tokens or DEFAULT_MAX_TOKENS),
         }
-        
+
+        last_error = ""
         for attempt in range(self.max_retries):
             try:
                 response = requests.post(
@@ -68,23 +120,34 @@ class AIService:
                 )
                 response.raise_for_status()
                 result = response.json()
-                
+
                 if 'choices' in result and len(result['choices']) > 0:
-                    content = result['choices'][0]['message']['content']
-                    return self.markdown_to_text(content)
-                else:
-                    print(f"API响应格式异常: {result}")
-                    return None
-                    
+                    choice = result['choices'][0]
+                    content = (choice.get("message") or {}).get("content") or ""
+                    finish = str(choice.get("finish_reason") or "")
+                    truncated = finish == "length"
+                    if truncated:
+                        print(f"[AIService] 警告：输出被 max_tokens={data['max_tokens']} "
+                              f"截断（finish_reason=length，{len(content)} 字符），"
+                              f"调用方需按截断处理")
+                    return {"ok": True, "content": content, "finish_reason": finish,
+                            "truncated": truncated, "error": ""}
+                print(f"API响应格式异常: {result}")
+                return {"ok": False, "content": "", "finish_reason": "", "truncated": False,
+                        "error": "API 响应格式异常"}
+
             except requests.exceptions.RequestException as e:
-                print(f"API调用失败 (尝试 {attempt+1}/{self.max_retries}): {str(e)}")
+                last_error = str(e)
+                print(f"API调用失败 (尝试 {attempt+1}/{self.max_retries}): {last_error}")
                 if attempt < self.max_retries - 1:
                     time.sleep(2 ** attempt)  # 指数退避
                     continue
-                return None
             except Exception as e:
                 print(f"API处理错误: {str(e)}")
-                return None
+                return {"ok": False, "content": "", "finish_reason": "", "truncated": False,
+                        "error": str(e)}
+        return {"ok": False, "content": "", "finish_reason": "", "truncated": False,
+                "error": last_error or "调用失败"}
 
     def markdown_to_text(self, markdown_text: str) -> str:
         """将Markdown格式转换为整洁的文本格式"""

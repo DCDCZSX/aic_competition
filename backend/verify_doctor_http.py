@@ -231,6 +231,16 @@ def main():
     check("同一条病例不会既排入又跳过",
           not (set(body.get("started") or []) & set(body.get("skipped") or [])),
           json.dumps(body, ensure_ascii=False)[:160])
+    # 逐科失败口径：医生端要能看到"哪一科没跑出来"，并且这类病例必须能被批处理捡起来
+    r = doctor.get(f"{BASE}/api/v2/case/{case_id}/analysis", timeout=60)
+    ana = (r.json() or {}).get("analysis") or {}
+    check("医生端可查分析明细（含 mdt.failed）",
+          r.status_code == 200 and isinstance((ana.get("mdt") or {}).get("failed"), list),
+          json.dumps(ana.get("mdt"), ensure_ascii=False)[:160])
+    check("部分未完成会进入待补齐（不会被当成已完成跳过）",
+          all(c.get("analysis_state") != "done" for c in rows
+              if c.get("case_id") in (body.get("started") or [])) if body.get("started") else True,
+          json.dumps(body, ensure_ascii=False)[:160])
 
     print("\n[13] 页面可达性")
     r = requests.get(f"{BASE}/doctor", timeout=30)

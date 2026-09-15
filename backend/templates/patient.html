@@ -541,8 +541,8 @@ function renderContext(){
       <div class="panel-title">分析进度</div>
       ${S.analysisStatus ? Object.entries(S.analysisStatus.phases||{}).map(([k,v])=>
           `<div class="field"><div style="flex:1;" class="tiny">${esc(PHASE_LABELS[k]||k)}</div>
-           <span class="pill ${v.state==='done'?'ok':(v.state==='failed'?'danger':(v.state==='running'?'warn':'gray'))}">${
-             v.state==='done'?'已完成':(v.state==='failed'?'未完成':(v.state==='running'?'进行中':'排队中'))}</span></div>`).join('')
+           <span class="pill ${v.state==='done'?'ok':(v.state==='failed'?'danger':(v.state==='partial'?'warn':(v.state==='running'?'warn':'gray')))}">${
+             v.state==='done'?'已完成':(v.state==='failed'?'未完成':(v.state==='partial'?'部分完成':(v.state==='running'?'进行中':'排队中')))}</span></div>`).join('')
           + ((S.analysisStatus.mdt||{}).state==='running'
               ? `<div class="progress" style="margin-top:8px;"><i style="width:${Math.round(((S.analysisStatus.mdt.done||0)/Math.max(((S.analysisStatus.mdt.total)||1),1))*100)}%"></i></div>
                  <div class="tiny">多学科 ${S.analysisStatus.mdt.done||0}/${S.analysisStatus.mdt.total||'—'} 科${
@@ -778,6 +778,7 @@ function phaseRow(name, entry){
   const state = (entry||{}).state || 'pending';
   const pill = state==='done' ? '<span class="pill ok">已完成</span>'
              : state==='running' ? '<span class="pill warn">进行中</span>'
+             : state==='partial' ? '<span class="pill warn">部分完成</span>'
              : state==='failed' ? '<span class="pill danger">未完成</span>'
              : state==='skipped' ? '<span class="pill gray">已跳过</span>'
              : '<span class="pill gray">排队中</span>';
@@ -788,10 +789,13 @@ function analysisBanner(analysis){
   const phases = a.phases || {};
   const mdt = a.mdt || {};
   const state = a.state || 'running';
+  const failedDepts = mdt.failed || [];
   const mdtLine = mdt.state === 'running'
       ? `<div class="tiny">多学科：${esc(mdt.current||'')}${mdt.current?'（第 '+((mdt.done||0)+1)+' 科）':''} · ${esc(mdt.step||'')} · 已完成 ${mdt.done||0} / ${mdt.total||'—'} 科</div>`
       : mdt.state === 'skipped' ? `<div class="tiny">多学科：${esc(mdt.step||'已跳过')}</div>`
-      : mdt.state === 'done' ? '<div class="tiny">多学科：已完成</div>' : '';
+      : mdt.state === 'done' ? (failedDepts.length
+          ? `<div class="tiny">多学科：已完成 ${mdt.done||0} / ${mdt.total||'—'} 科，${esc(failedDepts.join('、'))} 未完成分析（可点「重新分析」重跑）</div>`
+          : '<div class="tiny">多学科：已完成</div>') : '';
   if(state === 'running'){
     return `<div class="col" style="margin-bottom:var(--sp-12);">
       <div class="rt">模型分析正在进行（结果到了会自动替换，你可以先核对当前内容）</div>
@@ -803,8 +807,12 @@ function analysisBanner(analysis){
     </div>`;
   }
   if(state === 'failed' || state === 'partial_failed'){
-    const failedList = Object.entries(phases).filter(([,v])=>v.state==='failed')
-      .map(([k,v])=>`${PHASE_LABELS[k]||k}：${v.note||'未完成'}`);
+    const failedList = Object.entries(phases)
+      .filter(([,v])=>v.state==='failed'||v.state==='partial')
+      .map(([k,v])=>`${PHASE_LABELS[k]||k}：${v.note||(v.state==='partial'?'部分完成':'未完成')}`);
+    if(failedDepts.length){
+      failedList.push(`未完成分析的科室：${failedDepts.join('、')}`);
+    }
     return `<div class="banner warn" style="margin-bottom:var(--sp-12);">
       <strong>部分模型分析未完成</strong>（已就绪的规则结果照常可用，系统不会编造结论）
       ${failedList.map(x=>`<div class="tiny">· ${esc(x)}</div>`).join('')}
@@ -1391,6 +1399,7 @@ function renderMdt(){
     每个科室都是<strong>独立分析</strong>（互不参考彼此结论），以下是各科意见摘要。</p>`;
   html+=`<div class="banner warn">⚠️ 以下为 <strong>AI 分析视角</strong>，不是真实医生会诊意见；最终以线下医生判断为准。</div>`;
 
+  const unavailable=(m.analyses||[]).filter(a=>a.status!=='ok');
   analyses.forEach(a=>{
     if(a.status!=='ok'){
       html+=`<div class="q"><strong>${esc(a.department)}</strong><div class="tiny">本次未完成分析（${esc(a.error||'未知原因')}）</div></div>`;
@@ -1399,6 +1408,7 @@ function renderMdt(){
     html+=`<div class="q">
       <div style="font-weight:600;font-size:15px;">🏥 ${esc(a.department)}</div>
       <div class="muted" style="margin:4px 0;">关注点：${esc(a.focus||'—')}</div>
+      ${a.notice?`<div class="tiny" style="color:var(--warn);">说明：${esc(a.notice)}</div>`:''}
       ${(a.inferences||[]).slice(0,2).map(i=>
         `<div style="margin-top:4px;">· ${esc(i.text)}
           <span class="pill ${i.confidence==='low'?'warn':(i.confidence==='high'?'ok':'')}">${esc(i.confidence)}</span></div>`).join('')}
@@ -1407,6 +1417,17 @@ function renderMdt(){
       ${a.referral?`<div class="tiny" style="color:var(--info);">建议同时咨询：${esc(a.referral)}</div>`:''}
     </div>`;
   });
+
+  // 有科室没跑出来：在结果处直接给重试入口（不用回到顶部找按钮）
+  if(unavailable.length){
+    html+=`<div class="banner warn" style="margin-top:12px;">
+      ${unavailable.length} 个科室本次未完成分析（${esc(unavailable.map(a=>a.department).join('、'))}），
+      其余科室结果不受影响。<strong>系统不会用编造内容补位。</strong>
+      <div style="margin-top:8px;">
+        <button class="btn btn-sm" onclick="retryAnalysis()">重新分析未完成的科室</button>
+      </div>
+    </div>`;
+  }
 
   // 共识
   if((agg.consensus||[]).length){
