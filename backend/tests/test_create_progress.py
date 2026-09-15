@@ -26,9 +26,21 @@ CASE_B = ("患者：张*，男，58岁。主诉：视物模糊3月，双下肢�
           "既往：2型糖尿病5年，高血压10年。检查：尿蛋白++，空腹血糖9.2。")
 
 
+def wait_settled(flow, case_id, timeout=25.0):
+    """等后台分析任务收尾（done / partial_failed / failed），返回最后一次状态。"""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = flow.get_analysis(case_id)
+        if last and (last["analysis"].get("state") in ("done", "partial_failed", "failed")):
+            time.sleep(0.1)          # 状态先落库、审计后写入：稍等，避免测试关库时撞上线程
+            return last
+        time.sleep(0.05)
+    return last
+
+
 class FakeAI:
     """假模型：画像/选科/专科意见卡/质询都返回可解析的 JSON。"""
-
     CARD = {
         "focus": "眼底与视网膜",
         "facts": ["视物模糊 3 月"],
@@ -183,14 +195,7 @@ class TestProgressiveAnalysis(unittest.TestCase):
         self.flow.store.close()
 
     def _wait_settled(self, case_id, timeout=25.0):
-        deadline = time.time() + timeout
-        last = None
-        while time.time() < deadline:
-            last = self.flow.get_analysis(case_id)
-            if last and (last["analysis"].get("state") in ("done", "partial_failed", "failed")):
-                return last
-            time.sleep(0.05)
-        return last
+        return wait_settled(self.flow, case_id, timeout)
 
     def _create(self, **kwargs):
         kwargs.setdefault("progressive", True)
@@ -271,9 +276,11 @@ class TestProgressiveAnalysis(unittest.TestCase):
 
     # ------------------------------------------------------------ 失败与降级
     def test_broken_model_degrades_gracefully_with_warnings(self):
-        """模型不可用时**不失败**：相位照常收尾，但必须留下可读的降级说明，规则结果保留。
+        """模型不可用时**不判失败**：相位照常收尾、规则结果保留，但必须如实说明。
 
         这是产品红线的一部分：宁可降级并说明，也不能因为模型问题让用户什么都拿不到。
+        同时——某个科室没跑出来时**不能对外显示"全部完成"**，要标成部分未完成并可重试
+        （真实故障：血液科意见卡被 max_tokens 截断，页面上永远"未完成分析"且无法重跑）。
         """
         class BrokenAI(FakeAI):
             def call_ai_api(self, prompt, role_description=None):
@@ -290,7 +297,8 @@ class TestProgressiveAnalysis(unittest.TestCase):
                 if data["analysis"]["state"] != "running":
                     break
                 time.sleep(0.05)
-            self.assertEqual(data["analysis"]["state"], "done")
+            self.assertIn(data["analysis"]["state"], ("done", "partial_failed"),
+                          data["analysis"])
             warnings = " ".join(data["analysis"]["warnings"])
             self.assertIn("模型增强失败", warnings, warnings)
             self.assertIn("S2 受限发言未生效", warnings, warnings)
@@ -300,6 +308,18 @@ class TestProgressiveAnalysis(unittest.TestCase):
             self.assertTrue(payload.get("triage"))
             self.assertTrue(payload.get("profile"))
             self.assertTrue(payload.get("path"))
+            # 一个科室都没跑出来 → mdt 相位如实记为 failed，且**可重试**
+            self.assertIn(data["analysis"]["phases"]["mdt"]["state"], ("failed", "partial"))
+            self.assertTrue(data["analysis"]["mdt"]["failed"], data["analysis"]["mdt"])
+            retry = flow.retry_analysis(result.case_id)
+            self.assertTrue(retry["ok"], retry)
+            self.assertIn("mdt", retry["retried"])
+            # 等重试的后台任务收尾再关库（否则线程会撞上已关闭的连接）
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                if (flow.get_analysis(result.case_id) or {})["analysis"]["state"] != "running":
+                    break
+                time.sleep(0.05)
         finally:
             flow.store.close()
 
@@ -345,6 +365,127 @@ class TestProgressiveAnalysis(unittest.TestCase):
         retry = self.flow.retry_analysis(result.case_id)
         self.assertFalse(retry["ok"])
         self.assertIn("无需重试", retry["error"])
+
+    # ------------------------------------------------- 逐科失败（真实故障：血液科）
+    def test_partial_mdt_failure_is_retryable(self):
+        """单个科室跑不出来时：相位记 partial、病例记 partial_failed，且重试只重跑 mdt。
+
+        真实故障：血液科意见卡被 max_tokens 截断 → 页面永远显示"本次未完成分析"，
+        但相位算"完成"，于是"重新分析"回答"无需重试"，用户永远无法恢复。
+        """
+
+        class OneDeptBroken(FakeAI):
+            """让"第 2 个科室"连续两次输出都不合法（模拟被截断/格式崩），重试时才恢复。"""
+
+            def __init__(self):
+                super().__init__()
+                self.seen = []
+                self.broken_dept = None
+                self.broken_calls = 0
+
+            def call_ai_api(self, prompt, role_description=None):
+                role = role_description or ""
+                if "AI 分析视角" in role:
+                    dept = role.split("你是一位", 1)[-1].split("的 AI 分析视角")[0]
+                    if self.broken_dept is None:
+                        self.seen.append(dept)
+                        if len(self.seen) == 2:
+                            self.broken_dept = dept
+                    if dept == self.broken_dept:
+                        self.broken_calls += 1
+                        if self.broken_calls <= 2:     # 首次分析的两次尝试都失败
+                            return "这一科的输出坏了，根本不是 JSON"
+                return super().call_ai_api(prompt, role_description)
+
+        flow = CaseFlow(store=Store(":memory:"), ai_service=OneDeptBroken(), use_llm=True)
+        try:
+            case_id = "C-PARTIAL"
+            analysis = CaseFlow._new_analysis_status(mdt_total=3)
+            analysis["phases"]["profile"] = {"state": "done"}     # 渐进式下画像/分诊已完成
+            analysis["phases"]["triage"] = {"state": "done"}
+            flow.store.save_case(case_id, patient_name="", main_issue="该看哪个科",
+                                 status="running", case_state="analyzing", report_version=1,
+                                 payload={"masked_history": CASE_B,
+                                          "triage": {"selected": ["内分泌科", "肾内科", "眼科"]},
+                                          "analysis": analysis})
+            flow.start_analysis_job(case_id, phases=["mdt"])
+            status = wait_settled(flow, case_id)["analysis"]
+
+            self.assertEqual(status["phases"]["mdt"]["state"], "partial", status)
+            self.assertEqual(status["state"], "partial_failed")
+            self.assertEqual(len(status["mdt"].get("failed") or []), 1, status["mdt"])
+            self.assertEqual(status["mdt"]["done"], status["mdt"]["total"] - 1, status["mdt"])
+            self.assertIn("可重试", status["phases"]["mdt"].get("note", ""))
+            self.assertTrue(any("未完成" in w for w in status["warnings"]), status["warnings"])
+
+            payload = flow.get_case(case_id)["payload"]
+            self.assertEqual(payload["mdt"].get("failed_departments"), status["mdt"]["failed"])
+            self.assertEqual(payload["mdt"].get("card_count"), 2, "其余科室的卡片必须保留")
+            self.assertIn("未完成", str(payload["mdt"].get("aggregation")))
+
+            retry = flow.retry_analysis(case_id)
+            self.assertTrue(retry["ok"], retry)
+            self.assertEqual(retry["retried"], ["mdt"], "只应重跑多学科相位")
+            final = wait_settled(flow, case_id)["analysis"]
+            self.assertEqual(final["phases"]["mdt"]["state"], "done", final)
+            self.assertEqual(final["state"], "done", final)
+            # 重跑成功后，旧的"某科未完成"告警必须被清掉（否则页面还在说未完成）
+            self.assertFalse(any("未完成" in str(w) for w in final.get("warnings") or []),
+                             final.get("warnings"))
+        finally:
+            flow.store.close()
+
+    def test_batch_picks_up_partial_case(self):
+        """医生端「批量补齐分析」必须认"有科室未完成"的病例，否则医生也修不了。"""
+        case_id = "C-PARTIAL-BATCH"
+        analysis = CaseFlow._new_analysis_status(mdt_total=3)
+        analysis["state"] = "partial_failed"
+        analysis["phases"]["profile"] = {"state": "done"}
+        analysis["phases"]["triage"] = {"state": "done"}
+        analysis["phases"]["mdt"] = {"state": "partial", "note": "血液科 未完成分析（可重试）"}
+        analysis["mdt"] = {"state": "done", "done": 2, "total": 3, "current": "", "step": "",
+                           "failed": ["血液科"]}
+        self.flow.store.save_case(case_id, patient_name="", main_issue="该看哪个科",
+                                  status="running", case_state="awaiting_doctor",
+                                  report_version=1,
+                                  payload={"masked_history": CASE_B,
+                                           "triage": {"selected": ["内分泌科", "肾内科", "眼科"]},
+                                           "analysis": analysis})
+        self._cases.append(case_id)
+        out = self.flow.analyze_pending_cases(limit=3)
+        self.assertIn(case_id, out["started"], out)
+        final = self._wait_settled(case_id)
+        self.assertEqual(final["analysis"]["phases"]["mdt"]["state"], "done", final["analysis"])
+
+    def test_legacy_stuck_case_can_be_retried(self):
+        """修复前就卡住的病例（没有 analysis 记录，只有 mdt.analyses 里的 unavailable 条目）。
+
+        这类病例在库里真实存在（3 例血液科失败），必须能被"重新分析"救回来，
+        否则它们永远停在"某科未完成分析"。
+        """
+        case_id = "C-LEGACY-STUCK"
+        self.flow.store.save_case(
+            case_id, patient_name="", main_issue="该看哪个科", status="running",
+            case_state="awaiting_doctor", report_version=1,
+            payload={"masked_history": CASE_B,
+                     "triage": {"selected": ["内分泌科", "肾内科", "眼科"]},
+                     "mdt": {"departments": ["内分泌科", "肾内科", "眼科"],
+                             "analyses": [
+                                 {"department": "内分泌科", "status": "ok", "focus": "血糖控制"},
+                                 {"department": "血液科", "status": "unavailable",
+                                  "method": "failed",
+                                  "error": "意见卡解析失败：Expecting ',' delimiter"},
+                             ],
+                             "aggregation": {"consensus": [], "disagreements": [],
+                                             "uncertainties": [], "open_questions": [],
+                                             "notes": []},
+                             "card_count": 1, "challenge": {}}})
+        self._cases.append(case_id)
+        retry = self.flow.retry_analysis(case_id)
+        self.assertTrue(retry["ok"], retry)
+        self.assertEqual(retry["retried"], ["mdt"], "老病例只应重跑多学科相位")
+        final = self._wait_settled(case_id)
+        self.assertEqual(final["analysis"]["phases"]["mdt"]["state"], "done", final["analysis"])
 
     # ------------------------------------------------------------ 医生端批处理
     def test_analyze_pending_cases(self):

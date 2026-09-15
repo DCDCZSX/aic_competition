@@ -9,16 +9,21 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schemas import SpecialistOpinionCard  # noqa: E402
+from services.ai_service import call_structured  # noqa: E402
 from services.department_domain import ALL_NAMES, is_department  # noqa: E402
+from services.json_recovery import (  # noqa: E402
+    STRATEGY_SALVAGE,
+    loads_lenient,
+    result_is_repaired,
+)
 
 SPECIALTY_SYSTEM_PROMPT = (
     "你是一位{dept}的 AI 分析视角（不是真实医生，也不构成会诊意见）。"
@@ -49,8 +54,19 @@ SPECIALTY_FOCUS: Dict[str, str] = {
 }
 
 METHOD_LLM = "llm"
+METHOD_LLM_REPAIRED = "llm_repaired"   # 输出有格式缺陷或被截断，已按已写出字段恢复
 METHOD_SKIPPED = "skipped"
 METHOD_FAILED = "failed"
+
+# 输出预算：实测 deepseek-chat 的血液科意见卡需要 ~2335 token，而默认的 2000 会把
+# JSON 截断（finish_reason=length）→ 非法 JSON → 整个科室被丢弃。这里给足余量。
+MDT_MAX_TOKENS = 4000
+# 被截断时追加的"更精炼"要求（重试一次，仍是同一个科室、同一份资料）
+TERSE_NOTE = (
+    "\n\n【重要】上一次输出因为太长被截断了。这次请务必精炼："
+    "facts 最多 5 条、inferences 最多 3 条、checks 最多 4 条、information_gaps 最多 4 条，"
+    "每条不超过 40 个字；referral 只写科室名。只输出 JSON，不要任何额外文字。"
+)
 
 # 分歧检测 v0：**方向性词组配对**（宁少勿多，只做方向比对，不做语义判断）。
 # 每项为 (正向词组, 反向词组)：一个科室落正向、另一科室落反向 → 记为分歧。
@@ -122,6 +138,8 @@ class SpecialtyAnalysis:
             "referral": c.referral,
             "status": "ok",
             "method": self.method,
+            # 卡片可用但有需要如实说明的情况（如"输出被截断，已按已写出字段恢复"）
+            "notice": self.error,
         }
 
 
@@ -154,6 +172,9 @@ def _build_specialty_prompt(dept: str, text: str, focus: str,
   "referral": "若超出本科范围，写出应转给哪个科；否则填 null"
 }}
 
+【篇幅要求（重要）】只输出 JSON 本身，不要任何解释、不要用 ``` 包裹；
+facts ≤ 6 条、inferences ≤ 4 条、checks ≤ 5 条、information_gaps ≤ 6 条，每条 ≤ 50 字。
+
 【硬性禁止】
 - 不得给出诊断结论（可写"需排查…"，不得写"确诊…"）；
 - 不得开药、不得给剂量、不得给治疗方案；
@@ -162,11 +183,19 @@ def _build_specialty_prompt(dept: str, text: str, focus: str,
 """
 
 
-def _parse_card(dept: str, raw: str) -> SpecialistOpinionCard:
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("输出中未找到 JSON")
-    data = json.loads(raw[start:end + 1])
+def _parse_card(dept: str, raw: str) -> Tuple[SpecialistOpinionCard, str]:
+    """解析专科意见卡，返回 `(卡片, 解析策略)`。
+
+    解析交给 `services.json_recovery`：模型输出被截断、混用全角标点、内部引号没转义、
+    尾逗号等情况都能恢复，且**只取已经写完的内容**（不补半句话）。
+    """
+    data, strategy = loads_lenient(
+        raw, fields=("focus", "facts", "inferences", "checks", "information_gaps",
+                     "referral"))
+    if data is None:
+        if raw.find("{") < 0:
+            raise ValueError("输出中未找到 JSON")
+        raise ValueError("JSON 无法解析（结尾可能被截断）")
     if not isinstance(data, dict):
         raise ValueError("JSON 根节点不是对象")
 
@@ -209,7 +238,20 @@ def _parse_card(dept: str, raw: str) -> SpecialistOpinionCard:
         information_gaps=[str(x) for x in (data.get("information_gaps") or [])][:8],
         referral=referral,
     )
-    return card
+    if strategy == STRATEGY_SALVAGE and not (card.focus or card.facts or card.inferences
+                                             or card.checks or card.information_gaps):
+        # 抢救出来的东西一个字段都没有（例如只剩 "facts": []）→ 视为失败，不塞空卡
+        raise ValueError("输出中没有可用的意见卡字段")
+    return card, strategy
+
+
+def _parse_or_raise(dept: str, raw: str, truncated: bool) -> Tuple[SpecialistOpinionCard, str]:
+    card, strategy = _parse_card(dept, raw)
+    if truncated:
+        return card, "模型输出被长度截断，已按已写出的字段恢复"
+    if result_is_repaired(strategy):
+        return card, "模型输出格式异常，已按可读字段恢复"
+    return card, ""
 
 
 def analyze_specialty(
@@ -222,7 +264,11 @@ def analyze_specialty(
     answers: Optional[Dict[str, str]] = None,
     focus: str = "",
 ) -> SpecialtyAnalysis:
-    """对单个专科做独立研判（**不传入其他科室的结论**，防锚定）。"""
+    """对单个专科做独立研判（**不传入其他科室的结论**，防锚定）。
+
+    输出异常时的处理顺序：**直接解析 → 追加"更精炼"要求重试一次 → 容错恢复**。
+    只有彻底拿不到内容才判失败，且失败原因如实说明（截断 / 格式 / 调用）。
+    """
     if not is_department(department):
         return SpecialtyAnalysis(department=department, method=METHOD_FAILED,
                                  error=f"「{department}」不在科室域内")
@@ -231,25 +277,44 @@ def analyze_specialty(
                                  error="未配置模型，无法生成专科意见卡")
 
     prompt = _build_specialty_prompt(department, text, focus, profile, answers)
-    try:
-        raw = ai_service.call_ai_api(
-            prompt, role_description=SPECIALTY_SYSTEM_PROMPT.format(dept=department))
-    except Exception as exc:  # pragma: no cover
-        return SpecialtyAnalysis(department=department, method=METHOD_FAILED,
-                                 error=f"模型调用异常：{exc}")
+    system = SPECIALTY_SYSTEM_PROMPT.format(dept=department)
+    content, truncated, error = call_structured(ai_service, prompt, system, MDT_MAX_TOKENS)
 
-    if not raw:
-        return SpecialtyAnalysis(department=department, method=METHOD_FAILED,
-                                 error="模型未返回内容")
+    if not content:
+        detail = f"模型调用异常：{error}" if error else "模型未返回内容"
+        return SpecialtyAnalysis(department=department, method=METHOD_FAILED, error=detail)
 
-    try:
-        card = _parse_card(department, raw)
-    except Exception as exc:
+    notice = ""
+    card: Optional[SpecialistOpinionCard] = None
+    last_error: Optional[Exception] = None
+
+    def attempt(text: str, was_truncated: bool) -> bool:
+        """解析一次；成功则写入 card/notice，失败记录原因。"""
+        nonlocal card, notice, last_error
+        try:
+            card, notice = _parse_or_raise(department, text, was_truncated)
+            return True
+        except Exception as exc:                   # noqa: BLE001 - 按内容缺陷分类处理
+            last_error, card = exc, None
+            return False
+
+    if not (attempt(content, truncated) and not truncated):
+        # 被截断，或第一次就没解析出来 → 追加"更精炼"要求重试一次（预算不变，靠少写换完整）
+        retry_content, retry_truncated, _ = call_structured(
+            ai_service, prompt + TERSE_NOTE, system, MDT_MAX_TOKENS)
+        if retry_content:
+            attempt(retry_content, retry_truncated)
+        if card is None and content:
+            attempt(content, truncated)            # 重试也没救回来 → 回到第一次输出做容错恢复
+
+    if card is None:
+        hint = "（输出被长度截断）" if truncated else ""
         return SpecialtyAnalysis(department=department, method=METHOD_FAILED,
-                                 error=f"意见卡解析失败：{exc}")
+                                 error=f"意见卡解析失败{hint}：{last_error}")
 
     card.case_id = case_id
-    return SpecialtyAnalysis(department=department, card=card, method=METHOD_LLM)
+    method = METHOD_LLM_REPAIRED if notice else METHOD_LLM
+    return SpecialtyAnalysis(department=department, card=card, method=method, error=notice)
 
 
 # ---------------------------------------------------------------------------

@@ -19,12 +19,17 @@ from typing import Any, Dict, List, Optional, Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from services.ai_service import call_structured  # noqa: E402
 from services.department_domain import ALL_NAMES, is_department  # noqa: E402
+from services.json_recovery import loads_lenient  # noqa: E402
 from services.rule_engine import RuleEvaluation  # noqa: E402
 
 METHOD_LLM = "llm"
 METHOD_SKIPPED = "skipped"          # 无可用模型
 METHOD_FAILED = "failed"            # 调用/解析失败（已降级）
+
+# 逐科表态的输出很短，2000 token 足够；万一被截断会如实写进降级原因
+S2_MAX_TOKENS = 2000
 
 STANCES = ("accept", "supplement", "reject")
 
@@ -133,11 +138,10 @@ def _build_prompt(text: str, evaluation: RuleEvaluation, main_issue: str,
 
 
 def _parse_picks(raw: str) -> List[ModelPick]:
-    """从模型输出里解析 picks（容错：截取首尾大括号）。"""
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("输出中未找到 JSON")
-    data = json.loads(raw[start:end + 1])
+    """从模型输出里解析 picks（容错解析：截断/全角标点/未转义引号都能恢复）。"""
+    data, _ = loads_lenient(raw, fields=("picks",))
+    if data is None:
+        raise ValueError("输出中未找到可解析的 JSON")
     items = data.get("picks") or []
     if not isinstance(items, list):
         raise ValueError("picks 不是数组")
@@ -178,18 +182,19 @@ def analyze(
         return S2Result(method=METHOD_SKIPPED, error="未配置模型（无 API Key），已退回纯规则分诊")
 
     prompt = _build_prompt(text, evaluation, main_issue, profile)
-    try:
-        content = ai_service.call_ai_api(prompt, role_description=SYSTEM_PROMPT)
-    except Exception as exc:  # pragma: no cover - 取决于外部服务
-        return S2Result(method=METHOD_FAILED, error=f"模型调用异常：{exc}")
+    content, truncated, error = call_structured(
+        ai_service, prompt, role_description=SYSTEM_PROMPT, max_tokens=S2_MAX_TOKENS)
 
     if not content:
-        return S2Result(method=METHOD_FAILED, error="模型未返回内容，已退回纯规则分诊")
+        detail = f"模型调用异常：{error}" if error else "模型未返回内容"
+        return S2Result(method=METHOD_FAILED, error=f"{detail}，已退回纯规则分诊")
 
     try:
         picks = _parse_picks(content)
     except Exception as exc:
-        return S2Result(method=METHOD_FAILED, error=f"模型输出解析失败：{exc}", raw=content[:500])
+        hint = "（模型输出被长度截断）" if truncated else ""
+        return S2Result(method=METHOD_FAILED,
+                        error=f"模型输出解析失败{hint}：{exc}", raw=content[:500])
 
     # 域外科室过滤（不静默丢弃：记在 error 里说明）
     known, unknown = [], []

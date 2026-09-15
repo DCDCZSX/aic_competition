@@ -28,7 +28,7 @@ from services.ask_service import Question, apply_answers, build_questions  # noq
 from services import challenge_service  # noqa: E402
 from services.guardrail import screen  # noqa: E402
 from services.intake import IntakeResult, sanitized_payload, validate_intake  # noqa: E402
-from services.mdt_analyst import aggregate, analyze_specialty  # noqa: E402
+from services.mdt_analyst import METHOD_LLM_REPAIRED, aggregate, analyze_specialty  # noqa: E402
 from services.path_service import build_path  # noqa: E402
 from services.portrait_extractor import ExtractionResult, extract  # noqa: E402
 from services.privacy import desensitize  # noqa: E402
@@ -170,6 +170,12 @@ class CaseFlow:
         failed = [a.department for a in analyses if a.card is None]
         if failed:
             aggregation.notes.append(f"以下专科分析未完成（已跳过，不阻塞）：{'、'.join(failed)}")
+        # 卡片是"修复后可用"的科室也要如实标注（例：输出被长度截断，按已写出字段恢复）
+        repaired = [a.department for a in analyses
+                    if a.card is not None and a.method == METHOD_LLM_REPAIRED]
+        if repaired:
+            aggregation.notes.append(
+                f"以下专科意见卡经格式修复后可用（个别字段可能缺失）：{'、'.join(repaired)}")
 
         # ---- 轻量质询（规格书 §6.3）：有分歧/共同缺口时才触发 ----
         agg_dict = aggregation.to_dict()
@@ -196,6 +202,11 @@ class CaseFlow:
             "aggregation": agg_dict,
             "card_count": len(cards),
             "challenge": challenge.to_dict(),
+            # 单个科室失败要能被"重试"识别到（否则相位算完成 → 永远无法重跑）
+            "failed_departments": failed,
+            "repaired_departments": repaired,
+            "notices": [f"{a.department}：{a.error}" for a in analyses
+                        if a.card is not None and a.error],
         }
 
     # ------------------------------------------------------------------ 创建
@@ -556,6 +567,13 @@ class CaseFlow:
         "triage": "就医方向（S2 受限发言 + 编排校验）",
         "mdt": "多学科独立意见 + 质询",
     }
+    # 重跑某个相位前，先清掉该相位的**历史告警**：否则重跑成功了，"某科未完成"还挂在页面上
+    PHASE_WARNING_HINTS = {
+        "profile": ("结构化病例画像", "模型增强失败", "模型增强输出格式异常"),
+        "triage": ("S2 受限发言", "就医方向（S2 受限发言"),
+        "mdt": ("专科分析未完成", "多学科分析有", "意见卡", "仅 1 个就医方向",
+                "多学科独立意见", "无需多学科"),
+    }
 
     @staticmethod
     def _new_analysis_status(*, mdt_total: int = 0) -> Dict[str, Any]:
@@ -563,7 +581,8 @@ class CaseFlow:
             "state": "running",
             "phases": {phase: {"state": "pending", "label": CaseFlow.PHASE_LABELS[phase]}
                        for phase in CaseFlow.ANALYSIS_PHASES},
-            "mdt": {"state": "pending", "done": 0, "total": mdt_total, "current": "", "step": ""},
+            "mdt": {"state": "pending", "done": 0, "total": mdt_total, "current": "", "step": "",
+                    "failed": []},
             "warnings": [],
             "started_at": _now(),
             "finished_at": "",
@@ -641,10 +660,17 @@ class CaseFlow:
         for phase in todo:
             phases_map[phase] = {"state": "pending", "label": self.PHASE_LABELS[phase]}
         status["phases"] = phases_map
+
+        # 重跑前清掉这些相位的旧告警（重跑会把仍然存在的问题重新写回来）
+        hints = tuple(hint for phase in todo
+                      for hint in self.PHASE_WARNING_HINTS.get(phase, ()))
+        if hints:
+            status["warnings"] = [w for w in (status.get("warnings") or [])
+                                  if not any(hint in str(w) for hint in hints)]
         if "mdt" in todo:
             status["mdt"] = {"state": "pending", "done": 0,
                              "total": len(payload.get("triage", {}).get("selected", [])[:MAX_MDT_DEPARTMENTS]),
-                             "current": "", "step": ""}
+                             "current": "", "step": "", "failed": []}
         payload["analysis"] = status
         self.store.save_case(
             case_id, patient_name=case.get("patient_name") or "",
@@ -722,6 +748,8 @@ class CaseFlow:
                                 path=path.to_dict(), tasks=path.to_dict().get("tasks", []))
 
         # ---- 相位 3：多学科独立意见 + 质询（单科跳过；逐科上报子步骤）----
+        partial_mdt: Dict[str, Any] = {}          # 有科室没跑出来时，相位记为 partial（可重试）
+
         def do_mdt() -> None:
             refreshed = self.store.load_case(case_id)
             pl = dict((refreshed or {}).get("payload") or {})
@@ -731,7 +759,7 @@ class CaseFlow:
                 # 按需：只有一个就医方向 → 多学科会诊没有意义，如实标注"已跳过"
                 def mutate(status: Dict[str, Any]) -> None:
                     status["mdt"] = {"state": "skipped", "done": 0, "total": 0, "current": "",
-                                     "step": "仅 1 个就医方向，无需多学科会诊"}
+                                     "step": "仅 1 个就医方向，无需多学科会诊", "failed": []}
                 self._update_analysis(case_id, mutate)
                 self._patch_payload(case_id, mdt={"analyses": [], "aggregation": {
                     "consensus": [], "disagreements": [], "uncertainties": [],
@@ -759,20 +787,49 @@ class CaseFlow:
             if isinstance(mdt, dict):
                 notes = list(((mdt.get("aggregation") or {}).get("notes")) or [])
                 for note in notes:
-                    if "未完成" in note or "跳过" in note:
+                    if "未完成" in note or "跳过" in note or "修复" in note:
                         self._append_analysis_warning(case_id, note)
+                for notice in (mdt.get("notices") or []):
+                    self._append_analysis_warning(case_id, notice)
+                failed_depts = list(mdt.get("failed_departments") or [])
+                if failed_depts:
+                    partial_mdt["failed"] = failed_depts
+                    partial_mdt["cards"] = int(mdt.get("card_count") or 0)
             self._patch_payload(case_id, mdt=mdt)
             def mutate(status: Dict[str, Any]) -> None:
-                status["mdt"] = {"state": "done", "done": status["mdt"].get("total", 0),
-                                 "total": status["mdt"].get("total", 0), "current": "", "step": ""}
+                failed_depts = list(partial_mdt.get("failed") or [])
+                total = status["mdt"].get("total", 0)
+                status["mdt"] = {"state": "done",
+                                 "done": total - len(failed_depts) if failed_depts else total,
+                                 "total": total, "current": "", "step": "",
+                                 "failed": failed_depts}
             self._update_analysis(case_id, mutate)
 
         guard("profile", do_profile)
         guard("triage", do_triage)
         guard("mdt", do_mdt)
 
+        # 逐科失败不算相位成功：只要有科室没跑出来，就把 mdt 记为 partial，
+        # 这样"重新分析"才会重跑它（否则页面永远停在"某科未完成分析"且无从重试）
+        mdt_failed = list(partial_mdt.get("failed") or [])
+        if "mdt" in phases and mdt_failed and "mdt" not in failed:
+            if partial_mdt.get("cards"):
+                self._set_phase(case_id, "mdt", "partial",
+                                note=f"{'、'.join(mdt_failed)} 未完成分析（可重试）")
+            else:
+                self._set_phase(case_id, "mdt", "failed",
+                                note=f"{'、'.join(mdt_failed)} 均未完成分析（可重试）")
+            self._append_analysis_warning(
+                case_id, f"多学科分析有 {len(mdt_failed)} 个科室未完成（{'、'.join(mdt_failed)}），"
+                         f"其余科室结果可用，可点「重新分析」重跑")
+
         # ---- 收尾：状态汇总 + 病例状态推进 ----
-        state = "failed" if len(failed) == len(phases) else ("partial_failed" if failed else "done")
+        if len(failed) == len(phases):
+            state = "failed"
+        elif failed or mdt_failed:
+            state = "partial_failed"
+        else:
+            state = "done"
 
         def finish(status: Dict[str, Any]) -> None:
             status["state"] = state
@@ -801,7 +858,8 @@ class CaseFlow:
         status = dict(payload.get("analysis") or {})
         if not status:
             # 老病例（同步分析，没有后台任务）：按"已完成"处理，避免前端一直转圈
-            status = {"state": "done", "phases": {}, "mdt": {"state": "done"}, "warnings": []}
+            status = {"state": "done", "phases": {}, "mdt": {"state": "done", "failed": []},
+                      "warnings": []}
         mdt = payload.get("mdt")
         return {
             "case_id": case_id,
@@ -817,15 +875,55 @@ class CaseFlow:
             "warnings": list(status.get("warnings") or []),
         }
 
+    @staticmethod
+    def _failed_departments(payload: Dict[str, Any]) -> List[str]:
+        """找出"没跑出意见卡的科室"。
+
+        两个来源都要看：① 新数据写在 `analysis.mdt.failed`；
+        ② **修复前就卡住的老病例**没有这个字段，只能从 `mdt.analyses` 里
+        `status == "unavailable"` 的条目反推——否则这些病例永远无法重试。
+        """
+        analysis_mdt = ((payload.get("analysis") or {}).get("mdt") or {})
+        out = [str(x) for x in (analysis_mdt.get("failed") or []) if str(x).strip()]
+        for item in ((payload.get("mdt") or {}).get("analyses") or []):
+            if isinstance(item, dict) and item.get("status") == "unavailable":
+                dept = str(item.get("department") or "").strip()
+                if dept and dept not in out:
+                    out.append(dept)
+        return out
+
+    @staticmethod
+    def _is_stale_running(status: Dict[str, Any], minutes: int = 10) -> bool:
+        """后台任务"很久没动静"（例如服务重启把线程丢了）→ 允许重跑，别永远卡住。"""
+        if (status or {}).get("state") != "running":
+            return False
+        started = str((status or {}).get("started_at") or "")
+        if not started:
+            return False
+        try:
+            began = datetime.fromisoformat(started)
+        except ValueError:
+            return False
+        return (datetime.now() - began).total_seconds() > minutes * 60
+
     def retry_analysis(self, case_id: str, phases: Optional[List[str]] = None) -> Dict[str, Any]:
         """重试失败/未完成的分析相位（默认只重跑没成功的那些）。"""
         case = self.store.load_case(case_id) if self.store else None
         if not case:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
-        status = (case.get("payload") or {}).get("analysis") or {}
+        payload = case.get("payload") or {}
+        status = payload.get("analysis") or {}
         if not phases:
-            phases = [p for p in self.ANALYSIS_PHASES
-                      if (status.get("phases", {}).get(p, {}) or {}).get("state") != "done"]
+            if not status:
+                # 老病例没有分析记录：按已有结果推断需要重跑哪些相位（别把已有的重算一遍）
+                phases = ["mdt"] if payload.get("mdt") else list(self.ANALYSIS_PHASES)
+            else:
+                phases = [p for p in self.ANALYSIS_PHASES
+                          if (status.get("phases", {}).get(p, {}) or {}).get("state") != "done"]
+            # 相位标着完成、但里面有科室没跑出来 → 也算需要重试
+            if "mdt" not in phases and self._failed_departments(payload):
+                phases.append("mdt")
+                phases.sort(key=self.ANALYSIS_PHASES.index)
         if not phases:
             return {"ok": False, "error": "所有分析相位都已完成，无需重试"}
         started = self.start_analysis_job(case_id, phases=phases)
@@ -833,7 +931,7 @@ class CaseFlow:
                 "error": "" if started else "无法启动后台任务"}
 
     def analyze_pending_cases(self, limit: int = 3) -> Dict[str, Any]:
-        """医生端批处理：把"分析未完成"的病例排进后台任务（不阻塞请求）。"""
+        """医生端批处理：把"分析未完成（含个别科室未完成）"的病例排进后台任务。"""
         started: List[str] = []
         skipped: List[str] = []
         if not self.store:
@@ -847,14 +945,23 @@ class CaseFlow:
                 skipped.append(case_id)          # 连规则分诊都没有，不具备分析条件
                 continue
             status = payload.get("analysis") or {}
-            if status.get("state") == "running":
-                skipped.append(case_id)          # 已在跑，避免重复排任务
+            if status.get("state") == "running" and not self._is_stale_running(status):
+                skipped.append(case_id)          # 正在跑，避免重复排任务
                 continue
-            if payload.get("mdt") and status.get("state") in ("done", ""):
-                skipped.append(case_id)          # 已经分析完
-                continue
-            phases = [p for p in self.ANALYSIS_PHASES
-                      if (status.get("phases", {}).get(p, {}) or {}).get("state") != "done"]
+            if not status:
+                # 老病例（同步分析时代，没有分析记录）：
+                # 已有 MDT 结果且没有失败科室 → 视为已完成；否则按需重跑
+                failed_legacy = self._failed_departments(payload)
+                if payload.get("mdt") and not failed_legacy:
+                    skipped.append(case_id)
+                    continue
+                phases = ["mdt"] if payload.get("mdt") else list(self.ANALYSIS_PHASES)
+            else:
+                phases = [p for p in self.ANALYSIS_PHASES
+                          if (status.get("phases", {}).get(p, {}) or {}).get("state") != "done"]
+            if "mdt" not in phases and self._failed_departments(payload):
+                phases.append("mdt")
+            phases.sort(key=self.ANALYSIS_PHASES.index)
             if not phases:
                 skipped.append(case_id)
                 continue

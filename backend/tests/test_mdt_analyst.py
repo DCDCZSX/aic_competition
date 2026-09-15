@@ -16,8 +16,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schemas import CheckItem, Inference, SpecialistOpinionCard  # noqa: E402
 from services.mdt_analyst import (  # noqa: E402
+    MDT_MAX_TOKENS,
     METHOD_FAILED,
     METHOD_LLM,
+    METHOD_LLM_REPAIRED,
     METHOD_SKIPPED,
     aggregate,
     analyze_specialty,
@@ -55,6 +57,24 @@ class FakeAI:
 class BrokenAI(FakeAI):
     def call_ai_api(self, prompt, role_description=None):
         raise RuntimeError("网关不可用")
+
+
+class FakeRawAI(FakeAI):
+    """只提供**结构化接口**的假模型（与真实 AIService 的行为一致）。"""
+
+    def __init__(self, replies, api_key="fake-key"):
+        super().__init__(reply=None, api_key=api_key)
+        self.replies = list(replies)          # [(正文, 是否被截断), ...]
+        self.budgets = []
+
+    def call_ai_api_raw(self, prompt, role_description=None, max_tokens=None):
+        self.calls.append(prompt)
+        self.roles.append(role_description)
+        self.budgets.append(max_tokens)
+        content, truncated = self.replies.pop(0) if self.replies else ("", False)
+        return {"ok": True, "content": content,
+                "finish_reason": "length" if truncated else "stop",
+                "truncated": truncated, "error": ""}
 
 
 def card(dept, checks=(), gaps=(), inferences=(), focus=""):
@@ -191,6 +211,84 @@ class TestSpecialtyCard(unittest.TestCase):
         result = analyze_specialty(ai_service=BrokenAI(), department="眼科", text=CASE_B)
         self.assertEqual(result.method, METHOD_FAILED)
         self.assertIsNone(result.card)
+
+
+class TestMalformedModelOutput(unittest.TestCase):
+    """真实故障回归：血液科意见卡被 max_tokens 截断 → 整科被丢弃。
+
+    现场证据（deepseek-chat）：`finish_reason=length`、输出 3780 字符、`json.loads`
+    报 `Expecting ',' delimiter: line 64 column 6 (char 3537)`；库里有 3 例同样失败。
+    """
+
+    CARD = {
+        "focus": "全血细胞减少伴发热的血液系统病因排查",
+        "facts": ["35岁女性，咳嗽2月余", "血小板 43×10^9/L"],
+        "inferences": [{"text": "需排查噬血细胞综合征", "confidence": "medium",
+                        "evidence_refs": ["铁蛋白"]}],
+        "checks": [{"priority": "high", "content": "建议向医生确认是否需要骨髓穿刺"}],
+        "information_gaps": ["铁蛋白具体数值"],
+        "referral": None,
+    }
+    # 被截断的样子：少收尾括号、最后一条字符串没写完
+    TRUNCATED = (
+        '{\n  "focus": "全血细胞减少伴发热、脾大、sCD25升高的血液系统病因排查",\n'
+        '  "facts": [\n    "35岁女性，咳嗽2月余、胸闷气促",\n    "血小板 43×10^9/L",\n'
+        '    "铁蛋白升高、甘油三酯升高",\n    "NK细胞活性检测结果",\n'
+        '    "EBV、CMV等病毒DNA及抗体'
+    )
+
+    def test_budget_is_raised_and_uses_structured_call(self):
+        """结构化输出必须走 call_ai_api_raw（不做 Markdown 清理）并带足预算。"""
+        ai = FakeRawAI([(json.dumps(self.CARD, ensure_ascii=False), False)])
+        analyze_specialty(ai_service=ai, department="血液科", text=CASE_B)
+        self.assertEqual(ai.budgets, [MDT_MAX_TOKENS])
+        self.assertGreaterEqual(MDT_MAX_TOKENS, 4000, "血液科需要 ~2335 token，2000 会被截断")
+
+    def test_truncated_output_is_recovered_and_flagged(self):
+        ai = FakeRawAI([(self.TRUNCATED, True)])
+        result = analyze_specialty(ai_service=ai, department="血液科", text=CASE_B)
+        self.assertIsNotNone(result.card, result.error)
+        self.assertEqual(result.method, METHOD_LLM_REPAIRED)
+        self.assertIn("截断", result.error)
+        self.assertEqual(result.card.facts[:3], ["35岁女性，咳嗽2月余、胸闷气促",
+                                                 "血小板 43×10^9/L",
+                                                 "铁蛋白升高、甘油三酯升高"])
+        self.assertNotIn("EBV、CMV等病毒DNA及抗体", result.card.facts, "半个字符串不能入库")
+        # 医生端要能看到"这条是修复来的"
+        self.assertEqual(result.to_dict()["notice"], result.error)
+
+    def test_terse_retry_after_truncation(self):
+        """被截断时先按"更精炼"的要求重试一次；成功则算正常结果（不标修复）。"""
+        ai = FakeRawAI([(self.TRUNCATED, True),
+                        (json.dumps(self.CARD, ensure_ascii=False), False)])
+        result = analyze_specialty(ai_service=ai, department="血液科", text=CASE_B)
+        self.assertEqual(result.method, METHOD_LLM)
+        self.assertEqual(result.error, "")
+        self.assertEqual(len(ai.budgets), 2)
+        self.assertIn("上一次输出因为太长被截断了", ai.calls[1])
+        self.assertIn("最多 5 条", ai.calls[1])
+
+    def test_fullwidth_punctuation_card(self):
+        raw = '{"focus"："血细胞异常"， "facts"：["血小板 43×10^9/L"]， "referral"：null}'
+        result = analyze_specialty(ai_service=FakeRawAI([(raw, False)]),
+                                   department="血液科", text=CASE_B)
+        self.assertIsNotNone(result.card)
+        self.assertEqual(result.card.facts, ["血小板 43×10^9/L"])
+        self.assertEqual(result.method, METHOD_LLM_REPAIRED)
+
+    def test_unrecoverable_output_fails_with_honest_reason(self):
+        result = analyze_specialty(ai_service=FakeRawAI([("模型今天不想说话", False)]),
+                                   department="血液科", text=CASE_B)
+        self.assertEqual(result.method, METHOD_FAILED)
+        self.assertIsNone(result.card)
+        self.assertIn("未找到 JSON", result.error)
+
+    def test_truncation_is_named_in_failure_reason(self):
+        """连恢复都失败时，原因里必须写明"输出被长度截断"（而不是含糊的 JSON 错误）。"""
+        result = analyze_specialty(ai_service=FakeRawAI([("{\n  \"facts\": [", True)]),
+                                   department="血液科", text=CASE_B)
+        self.assertEqual(result.method, METHOD_FAILED)
+        self.assertIn("截断", result.error)
 
 
 class TestTopicNormalization(unittest.TestCase):

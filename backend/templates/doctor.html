@@ -547,11 +547,18 @@ function renderMdt(){
         <div class="rt" style="font-weight:600;">中栏 · MDT 工作台（过程）</div>
         <div class="round" data-step="1">
           <div class="rt">第 1 轮：独立研判（互相不可见，仅基于画像）</div>
-          ${cards.length?cards.map(c=>`<div class="opcard"><strong>${esc(c.specialty_name||c.department||'')}</strong>
+          ${cards.length?cards.map(c=>{
+             if(c.status==='unavailable'){
+               return `<div class="opcard"><strong>${esc(c.department||'')}</strong>
+                 <div class="tiny" style="color:var(--warn);">本次未完成分析（${esc(c.error||'原因未知')}）
+                 —— 不影响其余科室，可在病例列表用「批量补齐分析」重跑该例</div></div>`;
+             }
+             return `<div class="opcard"><strong>${esc(c.specialty_name||c.department||'')}</strong>
              <div class="tiny">事实：${esc((c.facts||[]).slice(0,2).join('；')||'—')}</div>
              ${(c.inferences||[]).slice(0,2).map(i=>`<div class="tiny">推断：${esc(i.text||i)} <span class="pill info">AI 推断</span></div>`).join('')}
              ${(c.checks||[]).slice(0,2).map(k=>`<div class="tiny">建议向医生确认是否需要：${esc(k.content||k)}</div>`).join('')}
-           </div>`).join(''):'<div class="tiny">本例未运行多专科分析（未配置模型或无需 MDT）</div>'}
+             ${c.notice?`<div class="tiny" style="color:var(--warn);">说明：${esc(c.notice)}</div>`:''}
+           </div>`;}).join(''):'<div class="tiny">本例未运行多专科分析（未配置模型或无需 MDT）</div>'}
         </div>
         <div class="round" data-step="2">
           <div class="rt">分歧</div>
