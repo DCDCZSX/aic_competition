@@ -34,19 +34,18 @@
 
 ## 3. 快速开始
 
-```bash
-# 1) 依赖（无网络时可用离线包目录）
-pip install -r backend/requirements.txt
-# 离线：pip install --no-index --find-links=offline_packages -r backend/requirements.txt
+```powershell
+# 1) 建立独立环境并安装项目依赖
+python -m venv .venv
+.\.venv\bin\python.exe -m pip install -r backend\requirements.txt
 
-# 2) 配置模型网关（可选：未配置时自动降级为纯规则分诊，功能仍可用）
-cp .env.example .env
-#   AI_API_KEY=...            模型密钥
-#   AI_API_URL=https://api.deepseek.com/chat/completions
-#   AI_MODEL_NAME=deepseek-chat
+# 2) 从模板创建本机配置；修改两个账号密码，不要提交 .env
+Copy-Item .env.example .env
+# AI_API_KEY 可留空：未配置时自动降级为纯规则分诊
 
 # 3) 启动
-cd backend && python app.py
+Set-Location backend
+..\.venv\bin\python.exe app.py
 ```
 
 | 入口 | 地址 | 说明 |
@@ -55,7 +54,21 @@ cd backend && python app.py
 | 患者端 | http://127.0.0.1:5000/patient | 录入 → 摘要 → 就诊后更新 |
 | 医生工作台 | http://127.0.0.1:5000/doctor | 病例审阅 → 逐条审核 → 发布审核版 |
 
-账号：`patient` / `doctor`（密码同账号名；本地部署可用，接入机构认证时替换 `services/auth.py`）。
+默认账号名为 `patient` / `doctor`，密码必须通过 `.env` 中的
+`APP_PATIENT_PASSWORD` / `APP_DOCTOR_PASSWORD` 配置。代码中没有默认密码，
+免密角色入口默认关闭；真实部署应接入机构统一身份认证并更换本地密码。
+
+### 必要安全配置
+
+- `APP_AUTH_REQUIRED=true`：默认开启，未登录不能访问病例接口；
+- `APP_ALLOW_ROLE_LOGIN=false`：关闭免密角色登录；
+- `APP_CORS_ORIGINS`：只填写实际前端来源，不要使用 `*`；
+- `AI_CONNECT_TIMEOUT=10` / `AI_READ_TIMEOUT=60`：分别限制连接和读取等待时间；
+- 访问令牌只接受 `Authorization: Bearer ...`，不接受 URL 查询参数；
+- 患者只能访问自己创建的病例；旧数据库中没有所有者的病例仅医生可访问。
+
+旧版 `/api/start_consultation`、`/api/get_discussion_status/*` 和
+`/api/get_all_discussions` 已下线，避免绕过新版鉴权、脱敏和病例状态机。
 
 ## 4. 一次完整流程
 
@@ -100,18 +113,19 @@ cd backend && python app.py
 - 病例、审计、审核记录保存于本地 SQLite（已在 `.gitignore` 中）；
 - 进入分析前先做 PII 打码，发送给模型的是脱敏文本，不含身份信息；
 - 审计表记录每次流程事件与状态流转，异常流转单独标记。
+- SQLite JSON 更新在同一锁内原子执行；同一病例的后台分析任务串行化并阻止重复启动。
 
 ## 6. 质量与评测
 
 ```bash
 cd backend
-python -m unittest discover -s tests -t .        # 单元测试
+python -m unittest discover -s tests -t .        # 521 项单元/回归测试
 python verify_update_http.py                     # 患者端全流程 HTTP 断言
 python verify_doctor_http.py                     # 医生工作台全流程 HTTP 断言
 python eval_triage_v1.py                         # 分诊评测（规则 / 模型 / 完整链路三方法对比）
 ```
 
-- 单元测试覆盖：护栏、脱敏、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新；
+- 521 项测试覆盖：护栏、脱敏、鉴权与病例所有权、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、并发更新、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新；
 - 分诊评测（自建小样本集，n=9）：完整链路 Macro 召回 **0.900**、纯规则 **0.872**，早期基线 0.447–0.513；
 - 完整报告结构完整性 13 / 13，无空段与占位。
 

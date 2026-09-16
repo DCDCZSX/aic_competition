@@ -18,34 +18,37 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 修改为绝对导入
-from services.mdt_service import MDTService
-from services.auth import AuthService, AuthError, ROLE_DOCTOR, auth_required, extract_token
+from services.ai_service import AIService
+from services.auth import (AuthService, AuthError, ROLE_DOCTOR, ROLE_PATIENT,
+                           auth_required, extract_token)
 from services.case_flow import CaseFlow
 from services.store import Store
 import time
 
 app = Flask(__name__)
-CORS(app)
+_cors_origins = [x.strip() for x in os.getenv(
+    'APP_CORS_ORIGINS', 'http://127.0.0.1:5000,http://localhost:5000'
+).split(',') if x.strip()]
+CORS(app, resources={r"/api/*": {"origins": _cors_origins}}, supports_credentials=False)
 # 不按字母排序 JSON 键：报告段落内部的字段顺序（判断 → 依据 → 证据状态 → 支持证据 …）
 # 是给人读的，排序后会被打乱（例如"证据卡片"跑到"证据状态统计"前面）。
 app.json.sort_keys = False
 
-mdt_service = MDTService()
 auth_service = AuthService()
 
-# 患者端链路（接线层）：与 mdt_service 共用 Store 与同一个 LLM 客户端。
+# 患者端链路（接线层）。旧 MDTService 不再挂载到 HTTP，避免绕过脱敏与安全约束。
 # use_llm=True 时启用 S2 受限发言与多专科分析；未配置 Key 会自动降级为纯规则分诊。
-_shared_store = mdt_service.store or Store()
+_shared_store = Store()
 case_flow = CaseFlow(
     store=_shared_store,
-    ai_service=getattr(mdt_service.agents, "ai_service", None),
+    ai_service=AIService(),
     use_llm=True,
 )
 
 
 def _current_session():
-    """从 Authorization 头或 ?token= 取当前会话。"""
-    token = extract_token(request.headers.get('Authorization'), request.args.get('token'))
+    """只从 Authorization 头取当前会话，token 不进 URL。"""
+    token = extract_token(request.headers.get('Authorization'))
     return auth_service.verify(token)
 
 
@@ -59,6 +62,27 @@ def _guard(required_scope=None):
     if required_scope and not auth_service.has_scope(session, required_scope):
         return session, (jsonify({'error': f'当前角色（{session.role}）无权限：{required_scope}'}), 403)
     return session, None
+
+
+def _guard_case(case_id, required_scope=None):
+    """同时校验会话、角色和病例所有权。
+
+    医生可按 `case:authorized` 查看病例；患者只能访问 owner_id 与自己账号一致的病例。
+    旧库中 owner_id 为空的病例仅医生可见，不自动归属给任意患者。
+    """
+    session, error = _guard(required_scope)
+    if error:
+        return session, None, error
+    case = _shared_store.load_case(case_id)
+    if not case:
+        return session, None, (jsonify({'error': f'病例不存在：{case_id}'}), 404)
+    if session is None and not auth_required():
+        return session, case, None
+    if session and session.role == ROLE_DOCTOR and auth_service.has_scope(session, 'case:authorized'):
+        return session, case, None
+    if not session or session.role != ROLE_PATIENT or case.get('owner_id') != session.username:
+        return session, None, (jsonify({'error': '病例不存在或无权访问'}), 404)
+    return session, case, None
 
 
 def _guard_doctor(required_scope='review'):
@@ -105,7 +129,7 @@ def doctor_home():
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    """登录：支持账号密码，或角色快捷入口 {"role": "patient"|"doctor"}。"""
+    """登录：默认只允许账号密码；免密角色入口需显式开启。"""
     data = request.get_json(silent=True) or {}
     try:
         session = auth_service.login(
@@ -120,8 +144,7 @@ def login():
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
-    token = extract_token(request.headers.get('Authorization'),
-                          (request.get_json(silent=True) or {}).get('token'))
+    token = extract_token(request.headers.get('Authorization'))
     removed = auth_service.logout(token)
     return jsonify({'status': 'ok', 'logged_out': removed})
 
@@ -142,6 +165,9 @@ def me():
 @app.route('/api/v2/preview', methods=['POST'])
 def preview_intake():
     """提交前脱敏预览（患者端 P3）：只返回打码结果与命中明细，不落库、不分析。"""
+    session, error = _guard('intake')
+    if error:
+        return error
     data = request.get_json(silent=True) or {}
     preview = case_flow.build_preview(
         data.get('medical_history', ''), data.get('main_issue', '')
@@ -175,7 +201,7 @@ def create_case():
             age=data.get('age'),
             sex=data.get('gender') or data.get('sex') or '',
             name=data.get('name') or '',
-            case_id=data.get('case_id'),
+            owner_id=session.username if session else '',
             on_progress=on_progress,
             defer_mdt=defer_mdt,
             progressive=progressive,
@@ -228,7 +254,7 @@ def create_case():
 @app.route('/api/v2/case/<case_id>/answers', methods=['POST'])
 def submit_answers(case_id):
     """提交追问回答（可跳过；跳过不编造，只降低可靠性）。"""
-    session, error = _guard('case:own')
+    session, case, error = _guard_case(case_id, 'case:own')
     if error:
         return error
     data = request.get_json(silent=True) or {}
@@ -241,12 +267,9 @@ def submit_answers(case_id):
 @app.route('/api/v2/case/<case_id>', methods=['GET'])
 def get_case(case_id):
     """查询病例（医生需 review 权限；患者查自己的病例）。"""
-    session, error = _guard()
+    session, case, error = _guard_case(case_id)
     if error:
         return error
-    case = case_flow.get_case(case_id)
-    if not case:
-        return jsonify({'error': f'病例不存在：{case_id}'}), 404
     return jsonify({'case': case, 'audit': _shared_store.list_audit(case_id, limit=50)})
 
 
@@ -257,7 +280,7 @@ def get_analysis(case_id):
     返回三个相位（画像增强 / 就医方向 / 多学科）的状态、MDT 细分进度（第几科 + 子步骤）、
     已就绪的结果片段与警告 —— 前端据此**增量渲染**：规则结果先显示，模型结果到了再替换。
     """
-    session, error = _guard()
+    session, case, error = _guard_case(case_id)
     if error:
         return error
     data = case_flow.get_analysis(case_id)
@@ -269,7 +292,7 @@ def get_analysis(case_id):
 @app.route('/api/v2/case/<case_id>/analysis/retry', methods=['POST'])
 def retry_analysis(case_id):
     """重试未完成/失败的分析相位（患者端"重新分析"按钮）。"""
-    session, error = _guard('case:own')
+    session, case, error = _guard_case(case_id, 'case:own')
     if error:
         return error
     data = request.get_json(silent=True) or {}
@@ -297,7 +320,7 @@ def get_mdt(case_id):
     两段式下多学科分析在后台跑，前端进 P8 时轮询这里：
     `status.state` ∈ running / done / failed / none，`ready=true` 时 `mdt` 可用。
     """
-    session, error = _guard()
+    session, case, error = _guard_case(case_id)
     if error:
         return error
     data = case_flow.get_mdt_status(case_id)
@@ -309,7 +332,7 @@ def get_mdt(case_id):
 @app.route('/api/v2/case/<case_id>/report', methods=['GET'])
 def get_report(case_id):
     """生成患者版一页摘要 + 医生审核版完整报告（P9）。"""
-    session, error = _guard()
+    session, case, error = _guard_case(case_id)
     if error:
         return error
     reports = case_flow.build_reports(case_id)
@@ -321,7 +344,7 @@ def get_report(case_id):
 @app.route('/api/v2/case/<case_id>/tasks/<task_id>', methods=['POST'])
 def update_task(case_id, task_id):
     """任务状态机（P7）：todo → doing → done / cancelled / reopened。"""
-    session, error = _guard('case:own')
+    session, case, error = _guard_case(case_id, 'case:own')
     if error:
         return error
     data = request.get_json(silent=True) or {}
@@ -346,7 +369,7 @@ def add_case_update(case_id):
     if source in doctor_sources:
         session, error = _guard_doctor('decision')
     else:
-        session, error = _guard()
+        session, case, error = _guard_case(case_id, 'update:own')
     if error:
         return error
     result = case_flow.add_update(
@@ -362,7 +385,7 @@ def add_case_update(case_id):
 @app.route('/api/v2/case/<case_id>/changes', methods=['GET'])
 def get_changes(case_id):
     """变化摘要（P11）：新增了什么、哪些判断变了、哪些未受影响。"""
-    session, error = _guard()
+    session, case, error = _guard_case(case_id)
     if error:
         return error
     data = case_flow.get_change_summary(case_id)
@@ -447,51 +470,6 @@ def get_case_audit(case_id):
         return jsonify({'error': f'病例不存在：{case_id}'}), 404
     return jsonify(data)
 
-@app.route('/api/start_consultation', methods=['POST'])
-def start_consultation():
-    try:
-        data = request.json
-        
-        # 验证必需字段
-        required_fields = ['name', 'age', 'gender', 'medical_history', 'main_issue']
-        for field in required_fields:
-            if field not in data or not data[field]:
-                return jsonify({'error': f'缺少必需字段: {field}'}), 400
-        
-        patient_data = {
-            'name': data['name'],
-            'age': int(data['age']),
-            'gender': data['gender'],
-            'medical_history': data['medical_history']
-        }
-        
-        discussion_id = mdt_service.start_consultation(patient_data, data['main_issue'])
-        
-        return jsonify({
-            'status': 'started',
-            'discussion_id': discussion_id,
-            'message': 'MDT会诊已启动'
-        })
-        
-    except Exception as e:
-        return jsonify({'error': f'启动会诊失败: {str(e)}'}), 500
-
-@app.route('/api/get_discussion_status/<discussion_id>', methods=['GET'])
-def get_discussion_status(discussion_id):
-    try:
-        status = mdt_service.get_discussion_status(discussion_id)
-        return jsonify(status)
-    except Exception as e:
-        return jsonify({'error': f'获取状态失败: {str(e)}'}), 500
-
-@app.route('/api/get_all_discussions', methods=['GET'])
-def get_all_discussions():
-    try:
-        discussions = mdt_service.get_all_discussions()
-        return jsonify({'discussions': discussions})
-    except Exception as e:
-        return jsonify({'error': f'获取讨论列表失败: {str(e)}'}), 500
-
 if __name__ == '__main__':
     # Windows 中文控制台默认 GBK，emoji 会导致 UnicodeEncodeError 直接崩溃；
     # 统一把标准输出切到 UTF-8（失败则忽略，不影响服务）。
@@ -516,6 +494,5 @@ if __name__ == '__main__':
     print("[停止] 按 Ctrl+C")
     print("=" * 60)
     app.run(debug=debug, host=host, port=port)
-
 
 

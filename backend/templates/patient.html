@@ -77,7 +77,7 @@
       <p class="muted">把你手上的病历整理成医生看得懂的一页摘要，推演该看哪些科、还缺什么信息。</p>
 
       <div class="role-cards">
-        <div class="role-card" onclick="loginAs('patient')">
+        <div class="role-card" onclick="showAccountLogin()">
           <span class="ic">🧑‍🦳</span>
           <span>
             <span class="t">进入患者端</span>
@@ -122,7 +122,7 @@
       </div>
 
       <p class="tiny" style="margin-top:var(--sp-16);">
-        体验账号：<span class="mono">patient</span>（密码同账号名）。也可直接点上方按钮进入。
+        本机账号：<span class="mono">patient</span>。密码由部署者在 <span class="mono">.env</span> 中配置。
       </p>
     </div>
   </aside>
@@ -574,10 +574,14 @@ function msg(el, html, cls='danger'){ const n=document.getElementById(el);
   n.className='banner '+cls; n.innerHTML=html; }
 
 /* ===================== 登录 ===================== */
-async function loginAs(role){
-  const r = await api('/api/login', {method:'POST', body:JSON.stringify({role})});
-  if(r.status!==200){ msg('login-msg', esc(r.data.error||'登录失败')); return; }
-  afterLogin(r.data);
+function showAccountLogin(){
+  const details=document.querySelector('#login details');
+  if(details) details.open=true;
+  const user=document.getElementById('login-user');
+  if(user && !user.value) user.value='patient';
+  const pass=document.getElementById('login-pass');
+  if(pass) pass.focus();
+  msg('login-msg', '请输入患者账号密码', 'info');
 }
 async function loginForm(){
   const u=document.getElementById('login-user').value.trim();
@@ -588,7 +592,7 @@ async function loginForm(){
 }
 function afterLogin(d){
   S.token=d.session.token; S.role=d.session.role; S.label=d.session.label;
-  // 跨页会话：首页（/）一键进入或在此登录后写入，供本页刷新后复用
+  // 跨页会话：登录后写入，供本页刷新后复用
   try{ localStorage.setItem('dsh_session', JSON.stringify({
         token:d.session.token, role:d.session.role,
         username:d.session.username, label:d.session.label})); }catch(e){}
@@ -609,7 +613,7 @@ async function logout(){
   try{ localStorage.removeItem('dsh_session'); }catch(e){}
   location.reload();
 }
-/* 跨页会话恢复：从首页一键进入时免再登录；角色不符则照常显示登录页 */
+/* 跨页会话恢复：已有患者会话可复用；角色不符则照常显示登录页 */
 function restoreSession(){
   let s=null;
   try{ s = JSON.parse(localStorage.getItem('dsh_session')||'null'); }catch(e){ return false; }

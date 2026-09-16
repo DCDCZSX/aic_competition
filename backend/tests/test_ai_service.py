@@ -33,9 +33,11 @@ class _FakeHTTP:
     def __init__(self, payload):
         self.payload = payload
         self.bodies = []
+        self.timeouts = []
 
     def post(self, url, headers=None, json=None, timeout=None):  # noqa: A002
         self.bodies.append(json or {})
+        self.timeouts.append(timeout)
         return mock.Mock(raise_for_status=lambda: None,
                          json=lambda: self.payload)
 
@@ -58,6 +60,15 @@ class TestRawCall(unittest.TestCase):
     def test_budget_can_be_raised(self):
         _, fake = self._call(_response("ok"), max_tokens=4000)
         self.assertEqual(fake.bodies[0]["max_tokens"], 4000)
+
+    def test_connect_and_read_timeouts_are_bounded(self):
+        with mock.patch.dict(os.environ, {"AI_CONNECT_TIMEOUT": "10", "AI_READ_TIMEOUT": "60"}):
+            service = AIService()
+            service.api_key = "test-key"
+            fake = _FakeHTTP(_response("ok"))
+            with mock.patch("services.ai_service.requests.post", fake.post):
+                service.call_ai_api_raw("提示词")
+        self.assertEqual(fake.timeouts, [(10.0, 60.0)])
 
     def test_truncation_is_detected(self):
         result, _ = self._call(_response('{"facts": ["a"', finish_reason="length"))

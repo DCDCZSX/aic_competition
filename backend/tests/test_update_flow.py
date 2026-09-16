@@ -181,7 +181,13 @@ class TestUpdateFlowEndToEnd(unittest.TestCase):
         self.assertTrue(result["affected"]["departments"])
         self.assertTrue(result["affected"]["modules"])
 
-    def test_update_state_becomes_awaiting_recheck(self):
+    def test_update_before_confirmation_stays_awaiting_doctor(self):
+        self.flow.add_update(self.case.case_id, kind="检查结果", content="眼底检查正常")
+        case = self.flow.get_case(self.case.case_id)
+        self.assertEqual(case["case_state"], "awaiting_doctor")
+
+    def test_update_after_confirmation_becomes_awaiting_recheck(self):
+        self.flow.store.transition_case(self.case.case_id, "doctor_confirmed", actor="doctor")
         self.flow.add_update(self.case.case_id, kind="检查结果", content="眼底检查正常")
         case = self.flow.get_case(self.case.case_id)
         self.assertEqual(case["case_state"], "awaiting_recheck")
@@ -192,7 +198,7 @@ class TestUpdateFlowEndToEnd(unittest.TestCase):
         self.assertIn("case_updated", events)
         transitions = [(t["from_state"], t["to_state"])
                        for t in self.flow.store.list_transitions(self.case.case_id)]
-        self.assertIn(("awaiting_doctor", "awaiting_recheck"), transitions)
+        self.assertNotIn(("awaiting_doctor", "awaiting_recheck"), transitions)
 
     def test_doctor_opinion_not_from_patient(self):
         """红线：患者转述的"医生说……"不得被当作医生确认意见。"""

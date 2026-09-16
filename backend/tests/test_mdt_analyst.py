@@ -187,9 +187,11 @@ class TestSpecialtyCard(unittest.TestCase):
         self.assertTrue(result.card.checks[0].content.startswith("建议向医生确认是否需要"))
 
     def test_out_of_domain_referral_dropped(self):
-        reply = json.dumps({"referral": "口腔颌面外科"}, ensure_ascii=False)
+        reply = json.dumps({"focus": "眼部症状评估", "referral": "口腔颌面外科"},
+                           ensure_ascii=False)
         result = analyze_specialty(ai_service=FakeAI(reply=reply),
                                    department="眼科", text=CASE_B)
+        self.assertIsNotNone(result.card)
         self.assertIsNone(result.card.referral, "域外转诊方向应留空而非编造")
 
     def test_invalid_department_rejected(self):
@@ -211,6 +213,13 @@ class TestSpecialtyCard(unittest.TestCase):
         result = analyze_specialty(ai_service=BrokenAI(), department="眼科", text=CASE_B)
         self.assertEqual(result.method, METHOD_FAILED)
         self.assertIsNone(result.card)
+
+    def test_empty_object_is_failed_not_a_successful_card(self):
+        result = analyze_specialty(ai_service=FakeAI(reply="{}"),
+                                   department="眼科", text=CASE_B, case_id="C1")
+        self.assertEqual(result.method, METHOD_FAILED)
+        self.assertIsNone(result.card)
+        self.assertIn("不能为空", result.error)
 
 
 class TestMalformedModelOutput(unittest.TestCase):
