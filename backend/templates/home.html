@@ -5,55 +5,33 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>多学科就医智助系统 · AI 辅助就医信息整理与多学科决策协作平台</title>
 <meta name="description" content="把散乱的病历整理成医生看得懂的一页摘要，推演该看哪些科、还缺什么信息，最后由医生逐条把关。不出诊断、不出处方、不替代医生。">
+<link rel="stylesheet" href="/static/css/tokens.css">
 <style>
 /* ============================================================
    设计 token —— 暖色编辑风（自有实现：字体为系统字体栈、插画为自绘 SVG、零外链资源）
    全部为 computed 值，禁止目测改色；颜色只允许从本表取用
    ============================================================ */
 :root{
-  /* 中性（暖调，无冷蓝灰） */
-  --gray-000:#fff;        --gray-050:#faf9f5;   --gray-100:#f5f4ed;
-  --gray-150:#f0eee6;     --gray-200:#e8e6dc;   --gray-250:#dedcd1;
-  --gray-300:#d1cfc5;     --gray-400:#b0aea5;   --gray-500:#87867f;
-  --gray-600:#5e5d59;     --gray-650:#4d4c48;   --gray-700:#3d3d3a;
-  --gray-750:#30302e;     --gray-800:#262624;   --gray-950:#141413;
-  /* 品牌与点缀 */
-  --clay:#d97757;         --clay-hover:#c6613f; --clay-dark:#c46849;
-  --oat:#e3dacc;          --olive:#788c5d;      --cactus:#bcd1ca;
-  /* 语义（沿用系统既有语义色：状态从不只靠颜色表达） */
-  --ok:#2E7D4F;           --warn:#B7791F;       --danger:#B3402E;  --info:#5B4B8A;
-  --focus-ring:#3898EC;   /* 全站唯一冷色，仅用于无障碍焦点环 */
-  /* 主题（浅/深两套，分段交替） */
-  --bg:#faf9f5;           --surface:#fff;       --surface-2:#f5f4ed;
-  --text:#141413;         --text-2:#5e5d59;     --text-3:#87867f;
-  --border:#f0eee6;       --border-strong:#e8e6dc;
-  /* 间距 / 圆角 / 阴影 */
-  --sp-4:4px; --sp-8:8px; --sp-12:12px; --sp-16:16px; --sp-20:20px;
-  --sp-24:24px; --sp-32:32px; --sp-40:40px; --sp-48:48px; --sp-64:64px; --sp-96:96px;
-  --br-8:8px; --br-12:12px; --br-16:16px; --br-24:24px; --br-32:32px;
+  /* 首页专用（落地页比工作台用更大的编辑式尺度） */
+  --surface:#fff;
   --shadow-sm:0 2px 8px rgba(0,0,0,.04);
   --shadow-md:0 4px 20px rgba(0,0,0,.04);
   --shadow-lg:0 4px 16px rgba(0,0,0,.10);
   --whisper:0 4px 24px rgba(0,0,0,.05);
-  --ring:0 0 0 1px var(--gray-300);
-  --ease-out-power2:cubic-bezier(.25,1,.5,1);
-  --ease-out-quart:cubic-bezier(.165,.84,.44,1);
-  /* 版式尺度（clamp 保证 1440/992/768/390 四档都成立） */
-  --display-1:clamp(36px,26px + 2.7vw,68px);
   --display-2:clamp(32px,22px + 2.5vw,56px);
   --headline-1:clamp(28px,24px + 1.6vw,48px);
   --headline-3:clamp(24px,22px + .7vw,34px);
   --headline-5:clamp(19px,18px + .45vw,24px);
-  --body-1:clamp(17px,16.6px + .1vw,20px);
-  --body-2:16px; --body-3:15px; --caption:13px; --label:12px; --micro:11px;
-  /* 字体：衬线标题 + 无衬线 UI；零下载、零外链 */
-  --font-serif:Georgia,"Songti SC","Noto Serif CJK SC","Source Han Serif SC",SimSun,serif;
-  --font-sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,-apple-system,sans-serif;
-  --font-mono:ui-monospace,"JetBrains Mono",Consolas,"Courier New",monospace;
-  /* 布局 */
-  --container:1200px;
   --nav-h:72px;
-  --font-display:var(--font-serif);   /* ← 一处开关：改成 --font-sans 即整站换黑体标题 */
+  /* 首页独有别名（页面自定义命名） */
+  --bg:#faf9f5;
+  --surface-2:#f5f4ed;
+  --text:#141413;
+  --text-2:#5e5d59;
+  --text-3:#87867f;
+  --border:#f0eee6;
+  --border-strong:#e8e6dc;
+  --container:1200px;
 }
 
 *,*::before,*::after{box-sizing:border-box;}

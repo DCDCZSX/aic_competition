@@ -751,7 +751,7 @@ async function doCreateCase(){
     }
     if(!d.ok && !d.passes_gate){
       S.caseId=d.case_id; renderProfile(d);
-      msg('mask-msg','画像信息不足，请返回补充后再分析（G4 门禁）','warn');
+      msg('mask-msg','画像信息不足，请返回补充更具体的资料（症状怎么描述、检查结果是怎样的）后再分析','warn');
       go('profile'); return;
     }
     if(!d.ok){ msg('mask-msg', esc((d.errors||[]).join('；'))); return; }
@@ -1098,18 +1098,24 @@ function switchReport(view){
       </div></div>`;
     html += `<p class="tiny" style="margin-top:var(--sp-12);">未经过医生审核的内容均为 AI 辅助分析，不能作为诊断或用药依据。</p>`;
   } else {
-    /* 完整报告：文档式布局（左目录 + 右正文），目录随滚动高亮 */
+    /* 完整报告：文档式布局（左目录 + 右**逐段折叠**）
+       13 段全展开会很长，这里默认收起，需要哪段点哪段；目录点击会自动展开对应段落，
+       打印前自动全部展开（打印完恢复原状态）。 */
     const keys = rep.section_order || Object.keys(sections);
-    html += `<p class="muted">共 ${keys.length} 段，结构完整性：${rep.complete?'✅ 完整':'⚠ 缺 '+ (rep.missing_sections||[]).join('、')}</p>`;
+    const openMap = S.reportOpen || {};
+    html += `<div class="doc-tools no-print">
+      <span class="tiny">共 ${keys.length} 段，结构完整性：${rep.complete?'✅ 完整':'⚠ 缺 '+ (rep.missing_sections||[]).join('、')}</span>
+      <button class="ghost btn-sm" id="rep-toggle-all" onclick="toggleAllReport()">展开全部</button>
+    </div>`;
     html += `<div class="doc">
       <nav class="toc" id="report-toc" aria-label="报告目录">
         ${keys.map((k,i)=>`<a href="#sec-${i}" data-sec="sec-${i}">${i+1}. ${esc(k)}</a>`).join('')}
       </nav>
       <div class="doc-body">
-        ${keys.map((k,i)=>`<section id="sec-${i}" style="margin-bottom:var(--sp-32);">
-            <h2>${i+1}. ${esc(k)}</h2>
-            ${renderSectionValue(sections[k])}
-          </section>`).join('')}
+        ${keys.map((k,i)=>`<details class="sec" id="sec-${i}" data-idx="${i}"${openMap[i]?' open':''}>
+            <summary><span class="sec-n">${i+1}</span><span class="sec-t">${esc(k)}</span>${sectionDigest(sections[k])}<span class="chev" aria-hidden="true"></span></summary>
+            <div class="sec-body">${renderSectionValue(sections[k])}</div>
+          </details>`).join('')}
       </div>
     </div>`;
   }
@@ -1120,21 +1126,86 @@ function switchReport(view){
   if(view==='full') bindReportToc();
 }
 
+/* 段落摘要（折叠时右侧的小提示，让用户不展开也知道里面有多少内容） */
+function sectionDigest(v){
+  if(v===null || v===undefined || v==='') return '<span class="sec-hint">空</span>';
+  if(Array.isArray(v)) return `<span class="sec-hint">${v.length? v.length+' 条' : '空'}</span>`;
+  if(typeof v==='object'){
+    const n = Object.keys(v).length;
+    return `<span class="sec-hint">${n? n+' 项' : '空'}</span>`;
+  }
+  const t = String(v);
+  return `<span class="sec-hint">${t.length>16? esc(t.slice(0,16))+'…' : esc(t)}</span>`;
+}
+
+/* 逐段折叠：默认全部收起；「展开全部/收起全部」一键切换；目录点击自动展开目标段落 */
+function reportSections(){ return Array.from(document.querySelectorAll('.doc-body details.sec')); }
+function syncReportToggle(){
+  const btn = document.getElementById('rep-toggle-all');
+  if(!btn) return;
+  const all = reportSections();
+  btn.textContent = (all.length && all.every(d=>d.open)) ? '收起全部' : '展开全部';
+}
+function setAllReportSections(open){
+  S.reportOpen = S.reportOpen || {};
+  reportSections().forEach(d=>{ d.open = !!open; S.reportOpen[d.dataset.idx] = !!open; });
+  syncReportToggle();
+}
+function toggleAllReport(){
+  const all = reportSections();
+  setAllReportSections(all.some(d=>!d.open));      // 还有收起的 → 全部展开；否则全部收起
+}
+
 /* 目录高亮（IntersectionObserver）：滚到哪一段，左目录就标到哪一段 */
 let _tocObserver = null;
 function bindReportToc(){
   const links = Array.from(document.querySelectorAll('#report-toc a'));
+  const secs = reportSections();
+  secs.forEach(d=>{
+    d.addEventListener('toggle', ()=>{
+      S.reportOpen = S.reportOpen || {};
+      S.reportOpen[d.dataset.idx] = d.open;
+      syncReportToggle();
+    });
+  });
+  syncReportToggle();
+  /* 目录点击：先展开目标段落，再滚过去（否则会跳到一个收起的标题上） */
+  links.forEach(a=>a.addEventListener('click', ev=>{
+    const target = document.getElementById(a.dataset.sec);
+    if(!target) return;
+    ev.preventDefault();
+    target.open = true;
+    S.reportOpen = S.reportOpen || {};
+    S.reportOpen[target.dataset.idx] = true;
+    links.forEach(x=>x.classList.toggle('on', x===a));
+    target.scrollIntoView({behavior:'smooth', block:'start'});
+  }));
   if(!links.length) return;
-  if(_tocObserver) _tocObserver.disconnect();
   links[0].classList.add('on');
   if(!('IntersectionObserver' in window)) return;
+  if(_tocObserver) _tocObserver.disconnect();
   _tocObserver = new IntersectionObserver(entries=>{
     entries.forEach(e=>{
       if(!e.isIntersecting) return;
       links.forEach(a=>a.classList.toggle('on', a.dataset.sec === e.target.id));
     });
   }, { rootMargin:'-20% 0px -70% 0px', threshold:0 });
-  document.querySelectorAll('.doc-body section').forEach(s=>_tocObserver.observe(s));
+  secs.forEach(s=>_tocObserver.observe(s));
+}
+
+/* 打印必须给完整的报告：打印前全部展开，打印后恢复用户原来的折叠状态 */
+function openAllForPrint(){
+  S._reportOpenBeforePrint = Object.assign({}, S.reportOpen || {});
+  setAllReportSections(true);
+}
+function restoreAfterPrint(){
+  S.reportOpen = S._reportOpenBeforePrint || {};
+  reportSections().forEach(d=>{ d.open = !!S.reportOpen[d.dataset.idx]; });
+  syncReportToggle();
+}
+if(window.addEventListener){
+  window.addEventListener('beforeprint', openAllForPrint);
+  window.addEventListener('afterprint', restoreAfterPrint);
 }
 
 /* 段落渲染：字符串 / 数字 / 布尔 / 字符串数组 / 对象 / 对象数组 都渲染成中文可读结构。
@@ -1238,7 +1309,7 @@ function renderChanges(){
   document.getElementById('changes-body').innerHTML = html;
 }
 
-/* ===================== P6 分诊结果（三栏：规则命中 → 模型发言 → 编排结果） ===================== */
+/* ===================== P6 分诊结果（三栏：规则判断 → 模型发言 → 最终方向） ===================== */
 function renderTriage(){
   const t=S.triage||{};
   const p=t.primary, sec=t.secondary||[];
@@ -1257,12 +1328,12 @@ function renderTriage(){
   // ② 模型受限发言
   let c2;
   if(t.decision_path === 'degraded' || !t.rule_hits){
-    c2 = '<div class="tiny">模型发言未生效或未启用；本次结果完全由确定性规则与编排产出（系统会如实提示降级）。</div>';
+    c2 = '<div class="tiny">模型发言未生效或未启用；本次结果完全由规则推演得出（系统会如实提示降级）。</div>';
   } else {
-    c2 = '<div class="tiny">模型只做逐科表态，不能覆盖规则命中的强项；新增科室必须通过阈值校验才允许入选。</div>';
+    c2 = '<div class="tiny">模型只做逐科表态，不能推翻规则已经命中的方向；模型新增的科室还要再通过一次安全检查才可能入选。</div>';
   }
 
-  // ③ 编排结果
+  // ③ 最终就医方向（系统核对后）
   let c3 = '';
   if(!p){
     c3 = '<div class="banner warn">未能给出明确的就诊方向建议：请补充资料，或直接线下咨询医生。</div>';
@@ -1274,13 +1345,13 @@ function renderTriage(){
         <span class="pill">${roleLabel(d.role)}</span>
         <div class="tiny">${esc((d.signals||[]).join('；'))||'相关方向'}</div></div>`).join('');
     }
-    c3 += `<div class="tiny" style="margin-top:6px;">入选 ${1+sec.length} 个方向 · 决策路径 <span class="mono">${esc(t.decision_path||'—')}</span></div>`;
+    c3 += `<div class="tiny" style="margin-top:6px;">入选 ${1+sec.length} 个方向 · 决策方式：${esc(t.decision_path_label||'—')}</div>`;
   }
 
   const flags=[];
   flags.push(t.needs_mdt ? '<span class="pill info">建议多学科协同</span>' : '<span class="pill">暂不需要多学科会诊</span>');
   if(t.needs_doctor_review) flags.push('<span class="pill warn">建议医生复核</span>');
-  if(t.behavior_type) flags.push(`<span class="pill">病例类型 ${esc(t.behavior_type)}</span>`);
+  if(t.behavior_type) flags.push(`<span class="pill">病例类型 ${esc(t.behavior_type_label||t.behavior_type)}</span>`);
 
   let html = `<div class="mdt">
       <div class="col">
@@ -1297,7 +1368,7 @@ function renderTriage(){
           t.validator_notes.map(n=>`<div class="tiny">· ${esc(n)}</div>`).join('')+`</details>`:''}
       </div>
       <div class="col">
-        <div class="rt">③ 编排结果（安全约束后）</div>
+        <div class="rt">③ 最终就医方向（系统核对后）</div>
         ${c3}
       </div>
     </div>`;

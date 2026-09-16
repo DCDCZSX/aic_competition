@@ -30,8 +30,8 @@ globalThis.IntersectionObserver = class { observe() { } unobserve() { } disconne
 globalThis.location = { href: '', reload() { } };
 globalThis.alert = () => { };
 
-eval(inline + '\n;globalThis.__R = { renderSectionValue };');
-const { renderSectionValue } = globalThis.__R;
+eval(inline + '\n;globalThis.__R = { renderSectionValue, switchReport, S };');
+const { renderSectionValue, switchReport, S } = globalThis.__R;
 
 // 取真实病例
 const patient = await (await fetch(BASE + '/api/login', {
@@ -75,5 +75,54 @@ for (const [name, value] of Object.entries(sections)) {
 
 const sample = renderSectionValue(sections['证据关联']);
 console.log('\n证据关联渲染样例（前 600 字）：\n' + sample.replace(/\s+/g, ' ').slice(0, 600));
-console.log('\n结论：' + (problems.length ? '❌ 仍有问题\n - ' + problems.join('\n - ') : '✅ 全部段落渲染正常，无 [object Object]、无英文键泄漏'));
+
+/* ---------------------------------------------------------------------------
+   完整报告页：逐段折叠（默认收起）+ 目录对应 + 折叠不丢内容
+   —— 13 段全展开太长，所以做成可折叠；但**折叠只能影响显示，不能影响内容**：
+   折叠时正文仍要在 DOM 里（打印前会自动全部展开，见患者端 beforeprint 钩子）。
+--------------------------------------------------------------------------- */
+console.log('\n=== 完整报告页（折叠结构）===');
+S.report = report;
+S.reportOpen = {};
+switchReport('full');
+const fullHtml = els.get('report-body').innerHTML;
+const secCount = Object.keys(sections).length;
+const detailCount = (fullHtml.match(/<details class="sec"/g) || []).length;
+const bodyCount = (fullHtml.match(/class="sec-body"/g) || []).length;
+const hintCount = (fullHtml.match(/class="sec-hint"/g) || []).length;
+const tocCount = (fullHtml.match(/id="report-toc"[\s\S]*?<\/nav>/)?.[0].match(/<a /g) || []).length;
+
+if (detailCount !== secCount) problems.push(`折叠段落数 ${detailCount} ≠ 报告段数 ${secCount}`);
+if (bodyCount !== secCount) problems.push(`正文容器数 ${bodyCount} ≠ 报告段数 ${secCount}`);
+if (hintCount !== secCount) problems.push(`摘要提示数 ${hintCount} ≠ 报告段数 ${secCount}`);
+if (tocCount !== secCount) problems.push(`目录链接数 ${tocCount} ≠ 报告段数 ${secCount}`);
+if (fullHtml.includes(' open>')) problems.push('默认应为全部收起，但有段落带 open 属性');
+if (!fullHtml.includes('id="rep-toggle-all"')) problems.push('缺少「展开全部」按钮');
+for (let i = 0; i < secCount; i++) {
+  if (!fullHtml.includes(`id="sec-${i}"`)) problems.push(`缺少段落容器 sec-${i}`);
+  if (!fullHtml.includes(`data-sec="sec-${i}"`)) problems.push(`目录缺少指向 sec-${i} 的链接`);
+}
+if (fullHtml.includes('[object Object]')) problems.push('完整报告 HTML 里出现 [object Object]');
+if (/undefined|NaN/.test(fullHtml)) problems.push('完整报告 HTML 里出现 undefined/NaN');
+// 折叠状态下正文必须已经在 DOM 里（否则打印/复制会丢内容）
+for (const [name, value] of Object.entries(sections)) {
+  const rendered = renderSectionValue(value);
+  const key = rendered.replace(/\s+/g, '').slice(0, 60);
+  if (key.length > 0 && !fullHtml.replace(/\s+/g, '').includes(key)) {
+    problems.push(`折叠状态下段落「${name}」的正文不在 DOM 里`);
+  }
+}
+console.log(`  · 折叠段落 ${detailCount} / 目录链接 ${tocCount} / 正文容器 ${bodyCount} / 摘要提示 ${hintCount}`);
+console.log(`  · 默认收起：${fullHtml.includes(' open>') ? '❌ 有段落默认展开' : '✅ 全部收起'}`);
+console.log(`  · 折叠时正文仍在 DOM（打印不丢）：${problems.some(p => p.includes('不在 DOM')) ? '❌' : '✅'}`);
+console.log(`  · 「展开全部」按钮：${fullHtml.includes('id="rep-toggle-all"') ? '✅' : '❌'}`);
+
+/* 展开状态记忆：记过的段落在重渲染后应保持展开 */
+S.reportOpen = { 0: true };
+switchReport('full');
+const reopened = els.get('report-body').innerHTML;
+console.log(`  · 重渲染后保留展开状态：${reopened.includes(' open>') ? '✅' : '❌'}`);
+if (!reopened.includes(' open>')) problems.push('展开状态在重渲染后丢失');
+
+console.log('\n结论：' + (problems.length ? '❌ 仍有问题\n - ' + problems.join('\n - ') : '✅ 全部段落渲染正常，折叠结构正确、无 [object Object]、无英文键泄漏'));
 process.exit(problems.length ? 1 : 0);

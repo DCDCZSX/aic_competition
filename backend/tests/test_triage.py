@@ -44,6 +44,69 @@ class TestRuleTable(unittest.TestCase):
     def test_rule_table_valid(self):
         self.assertEqual(validate_rule_table(), [], "规则表引用了域外科室或非法权重")
 
+    # ------------------------------------------------ 组合规则语义 + 误报回归
+    def test_all_of_and_any_of_semantics(self):
+        """`all_of` 全部命中 + `any_of` 至少命中一个，两个条件同时成立才算命中。"""
+        from services.rule_engine import Rule
+        rule = Rule("t", "血液科", "medium", all_of=("发热",),
+                    any_of=("三系减少", "血小板减少"), signal="s")
+        self.assertIsNotNone(rule.match("发热，三系减少"))
+        self.assertIsNotNone(rule.match("发热，血小板减少"))
+        self.assertIsNone(rule.match("发热，血常规正常"), "any_of 一个都没中就不该命中")
+        self.assertIsNone(rule.match("三系减少"), "all_of 没中就不该命中")
+        self.assertIsNone(rule.match("无发热，三系减少"), "否定语境不算命中")
+
+    def test_fever_with_normal_blood_count_does_not_trigger_hematology(self):
+        """真实误报（E2E 用例 A 发现）：原规则只要求出现"血常规"这个词，
+        于是**化验完全正常的普通上感**也被推给血液科 → 还会把病例撑成 C 型（诊断未明）。"""
+        text = ("患者：王*，男，30岁。主诉：发热咳嗽3天。查体：咽部充血，双肺呼吸音清。"
+                "血常规：白细胞 8.6×10^9/L，中性粒 72%（均正常）。")
+        ev = evaluate(text)
+        outcome = orchestrate(text=text, evaluation=ev)
+        self.assertNotIn("血液科", outcome.selected, outcome.selected)
+
+    def test_fever_with_cytopenia_still_triggers_hematology(self):
+        """修误报不能把真阳性一起修掉：发热 + 三系减少仍必须强烈指向血液科。"""
+        text = "患者：李*，男，35岁。反复发热3周。血常规：三系减少，血小板 43×10^9/L。"
+        ev = evaluate(text)
+        outcome = orchestrate(text=text, evaluation=ev)
+        self.assertIn("血液科", outcome.selected, outcome.selected)
+        self.assertEqual((outcome.primary or {}).department, "血液科") if outcome.primary else None
+
+    def test_a_type_case_does_not_run_mdt(self):
+        """A 型（单科为主）不硬凑 MDT：界面写"暂不需要多学科会诊"，就不能偷偷跑。"""
+        from services.rule_engine import requires_mdt
+        text = "急性上感发热咳嗽 3 天"
+        outcome = orchestrate(text=text, evaluation=evaluate(text))
+        self.assertEqual(outcome.behavior_type, "A")
+        self.assertFalse(requires_mdt(outcome.behavior_type))
+        self.assertEqual((outcome.primary or {}).department, "呼吸内科")
+
+    def test_model_confidence_cannot_steal_the_lead(self):
+        """红线：模型只做增量补充，不能改变**牵头科**。
+
+        真实问题（E2E 用例 C 发现）：血液科与感染科同为 strong 命中时，牵头排序的最后一个键
+        是模型置信度 → 同一病例两次跑出不同牵头科（感染科 / 血液科）。现在模型置信度排到最后，
+        并且用科室域次序保证可复现。
+        """
+        text = ("患者：李*，男，35岁。主诉：反复发热3周，伴乏力、盗汗。脾大。"
+                "血常规：三系减少（白细胞 2.68×10^9/L，血红蛋白 86g/L，血小板 43×10^9/L）。"
+                "铁蛋白升高，纤维蛋白原降低；抗核抗体阳性。诊断不明，需排查噬血细胞综合征。")
+        ev = evaluate(text)
+        # 模型极力抬高感染科的置信度，试图让它牵头
+        model_picks = [
+            {"department": "感染科", "stance": "accept", "confidence": 0.99, "reason": "发热"},
+            {"department": "血液科", "stance": "accept", "confidence": 0.10, "reason": "三系减少"},
+            {"department": "风湿免疫科", "stance": "supplement", "confidence": 0.50, "reason": "ANA 阳性"},
+        ]
+        outcome = orchestrate(text=text, evaluation=ev, model_picks=model_picks)
+        self.assertEqual(outcome.selected[0], "血液科",
+                         f"牵头科不应被模型置信度左右，实际 {outcome.selected}")
+        self.assertEqual((outcome.primary or {}).department, "血液科")
+        # 同一输入重复编排必须给出同一牵头科（可复现）
+        again = orchestrate(text=text, evaluation=evaluate(text), model_picks=model_picks)
+        self.assertEqual((again.primary or {}).department, "血液科")
+
     def test_rule_count_reasonable(self):
         self.assertGreaterEqual(rule_count(), 40)
 
@@ -229,6 +292,30 @@ class TestCarePath(unittest.TestCase):
         path = build_path(outcome=empty, case_id="C000")
         self.assertEqual(path.steps, [])
         self.assertTrue(path.notes)
+
+
+class TestTriagePayloadLabels(unittest.TestCase):
+    """分诊结果要顺带给出**中文标签**：患者端不该看到 `rule-dominant` 这种内部代码。"""
+
+    def test_dict_carries_chinese_labels(self):
+        outcome = orchestrate(text=CASE_B, case_id="C1",
+                              evaluation=evaluate(CASE_B), model_picks=None,
+                              completeness=1.0, unresolved_gaps=0)
+        data = outcome.to_dict()
+        self.assertTrue(data["decision_path_label"], data)
+        self.assertNotEqual(data["decision_path_label"], data["decision_path"])
+        self.assertIn(data["behavior_type"], data["behavior_type_label"], data)
+
+    def test_labels_cover_all_enum_values(self):
+        """枚举里每个取值都要有中文说法（否则前端会显示空标签）。"""
+        from services import report_service
+        from services.triage import TriageOutcome
+        for path in ("rule-dominant", "model-dominant", "mixed", "refused", "degraded"):
+            self.assertIn(path, report_service.DECISION_PATH_LABELS, path)
+        for behavior in ("A", "B", "C", "D", "E"):
+            self.assertIn(behavior, report_service.BEHAVIOR_LABELS, behavior)
+        empty = TriageOutcome(case_id="C1")
+        self.assertTrue(empty.to_dict()["decision_path_label"], "默认取值也要有中文标签")
 
 
 class TestCaseFlowIntegration(unittest.TestCase):

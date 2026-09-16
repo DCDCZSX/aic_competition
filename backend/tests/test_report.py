@@ -227,7 +227,29 @@ class TestFullReport(unittest.TestCase):
     def test_missing_content_becomes_placeholder(self):
         """未生成的段落给说明性占位（诚实），而不是留空导致结构不完整。"""
         report = build_full_report(sample_case())   # 无 mdt
-        self.assertIn("本版本未生成", str(report.sections["各专科 AI 视角"]))
+        # 其他未生成段落走通用占位文案
+        placeholders = [str(v) for v in report.sections.values()]
+        self.assertTrue(any("本版本未生成" in v for v in placeholders), placeholders[:3])
+        # 「各专科 AI 视角」要说清"为什么没有多学科"（单科 / A 型 / 模型未生成）
+        view = str(report.sections["各专科 AI 视角"])
+        self.assertTrue(any(w in view for w in ("未运行多学科会诊", "仅 1 个就医方向",
+                                               "本版本未生成")), view)
+        self.assertEqual(report.missing_sections, [], "占位后不应再有缺失段")
+
+    def test_mdt_placeholder_says_why(self):
+        """单科 / A 型病例的占位要写成"本例以单科为主…"，而不是含糊的"模型未配置"。"""
+        case = sample_case()
+        case["payload"]["triage"] = {"selected": ["呼吸内科", "感染科"], "needs_mdt": False}
+        case["payload"]["mdt"] = {"analyses": [], "aggregation": {"notes": []}}
+        report = build_full_report(case)
+        self.assertIn("未运行多学科会诊", str(report.sections["各专科 AI 视角"]))
+
+    def test_mdt_placeholder_for_single_department(self):
+        case = sample_case()
+        case["payload"]["triage"] = {"selected": ["呼吸内科"], "needs_mdt": False}
+        case["payload"]["mdt"] = {"analyses": [], "aggregation": {"notes": []}}
+        report = build_full_report(case)
+        self.assertIn("仅 1 个就医方向", str(report.sections["各专科 AI 视角"]))
 
     def test_no_imperative_medical_advice(self):
         case = sample_case()

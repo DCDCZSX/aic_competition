@@ -58,8 +58,9 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 
 /* -------------------------------------------------------------- 患者端断言 */
 {
-  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner };');
-  const { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner } = globalThis.__P;
+  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner, sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, renderTriage };');
+  const { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner,
+          sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, renderTriage } = globalThis.__P;
 
   check('患者端主流程为 9 步', STEPS.length === 9, String(STEPS.length));
 
@@ -133,6 +134,86 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('纯字符串输入可直接渲染', renderSectionValue('一句话').includes('一句话'), '');
   check('数字输入用等宽展示', renderSectionValue(0.62).includes('class="mono"'), '');
 
+  /* 完整报告的逐段折叠：默认收起、目录点击自动展开、打印前自动全展开
+     （13 段全展开太长；折叠后不能让打印或无障碍丢内容） */
+  check('段落摘要：数组显示条数', sectionDigest([1, 2, 3]).includes('3 条'), sectionDigest([1, 2, 3]));
+  check('段落摘要：对象显示项数', sectionDigest({ a: 1, b: 2 }).includes('2 项'), sectionDigest({ a: 1, b: 2 }));
+  check('段落摘要：空值显示"空"', sectionDigest(null).includes('空') && sectionDigest([]).includes('空'), '');
+  check('段落摘要：长文本截断加省略号', sectionDigest('这是一段很长的说明文字需要被截断显示').includes('…'),
+    sectionDigest('这是一段很长的说明文字需要被截断显示'));
+
+  const fakeSecs = [
+    { open: false, dataset: { idx: '0' }, addEventListener() { } },
+    { open: true, dataset: { idx: '1' }, addEventListener() { } },
+  ];
+  const realQSA = globalThis.document.querySelectorAll;
+  globalThis.document.querySelectorAll = sel => (String(sel).includes('details.sec') ? fakeSecs : []);
+  S.reportOpen = {};
+  toggleAllReport();
+  check('「展开全部」把所有段落展开', fakeSecs.every(d => d.open), JSON.stringify(fakeSecs.map(d => d.open)));
+  check('展开后按钮文案变为「收起全部」', el('rep-toggle-all').textContent === '收起全部',
+    el('rep-toggle-all').textContent);
+  check('展开状态被记住（用于重渲染）', S.reportOpen['0'] === true && S.reportOpen['1'] === true, '');
+  toggleAllReport();
+  check('再点一次全部收起', fakeSecs.every(d => !d.open), JSON.stringify(fakeSecs.map(d => d.open)));
+  check('收起后按钮文案回到「展开全部」', el('rep-toggle-all').textContent === '展开全部',
+    el('rep-toggle-all').textContent);
+
+  /* 打印：必须打印完整报告，打印后恢复用户原来的折叠状态 */
+  fakeSecs[0].open = true;
+  S.reportOpen = { 0: true };
+  openAllForPrint();
+  check('打印前自动展开全部段落', fakeSecs.every(d => d.open), JSON.stringify(fakeSecs.map(d => d.open)));
+  restoreAfterPrint();
+  check('打印后恢复原来的折叠状态', fakeSecs[0].open === true && fakeSecs[1].open === false,
+    JSON.stringify(fakeSecs.map(d => d.open)));
+  globalThis.document.querySelectorAll = realQSA;
+
+  /* 完整报告 HTML：默认收起 + 目录与段落 id 对应 + 内容仍在 DOM 里 */
+  S.report = { full: { sections: { '病例概况': '一句话概况', '检查与证据': ['条目一', '条目二'] },
+                       section_order: ['病例概况', '检查与证据'], complete: true } };
+  S.reportOpen = {};
+  switchReport('full');
+  const fullHtml = el('report-body').innerHTML;
+  check('完整报告渲染成可折叠段落', (fullHtml.match(/<details class="sec"/g) || []).length === 2,
+    String((fullHtml.match(/<details class="sec"/g) || []).length));
+  check('默认全部收起（没有 open 属性）', !fullHtml.includes(' open>'), '');
+  check('每段都有独立的正文容器', (fullHtml.match(/class="sec-body"/g) || []).length === 2, '');
+  check('收起状态也保留正文（打印/无障碍不丢内容）', fullHtml.includes('一句话概况')
+    && fullHtml.includes('条目一'), '');
+  check('目录链接与段落 id 一一对应',
+    fullHtml.includes('data-sec="sec-0"') && fullHtml.includes('id="sec-0"')
+    && fullHtml.includes('data-sec="sec-1"') && fullHtml.includes('id="sec-1"'), '');
+  check('折叠段带内容摘要提示', (fullHtml.match(/class="sec-hint"/g) || []).length === 2, '');
+  check('有「展开全部」按钮', fullHtml.includes('id="rep-toggle-all"') && fullHtml.includes('展开全部'), '');
+  S.reportOpen = { 1: true };
+  switchReport('full');
+  check('记过的展开状态在重渲染后保留', el('report-body').innerHTML.includes(' open>'), '');
+
+  /* 分诊页（P6）：患者看到的必须是中文，不能是内部代码/内部术语
+     （真实缺陷：`决策路径 rule-dominant`、`（G4 门禁）`、`编排结果（安全约束后）` 都直接怼给患者） */
+  S.triage = {
+    primary: { department: '内分泌科', role: '牵头', signals: ['血糖异常 → 内分泌科'] },
+    secondary: [{ department: '眼科', role: '可咨询', signals: ['视物模糊 → 眼科'] }],
+    selected: ['内分泌科', '眼科'],
+    reliability: { level: '中', reasons: ['部分资料缺失'] },
+    decision_path: 'rule-dominant', decision_path_label: '以规则为主（模型仅作补充）',
+    behavior_type: 'B', behavior_type_label: 'B 型（多病共病）',
+    rule_hits: [{ department: '内分泌科' }], needs_mdt: true, needs_doctor_review: true,
+    conflicts: [], validator_notes: [],
+  };
+  renderTriage();
+  const tri = el('triage-body').innerHTML;
+  check('分诊页显示中文决策方式而不是内部代码',
+    tri.includes('以规则为主（模型仅作补充）') && !tri.includes('rule-dominant'), '');
+  check('分诊页病例类型带中文说明',
+    tri.includes('B 型（多病共病）'), '');
+  check('分诊页不再出现内部术语（编排结果/安全约束/阈值校验/门禁）',
+    !tri.includes('编排结果') && !tri.includes('安全约束') && !tri.includes('阈值校验'), '');
+  check('分诊页仍说明"规则先于模型"的信任逻辑',
+    tri.includes('不能推翻规则已经命中的方向'), '');
+  check('分诊页保留"牵头 ≠ 确诊"的免责说明', tri.includes('牵头方向 ≠ 最终诊断科室'), '');
+
   /* 后台 MDT 进度渲染（两段式）：必须显示"第几科/共几科"，失败时如实说明 */
   const running = mdtProgressHtml({ state: 'running', done: 1, total: 3, current: '眼科' });
   check('进度显示正在分析的科室', running.includes('正在分析 眼科') && running.includes('第 2 科'),
@@ -201,6 +282,28 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('左轨审核进度条 60%', el('rev-bar').style.width === '60%', el('rev-bar').style.width);
   check('左轨审核进度说明', el('rev-note').textContent.includes('人工操作 6 / 10'), el('rev-note').textContent);
   check('右轨审核面板有内容', el('rev-summary').innerHTML.includes('共 10 条'), '');
+
+  /* 发布入口必须"两处都有"：≥1440px 右轨常驻，<1440px 右轨被 CSS 隐藏 → 屏 F 主区兜底
+     （真实缺陷：入口只在右轨里，1366/1280 屏上医生审完发不出去） */
+  D.S.review = {
+    items: [{ item_id: 'IT-1', title: '科室入选：内分泌科', target_type: 'department_selection',
+              ai_content: '建议内分泌科牵头', state: 'awaiting', state_label: '待审',
+              changed_by_doctor: false, reason_hint: '规则命中', evidence_refs: ['S-1:3'] }],
+    published: false, case_state: 'awaiting_doctor', review: {}, doctor_opinions: [],
+    summary: { total: 1, pending: 1, human_touched: 0, by_state: { awaiting: 1 } },
+  };
+  D.renderReview();
+  const railPub = el('rev-publish').innerHTML;
+  const inlinePub = el('rev-publish-inline').innerHTML;
+  check('右轨渲染发布面板', railPub.includes('确认发布审核版') && railPub.includes('录入线下实际意见'), '');
+  check('主区镜像渲染同一份发布面板（窄屏右轨被隐藏时仍可发布）',
+    inlinePub.includes('确认发布审核版') && inlinePub.includes('全部接受并发布'), '');
+  check('仍有待审条目时发布按钮禁用', railPub.includes('disabled') && inlinePub.includes('disabled'), '');
+  check('两处入口 id 不重复（用前缀区分）',
+    railPub.includes('id="rail-op-text"') && inlinePub.includes('id="inline-op-text"')
+    && !inlinePub.includes('id="op-text"'), '');
+  check('镜像里的录入按钮带自己的前缀（不会写进另一处输入框）',
+    inlinePub.includes("submitOpinion('inline')") && railPub.includes("submitOpinion('rail')"), '');
 }
 
 /* ------------------------------------------------------------------ 输出 */

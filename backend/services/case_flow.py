@@ -36,7 +36,7 @@ from services import report_service  # noqa: E402
 from services import review_service  # noqa: E402
 from services import task_service  # noqa: E402
 from services import update_service  # noqa: E402
-from services.rule_engine import evaluate as evaluate_rules  # noqa: E402
+from services.rule_engine import evaluate as evaluate_rules, requires_mdt  # noqa: E402
 from services.s2_analyst import analyze as s2_analyze  # noqa: E402
 from services.store import Store  # noqa: E402
 from services.triage import orchestrate  # noqa: E402
@@ -155,6 +155,25 @@ class CaseFlow:
         `on_department(dept, done, total)` 上报"正在分析第几科"，供接口层显示进度。
         """
         departments = outcome.selected[:MAX_MDT_DEPARTMENTS]
+        skip_reason = ""
+        if not departments:
+            skip_reason = "没有明确的就医方向，未运行多学科会诊"
+        elif len(departments) < 2:
+            skip_reason = "仅 1 个就医方向，无需多学科会诊"
+        elif not requires_mdt(getattr(outcome, "behavior_type", "")):
+            # A 型（单科为主）不硬凑 MDT：界面上写"暂不需要多学科会诊"，就不能偷偷跑
+            skip_reason = "本例以单科为主（A 型），未运行多学科会诊"
+        if skip_reason:
+            return {
+                "departments": departments,
+                "analyses": [],
+                "aggregation": {"consensus": [], "disagreements": [], "uncertainties": [],
+                                "open_questions": [], "notes": [skip_reason]},
+                "card_count": 0,
+                "challenge": {"triggered": False, "rounds": [], "notes": []},
+                "failed_departments": [], "repaired_departments": [], "notices": [],
+                "skipped_reason": skip_reason,
+            }
         analyses = []
         for index, dep in enumerate(departments, start=1):
             if on_department:
@@ -167,6 +186,11 @@ class CaseFlow:
 
         cards = [a.card for a in analyses if a.card is not None]
         aggregation = aggregate(cards, rejections=rejections or [])
+        # 入选方向可能多于 MDT 上限（成本控制）→ 如实说明"这次只深挖了前 N 个"
+        if len(outcome.selected) > len(departments):
+            aggregation.notes.append(
+                f"本次多学科分析覆盖优先度最高的 {len(departments)} 个方向"
+                f"（就医方向共 {len(outcome.selected)} 个，其余方向以分诊与路径结果为准）")
         failed = [a.department for a in analyses if a.card is None]
         if failed:
             aggregation.notes.append(f"以下专科分析未完成（已跳过，不阻塞）：{'、'.join(failed)}")
@@ -572,7 +596,7 @@ class CaseFlow:
         "profile": ("结构化病例画像", "模型增强失败", "模型增强输出格式异常"),
         "triage": ("S2 受限发言", "就医方向（S2 受限发言"),
         "mdt": ("专科分析未完成", "多学科分析有", "意见卡", "仅 1 个就医方向",
-                "多学科独立意见", "无需多学科"),
+                "未运行多学科会诊", "多学科独立意见", "无需多学科"),
     }
 
     @staticmethod
@@ -757,6 +781,7 @@ class CaseFlow:
             selected = list(triage.get("selected") or [])
             if len(selected) < 2:
                 # 按需：只有一个就医方向 → 多学科会诊没有意义，如实标注"已跳过"
+                # （A 型但方向 ≥2 的情况由 _run_mdt 按 requires_mdt 判定，口径见下）
                 def mutate(status: Dict[str, Any]) -> None:
                     status["mdt"] = {"state": "skipped", "done": 0, "total": 0, "current": "",
                                      "step": "仅 1 个就医方向，无需多学科会诊", "failed": []}
@@ -784,6 +809,17 @@ class CaseFlow:
 
             mdt = self._run_mdt(text=text, outcome=outcome, profile=pl.get("profile"),
                                 case_id=case_id, on_department=on_department)
+            if isinstance(mdt, dict) and mdt.get("skipped_reason"):
+                # A 型（单科为主）：不硬凑 MDT，相位如实记为 skipped + 写明原因
+                reason = str(mdt["skipped_reason"])
+                self._patch_payload(case_id, mdt=mdt)
+                self._append_analysis_warning(case_id, reason)
+
+                def mutate_skip(status: Dict[str, Any]) -> None:
+                    status["mdt"] = {"state": "skipped", "done": 0, "total": len(selected),
+                                     "current": "", "step": reason, "failed": []}
+                self._update_analysis(case_id, mutate_skip)
+                return
             if isinstance(mdt, dict):
                 notes = list(((mdt.get("aggregation") or {}).get("notes")) or [])
                 for note in notes:
