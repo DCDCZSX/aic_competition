@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schemas import Reliability, reliability_level  # noqa: E402
 from services.department_domain import (  # noqa: E402
+    ALL_NAMES,
     can_be_primary,
     group_of,
     is_auxiliary,
@@ -103,9 +104,14 @@ class TriageOutcome:
         return names
 
     def to_dict(self) -> Dict[str, Any]:
+        # 顺带给前端**中文标签**：患者端不该看到 `rule-dominant` 这类内部代码
+        # （局部导入以避免引擎层与展示层在模块级互相依赖）
+        from services import report_service  # noqa: PLC0415
+
         return {
             "case_id": self.case_id,
             "behavior_type": self.behavior_type,
+            "behavior_type_label": report_service.BEHAVIOR_LABELS.get(self.behavior_type, ""),
             "needs_mdt": self.needs_mdt,
             "primary": self.primary.to_dict() if self.primary else None,
             "secondary": [d.to_dict() for d in self.secondary],
@@ -113,6 +119,7 @@ class TriageOutcome:
             "reliability": ({"level": self.reliability.level, "reasons": list(self.reliability.reasons)}
                             if self.reliability else None),
             "decision_path": self.decision_path,
+            "decision_path_label": report_service.DECISION_PATH_LABELS.get(self.decision_path, ""),
             "conflicts": list(self.conflicts),
             "needs_doctor_review": self.needs_doctor_review,
             "validator_notes": list(self.validator_notes),
@@ -328,7 +335,15 @@ def orchestrate(
 
 def _pick_primary(picks: Dict[str, DepartmentPick], behavior: str,
                   evaluation: Optional[RuleEvaluation] = None) -> Optional[str]:
-    """选择牵头科：临床科优先；D 型要求外科；同分时看科室牵头倾向。"""
+    """选择牵头科：临床科优先；D 型要求外科；同分时按**规则侧**信息确定性定序。
+
+    排序键（严格从左到右）：
+        规则分 → 规则证据条数 → 科室牵头倾向 → 科室域次序（稳定） → 模型置信度
+
+    为什么把模型置信度放到**最后**：两个科室同为 strong 命中时，若让模型置信度决定谁牵头，
+    牵头科就会随模型每次输出的随机权重漂移（实测同一病例两次跑出不同牵头科），
+    也与红线"规则结果先于模型、模型只做增量补充"不符。科室域次序保证结果**可复现**。
+    """
     clinical = [d for d in picks if can_be_primary(d)]
     if not clinical:
         return None
@@ -341,8 +356,14 @@ def _pick_primary(picks: Dict[str, DepartmentPick], behavior: str,
     def lead_of(dep: str) -> int:
         return evaluation.lead_score(dep) if evaluation is not None else 1
 
-    # 规则分 → 牵头倾向 → 模型置信度
-    clinical.sort(key=lambda d: (-picks[d].score, -lead_of(d), -(picks[d].confidence or 0)))
+    def domain_order(dep: str) -> int:
+        try:
+            return ALL_NAMES.index(dep)
+        except (ValueError, AttributeError):
+            return 999
+
+    clinical.sort(key=lambda d: (-picks[d].score, -len(picks[d].signals), -lead_of(d),
+                                 domain_order(d), -(picks[d].confidence or 0)))
     return clinical[0]
 
 

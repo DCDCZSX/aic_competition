@@ -432,6 +432,13 @@ def build_full_report(case: Dict[str, Any]) -> Report:
     report.sections = sections
     # 必填段完整率 100%：未能生成的段落给出**说明性占位**（诚实标注未生成本版），
     # 而不是留空 —— 否则"结构完整性"验收线无法达成。
+    if not sections.get("各专科 AI 视角"):
+        # 让占位文案说清"为什么没有多学科这一段"：单科 / A 型本来就不该硬凑 MDT
+        triage = payload.get("triage") or {}
+        if len(triage.get("selected") or []) < 2:
+            sections["各专科 AI 视角"] = "（仅 1 个就医方向，无需多学科会诊）"
+        elif triage and not triage.get("needs_mdt"):
+            sections["各专科 AI 视角"] = "（本例以单科为主，未运行多学科会诊）"
     report.missing_sections = []
     for name in REQUIRED_SECTIONS:
         value = sections.get(name)

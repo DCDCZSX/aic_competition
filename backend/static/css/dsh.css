@@ -7,25 +7,12 @@
    ========================================================================== */
 
 /* ------------------------------- 1. Token ------------------------------- */
+@import url("/static/css/tokens.css");
+
+/* 设计 token 见 tokens.css（单一来源）；下面只列**工作台专用**与**页面覆盖**的 token */
 :root{
-  /* 中性（暖调，禁止冷蓝灰） */
-  --gray-000:#fff;      --gray-050:#faf9f5;  --gray-100:#f5f4ed;
-  --gray-150:#f0eee6;   --gray-200:#e8e6dc;  --gray-250:#dedcd1;
-  --gray-300:#d1cfc5;   --gray-400:#b0aea5;  --gray-500:#87867f;
-  --gray-600:#5e5d59;   --gray-650:#4d4c48;  --gray-700:#3d3d3a;
-  --gray-750:#30302e;   --gray-800:#262624;  --gray-950:#141413;
-
-  /* 品牌与点缀 */
-  --clay:#d97757;       --clay-hover:#c6613f; --clay-dark:#c46849;
-  --oat:#e3dacc;        --olive:#788c5d;      --cactus:#bcd1ca;
-
-  /* 语义状态色（沿用系统既有语义，全站一致） */
-  --ok:#2E7D4F;         --warn:#B7791F;      --danger:#B3402E;   --info:#5B4B8A;
-  --focus-ring:#3898EC;                       /* 全站唯一冷色，仅无障碍焦点环 */
-
-  /* 兼容别名（旧页面用过的变量名，值已切到暖色 token） */
+  /* 工作台专用（首页用不到：布局轨道、读数宽度、语义别名） */
   --base:var(--gray-050);
-  --surface:var(--gray-000);
   --line:var(--gray-150);
   --ink:var(--gray-950);
   --ink2:var(--gray-600);
@@ -34,43 +21,28 @@
   --accent-2:var(--clay);
   --radius:12px;
   --shadow:0 1px 3px rgba(20,20,19,.05);
-
-  /* 间距 / 圆角 / 阴影 */
-  --sp-2:2px;  --sp-4:4px;  --sp-6:6px;  --sp-8:8px;  --sp-12:12px;
-  --sp-16:16px;--sp-20:20px;--sp-24:24px;--sp-32:32px;--sp-40:40px;
-  --sp-48:48px;--sp-64:64px;--sp-80:80px;--sp-96:96px;
-  --br-6:6px; --br-8:8px; --br-12:12px; --br-16:16px; --br-24:24px; --br-32:32px;
+  --sp-2:2px;
+  --sp-6:6px;
+  --sp-80:80px;
+  --br-6:6px;
+  --text-width-narrow:24ch;
+  --text-width-title:45ch;
+  --text-width-body:68ch;
+  --text-width-prose:80ch;
+  --rail-left:240px;
+  --rail-right:300px;
+  --page-pad:var(--sp-24);
+  /* 与首页同名但取值不同（工作台更紧凑的字号/导航高度/阴影色） */
+  --surface:var(--gray-000);
   --shadow-sm:0 2px 8px rgba(20,20,19,.04);
   --shadow-md:0 4px 20px rgba(20,20,19,.04);
   --shadow-lg:0 4px 16px rgba(20,20,19,.10);
   --whisper:0 4px 24px rgba(20,20,19,.05);
-  --ring:0 0 0 1px var(--gray-300);
-  --ease-out-power2:cubic-bezier(.25,1,.5,1);
-  --ease-out-quart:cubic-bezier(.165,.84,.44,1);
-
-  /* 版式尺度（clamp：1440/1200/992/768/390 四档均成立） */
-  --display-1:clamp(36px,26px + 2.7vw,68px);
   --display-2:clamp(30px,22px + 2.2vw,52px);
   --headline-1:clamp(26px,22px + 1.5vw,44px);
   --headline-3:clamp(22px,20px + .7vw,32px);
   --headline-5:clamp(18px,17px + .45vw,23px);
-  --body-1:clamp(17px,16.6px + .1vw,20px);
-  --body-2:16px; --body-3:15px; --caption:13px; --label:12px; --micro:11px;
-
-  /* 字体：衬线标题 + 无衬线 UI（零下载） */
-  --font-serif:Georgia,"Songti SC","Noto Serif CJK SC","Source Han Serif SC",SimSun,serif;
-  --font-sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,-apple-system,sans-serif;
-  --font-mono:ui-monospace,"JetBrains Mono",Consolas,"Courier New",monospace;
-  --font-display:var(--font-serif);   /* 一处开关：改成 --font-sans 即换黑体标题 */
-
-  /* 正文可读宽度（外壳铺满、正文收窄 —— 这是"宽而不散"的关键） */
-  --text-width-narrow:24ch; --text-width-title:45ch;
-  --text-width-body:68ch;   --text-width-prose:80ch;
-
-  /* 应用骨架 */
   --nav-h:64px;
-  --rail-left:240px; --rail-right:300px;
-  --page-pad:var(--sp-24);
 }
 
 /* ------------------------------- 2. 基础 ------------------------------- */
@@ -147,6 +119,12 @@ input,textarea,select{font-family:inherit;font-size:var(--body-3);}
 }
 .rail-right{display:none;}                      /* <1440px 收回，内容在主区顶部呈现 */
 @media (min-width:1440px){.rail-right{display:flex;}}
+/* 右轨里的**关键操作**必须有主区镜像：右轨收起时"发布审核版 / 录入线下意见"仍要能点到
+   （真实缺陷：1366/1280 屏上医生发不出去，因为这些入口原来只写在右轨里） */
+.publish-inline{margin-top:var(--sp-16);}
+@media (min-width:1440px){.publish-inline{display:none;}}
+/* 更窄的屏（≤640px）：收紧页面内边距，避免正文被挤成窄条 */
+@media (max-width:640px){:root{--page-pad:16px;}}
 .work{min-width:0;display:flex;flex-direction:column;gap:var(--sp-16);}
 
 /* 3.3 左轨：流程导航 */
@@ -313,11 +291,30 @@ input:focus,textarea:focus,select:focus{border-color:var(--gray-300);}
 .toc a:hover{color:var(--ink);text-decoration:none;}
 .toc a.on{color:var(--accent);font-weight:500;}
 .doc-body{max-width:var(--text-width-prose);}
-.doc-body h2{margin-top:var(--sp-32);}
-.doc-body h3{margin-top:var(--sp-24);}
 .doc-body p,.doc-body li{font-size:var(--body-3);color:var(--ink2);line-height:1.75;}
 .doc-body ul{margin:var(--sp-8) 0;}
 .doc-body li{margin-bottom:6px;}
+/* 4.8.1 逐段折叠：完整报告 13 段，默认收起（目录点击会自动展开对应段落，打印时自动全展开） */
+.doc-tools{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-12);
+           margin-bottom:var(--sp-12);}
+details.sec{border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);
+            margin-bottom:var(--sp-8);overflow:hidden;}
+details.sec > summary{display:flex;align-items:center;gap:var(--sp-12);
+            padding:var(--sp-12) var(--sp-16);cursor:pointer;list-style:none;
+            font-family:var(--font-display);font-size:16px;color:var(--ink);}
+details.sec > summary::-webkit-details-marker{display:none;}
+details.sec > summary:hover{background:var(--gray-050);}
+details.sec[open] > summary{border-bottom:1px solid var(--line);}
+details.sec > summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
+.sec-n{font-family:var(--font-mono);font-size:var(--micro);color:var(--ink3);min-width:18px;}
+.sec-t{flex:1;min-width:0;}
+.sec-hint{font-family:var(--font-sans);font-size:var(--micro);color:var(--ink3);
+          font-weight:400;white-space:nowrap;}
+.chev{width:8px;height:8px;flex:none;margin-left:2px;
+      border-right:1.5px solid var(--ink3);border-bottom:1.5px solid var(--ink3);
+      transform:rotate(45deg);transition:transform .16s ease;}
+details.sec[open] .chev{transform:rotate(-135deg);}
+.sec-body{padding:var(--sp-12) var(--sp-16) var(--sp-16);}
 
 /* 4.9 三栏工作台（MDT / 分诊依据） */
 .mdt{display:grid;gap:var(--sp-16);grid-template-columns:1fr;}
@@ -445,6 +442,12 @@ details summary{cursor:pointer;color:var(--accent);font-size:var(--caption);marg
   details > summary{list-style:none;font-weight:600;cursor:default;color:var(--ink);}
   details > summary::-webkit-details-marker{display:none;}
   details > div{display:block !important;}
+  /* 打印时折叠全部展开（JS beforeprint 兜底），且不打印折叠控件 */
+  details.sec{border:0;border-radius:0;background:none;margin:0 0 var(--sp-12);overflow:visible;}
+  details.sec > summary{padding:0;border-bottom:0 !important;font-size:18px;}
+  details.sec > summary:hover{background:none;}
+  .sec-body{padding:0;}
+  .sec-hint,.chev,.doc-tools{display:none !important;}
   .doc{display:block;}
   .banner{border-width:1px;}
   a[href]:after{content:"";}

@@ -199,6 +199,9 @@
         <h2>报告审核</h2>
         <div class="banner gray" id="pub-badge">AI 生成 · 尚未经医生审核</div>
         <div id="rev-body"></div>
+        <!-- 发布入口的**主区镜像**：<1440px 时右轨被 dsh.css 收起（.rail-right），
+             发布与"录入线下意见"不能只活在右轨里，否则 1366/1280 屏上医生发不出去 -->
+        <div id="rev-publish-inline" class="publish-inline"></div>
       </section>
 
       <section id="s-history" class="card hide">
@@ -644,6 +647,7 @@ function renderReview(){
   if(!items.length){
     $('rev-body').innerHTML = '<div class="banner warn">该病例暂无决策条目（需先完成分诊与路径生成）。</div>';
     $('rev-publish').innerHTML = '';
+    const emptyInline = $('rev-publish-inline'); if(emptyInline) emptyInline.innerHTML = '';
     return;
   }
   const typeLabel = {'department_selection':'科室入选','path_step':'路径步骤','consensus_item':'共识/分歧','patient_advice':'患者建议'};
@@ -678,22 +682,33 @@ function renderReview(){
     </div>`).join('');
 
   const canPublish = sum.pending===0 && sum.total>0;
-  $('rev-publish').innerHTML = `
+  /* 同一份面板渲染到两处：右轨（≥1440px 常驻）+ 屏 F 主区（窄屏时右轨被隐藏）。
+     id 用前缀区分，避免重复 id 导致 getElementById 取错元素。 */
+  $('rev-publish').innerHTML = publishPanelHtml(sum, canPublish, 'rail');
+  const inlineBox = $('rev-publish-inline');
+  if(inlineBox) inlineBox.innerHTML = publishPanelHtml(sum, canPublish, 'inline');
+}
+
+/* 发布审核版 + 录入线下意见（两处入口共用同一份 HTML 与同一套接口） */
+function publishPanelHtml(sum, canPublish, pfx){
+  sum = sum || {};
+  return `
     <div class="card" style="margin-top:6px;">
       <h3 style="margin-top:0;">发布审核版报告</h3>
+      <div class="tiny">审核进度：已确认 ${(sum.by_state&&sum.by_state.confirmed)||0}　驳回 ${(sum.by_state&&sum.by_state.rejected)||0}　暂不确定 ${(sum.by_state&&sum.by_state.uncertain)||0}　（人工痕迹 ${sum.human_touched||0}/${sum.total||0}）</div>
       <div class="tiny">规则：仍有"待审"条目时不能发布；可点「全部接受并发布」（会为每条留一条审核记录，不是静默通过）。</div>
       <div class="actions">
-        <button class="mini" onclick="publish(false)" ${canPublish?'':'disabled'}>确认发布审核版（${sum.pending} 条待审）</button>
+        <button class="mini" onclick="publish(false)" ${canPublish?'':'disabled'}>确认发布审核版（${sum.pending||0} 条待审）</button>
         <button class="primary mini" onclick="publish(true)" ${sum.total?'':'disabled'}>全部接受并发布</button>
       </div>
       <h3>录入线下实际意见（就诊后闭环）</h3>
       <div class="tiny">由医生端录入线下真实医生意见（来源=医生上传），用于生成「AI 建议 vs 医生意见」对照；患者端不承担"替医生写意见"。</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
-        <input id="op-dept" placeholder="科室（如 眼科）" style="flex:0 0 180px;">
-        <input id="op-text" placeholder="线下医生意见原文" style="flex:1;min-width:220px;">
-        <button class="mini" onclick="submitOpinion()">录入</button>
+        <input id="${pfx}-op-dept" placeholder="科室（如 眼科）" style="flex:0 0 180px;">
+        <input id="${pfx}-op-text" placeholder="线下医生意见原文" style="flex:1;min-width:220px;">
+        <button class="mini" onclick="submitOpinion('${pfx}')">录入</button>
       </div>
-      <div id="op-msg"></div>
+      <div id="${pfx}-op-msg"></div>
     </div>`;
 }
 
@@ -737,13 +752,15 @@ async function publish(acceptAll){
   go('review');
   alert('已发布审核版：病例状态 → 医生已确认，报告版本 v'+r.data.report_version+'，角标已转为"已审核"。');
 }
-async function submitOpinion(){
-  const dept = $('op-dept').value.trim(), text = $('op-text').value.trim();
-  if(!text){ msg('op-msg','请填写意见内容'); return; }
+async function submitOpinion(pfx){
+  pfx = pfx || 'rail';
+  const dept = String(($(pfx+'-op-dept')||{}).value||'').trim();
+  const text = String(($(pfx+'-op-text')||{}).value||'').trim();
+  if(!text){ msg(pfx+'-op-msg','请填写意见内容'); return; }
   const r = await api('/api/v2/case/'+S.caseId+'/updates', {method:'POST',
     body:JSON.stringify({kind:'医生意见', content:text, source:'医生上传', department:dept})});
-  if(r.status!==200 || !r.data.ok){ msg('op-msg', r.data.error||'录入失败'); return; }
-  msg('op-msg','已录入线下医生意见，并已生成「AI 建议 vs 医生意见」对照与变化摘要','ok');
+  if(r.status!==200 || !r.data.ok){ msg(pfx+'-op-msg', r.data.error||'录入失败'); return; }
+  msg(pfx+'-op-msg','已录入线下医生意见，并已生成「AI 建议 vs 医生意见」对照与变化摘要','ok');
   await openCase(S.caseId); go('review');
 }
 async function refreshHeader(){

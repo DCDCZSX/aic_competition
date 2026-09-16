@@ -237,16 +237,26 @@ def main():
     check("医生端可查分析明细（含 mdt.failed）",
           r.status_code == 200 and isinstance((ana.get("mdt") or {}).get("failed"), list),
           json.dumps(ana.get("mdt"), ensure_ascii=False)[:160])
-    check("部分未完成会进入待补齐（不会被当成已完成跳过）",
-          all(c.get("analysis_state") != "done" for c in rows
-              if c.get("case_id") in (body.get("started") or [])) if body.get("started") else True,
-          json.dumps(body, ensure_ascii=False)[:160])
+    # 逐科失败口径：医生端要能看到"哪一科没跑出来"，并且这类病例必须能被批处理捡起来。
+    # 注意：排入的病例**不一定** analysis_state != done —— 老病例就是"相位都算完成、
+    # 但里面有 unavailable 的科室"，所以这里断言的不变量是"确实还有没分析完的东西"。
+    if body.get("started"):
+        cid = body["started"][0]
+        r2 = doctor.get(f"{BASE}/api/v2/case/{cid}/analysis", timeout=60)
+        st2 = (r2.json() or {}).get("analysis") or {}
+        pending = [p for p, v in (st2.get("phases") or {}).items()
+                   if (v or {}).get("state") != "done"]
+        failed_depts = (st2.get("mdt") or {}).get("failed") or []
+        check("排入的病例确实还没分析完（有未完成相位或未完成科室）",
+              bool(pending) or bool(failed_depts),
+              json.dumps({"pending": pending, "failed": failed_depts}, ensure_ascii=False))
 
     print("\n[13] 页面可达性")
     r = requests.get(f"{BASE}/doctor", timeout=30)
     check("/doctor 200", r.status_code == 200, str(r.status_code))
     for token in ("s-list", "s-overview", "s-triage", "s-evidence", "s-mdt", "s-review", "s-history",
-                  "playMdt", "submitOpinion", "publish(", "openModal", "analyzePending", "analysisBadge"):
+                  "playMdt", "submitOpinion", "publish(", "openModal", "analyzePending", "analysisBadge",
+                  "rev-publish-inline", "publishPanelHtml"):
         check(f"页面含 {token}", token in r.text)
 
     print(f"\n===== 结果：{ok_count} 通过 / {fail_count} 失败 =====")

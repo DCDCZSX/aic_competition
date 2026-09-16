@@ -72,8 +72,19 @@ class Rule:
     weight: str                           # strong / medium / weak
     keywords: Tuple[str, ...] = ()        # 任一命中
     all_of: Tuple[str, ...] = ()          # 组合规则：需全部出现
+    any_of: Tuple[str, ...] = ()          # 与 all_of 同时成立：这一组里**至少**命中一个
     signal: str = ""                      # 命中后展示给用户的信号描述
     pattern: str = ""                     # 可选正则（优先级高于 keywords）
+
+    @staticmethod
+    def _present(text: str, keyword: str) -> bool:
+        """出现且不处于否定语境（"无发热"不算命中）。"""
+        idx = text.find(keyword)
+        while idx >= 0:
+            if not is_negated(text, idx):
+                return True
+            idx = text.find(keyword, idx + 1)
+        return False
 
     def match(self, text: str) -> Optional[str]:
         """命中则返回命中的信号文本，否则 None（会跳过否定语境，如"无发热"）。"""
@@ -82,19 +93,26 @@ class Rule:
                 if not is_negated(text, m.start()):
                     return m.group(0)
             return None
-        if self.all_of:
-            # 组合规则：任一子词处于否定语境则不成立
-            for kw in self.all_of:
-                idx = text.find(kw)
-                if idx < 0 or is_negated(text, idx):
+        if self.all_of or self.any_of:
+            hit: List[str] = []
+            if self.all_of:
+                for kw in self.all_of:
+                    if not self._present(text, kw):
+                        return None
+                    hit.append(kw)
+            if self.any_of:
+                # 「至少命中一个」：用于表达"发热 **且** 血象异常"这类多条件规则，
+                # 避免只因为文中出现了某个检查名（如"血常规"）就误命中
+                for kw in self.any_of:
+                    if self._present(text, kw):
+                        hit.append(kw)
+                        break
+                else:
                     return None
-            return " + ".join(self.all_of)
+            return " + ".join(hit)
         for kw in self.keywords:
-            start = text.find(kw)
-            while start >= 0:
-                if not is_negated(text, start):
-                    return kw
-                start = text.find(kw, start + 1)
+            if self._present(text, kw):
+                return kw
         return None
 
 
@@ -109,6 +127,10 @@ RULES: Tuple[Rule, ...] = (
     Rule("cardio_palpitation", "心血管内科", "medium", ("心悸", "心慌", "心律不齐", "房颤", "心房颤动"),
          signal="心悸/心律失常 → 心血管内科"),
     Rule("cardio_htn", "心血管内科", "medium", ("高血压", "血压高"), signal="高血压 → 心血管内科"),
+    # 评测 v2（SB-C4）：真实文本常只写"血压 176/108mmHg"这个数值，不写"高血压"
+    Rule("cardio_htn_value", "心血管内科", "medium",
+         pattern=r"血压[^0-9]{0,8}(?:1[4-9]\d|2\d\d)\s*/\s*\d{2,3}",
+         signal="血压偏高（实测值 ≥140mmHg）→ 心血管内科"),
     Rule("cardio_hf", "心血管内科", "medium", ("心衰", "心力衰竭", "下肢浮肿", "端坐呼吸"),
          signal="心衰表现 → 心血管内科"),
     Rule("cardio_ecg", "心血管内科", "weak", ("心电图", "心脏彩超", "冠脉", "心超", "射血分数"),
@@ -137,6 +159,15 @@ RULES: Tuple[Rule, ...] = (
          signal="肝功能/肝病 → 消化内科"),
     Rule("gi_bleed", "消化内科", "medium", ("黑便", "呕血", "便血"), signal="消化道出血 → 消化内科"),
 
+    # ===== 泌尿外科（评测 v2：SB-A6 尿频尿急尿痛原本一条规则都没命中）=====
+    Rule("uro_lower", "泌尿外科", "strong",
+         ("尿频", "尿急", "尿痛", "尿路感染", "膀胱炎", "排尿困难", "尿潴留", "血尿"),
+         signal="下尿路症状 → 泌尿外科"),
+    Rule("uro_stone", "泌尿外科", "medium", ("肾结石", "输尿管结石", "泌尿系结石", "肾绞痛"),
+         signal="泌尿系结石 → 泌尿外科"),
+    Rule("uro_prostate", "泌尿外科", "medium", ("前列腺", "前列腺增生", "前列腺特异抗原"),
+         signal="前列腺相关 → 泌尿外科"),
+
     # ===== 肾内科 =====
     Rule("neph_proteinuria", "肾内科", "strong", ("尿蛋白", "蛋白尿", "血尿", "肌酐升高", "肾功能不全", "尿少", "水肿"),
          signal="蛋白尿/肾功能异常 → 肾内科"),
@@ -154,10 +185,24 @@ RULES: Tuple[Rule, ...] = (
     # ===== 血液科 =====
     Rule("hema_cytopenia", "血液科", "strong", ("贫血", "三系减少", "白细胞减少", "血小板减少", "血红蛋白低", "血象异常"),
          signal="血细胞异常 → 血液科"),
-    Rule("hema_fever_unknown", "血液科", "medium", all_of=("发热", "血常规"),
+    Rule("hema_fever_unknown", "血液科", "medium", all_of=("发热",),
+         any_of=("三系减少", "白细胞减少", "血小板减少", "血红蛋白低", "血象异常", "贫血", "脾大", "铁蛋白"),
          signal="发热 + 血象异常 → 血液科（需排查血液系统疾病）"),
     Rule("hema_hlh", "血液科", "strong", ("噬血", "噬血细胞综合征", "淋巴瘤", "白血病"),
          signal="血液系统重症 → 血液科"),
+    # ---- 评测 v2 补的"看数值不看词"规则 ----
+    # 真实病历写的是"血红蛋白 92g/L""血小板 43×10^9/L"，而不是"贫血""血小板减少"，
+    # 原来只认后者 → 漏诊（SB-A7 / SB-B5 都漏了血液科）。阈值按成人常用下限的保守口径：
+    # 血红蛋白 <120 g/L（未分性别）、血小板 <100×10^9/L。
+    Rule("hema_anemia_value", "血液科", "medium",
+         pattern=r"血红蛋白[^0-9]{0,6}(?:[5-9]\d|1[01]\d)\s*(?:g/L|g/l|克/升)",
+         signal="血红蛋白偏低（实测值）→ 血液科"),
+    Rule("hema_plt_value", "血液科", "medium",
+         pattern=r"血小板[^0-9]{0,6}(?:[1-9]?\d)\s*[×xX*]",
+         signal="血小板偏低（实测值）→ 血液科"),
+    Rule("hema_lymphnode", "血液科", "medium",
+         ("淋巴结肿大", "淋巴结增大", "颈部淋巴结", "腋窝淋巴结", "腹股沟淋巴结"),
+         signal="淋巴结肿大 → 血液科（需排查淋巴瘤等）"),
 
     # ===== 风湿免疫科（评测 v0：原关键词表完全缺失）=====
     Rule("rheum_autoimmune", "风湿免疫科", "strong",
@@ -170,7 +215,7 @@ RULES: Tuple[Rule, ...] = (
          all_of=("发热", "查因"),
          signal="发热查因 → 风湿免疫科（需排查自身免疫病）"),
     Rule("rheum_cytopenia", "风湿免疫科", "medium",
-         all_of=("血常规", "减少"),
+         any_of=("三系减少", "白细胞减少", "血小板减少", "血红蛋白低", "血象异常"),
          signal="血象减少 → 风湿免疫科（需排查免疫相关血细胞减少）"),
 
     # ===== 感染科 =====
@@ -198,7 +243,8 @@ RULES: Tuple[Rule, ...] = (
     # ===== 外科系 =====
     Rule("gs_abdomen", "普通外科", "medium", ("阑尾炎", "胆囊", "疝", "甲状腺结节手术", "乳腺", "肛肠", "痔"),
          signal="普外相关疾病 → 普通外科"),
-    Rule("hepatobiliary", "肝胆外科", "medium", ("胆结石", "胆管", "肝占位", "胰腺", "肝胆"),
+    Rule("hepatobiliary", "肝胆外科", "medium",
+         ("胆结石", "胆囊", "胆道", "胆管", "肝占位", "胰腺", "肝胆"),
          signal="肝胆胰疾病 → 肝胆外科"),
     Rule("ortho_bone", "骨科", "medium", ("骨折", "腰痛", "颈椎", "关节置换", "骨质疏松", "腰椎间盘"),
          signal="骨关节问题 → 骨科"),
@@ -235,7 +281,11 @@ RULES: Tuple[Rule, ...] = (
     Rule("ent", "耳鼻喉科", "medium", ("耳鸣", "听力下降", "鼻塞", "咽痛", "扁桃体", "声音嘶哑", "打鼾",
                                       "鼻出血", "鼻咽", "流鼻血", "喉部", "声带", "耳痛", "鼻窦"),
          signal="耳鼻喉症状/出血 → 耳鼻喉科"),
-    Rule("psych", "精神科", "medium", ("焦虑", "抑郁", "情绪低落", "失眠严重", "精神", "幻觉"),
+    Rule("psych", "精神科", "medium",
+         ("焦虑", "抑郁", "情绪低落", "情绪不稳", "失眠严重", "精神异常", "精神症状",
+          "幻觉", "妄想", "躯体化"),
+         # 不再用裸词"精神"：真实文本里"精神可/精神好/精神佳"是**查体正常描述**，
+         # 会被误判成精神科问题（评测 v2 的 SB-A4 就是这么误报的）
          signal="精神心理问题 → 精神科"),
     Rule("rehab", "康复医学科", "strong",
          ("康复", "功能锻炼", "理疗", "吞咽训练", "运动疗法", "偏瘫康复", "术后康复"),
@@ -253,6 +303,9 @@ RULES: Tuple[Rule, ...] = (
     Rule("obgyn", "妇产科", "medium", ("月经", "阴道出血", "妊娠", "怀孕", "子宫", "卵巢", "妇科", "孕期"),
          signal="妇科/妊娠相关 → 妇产科"),
     Rule("pediatric", "儿科", "medium", ("儿童", "患儿", "小儿", "婴儿", "婴幼儿"), signal="儿童患者 → 儿科"),
+    # 评测 v2（SB-A4）：文本常写"男，4岁"而不是"儿童"；用负向后顾避免把"58岁"里的"8岁"当成儿童
+    Rule("pediatric_age", "儿科", "medium", pattern=r"(?<![\d])(?:[1-9]|1[0-4])\s*岁",
+         signal="14 岁以下患者 → 儿科"),
     Rule("neonatal", "新生儿科", "medium", ("新生儿", "早产儿"), signal="新生儿 → 新生儿科"),
     Rule("tcm", "中医科", "weak", ("中医", "中药调理", "体质"), signal="中医调理 → 中医科"),
     Rule("acupuncture", "针灸科", "weak", ("针灸",), signal="针灸 → 针灸科"),
@@ -389,7 +442,8 @@ def audit_rules() -> List[Dict[str, object]]:
     """规则审计清单（答辩/文档用）。"""
     return [
         {"rule_id": r.rule_id, "department": r.department, "weight": r.weight,
-         "keywords": list(r.keywords) + list(r.all_of) + ([r.pattern] if r.pattern else []),
+         "keywords": (list(r.keywords) + list(r.all_of) + list(r.any_of)
+                      + ([r.pattern] if r.pattern else [])),
          "signal": r.signal}
         for r in RULES
     ]

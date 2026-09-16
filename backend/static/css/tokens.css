@@ -1,0 +1,68 @@
+/* ===========================================================================
+   设计 token（单一来源）—— 首页与两个工作台共用
+   ---------------------------------------------------------------------------
+   为什么单独成文件：首页原先自带一份 :root（66 个 token 与这里重复），
+   改一个颜色要改两处、还容易漂移。现在三页都从这里取，页面只保留**自己的覆盖**：
+   - 工作台（patient/doctor）通过 dsh.css 的 @import 引入；
+   - 首页在 <head> 里 <link> 引入，再用自己的 :root 覆盖字号尺度与导航高度。
+   注意：这里只放"三页取值完全一致"的 token。若某页需要不同取值（如首页更大的
+   编辑式字号），请在**页面自己的 :root** 里覆盖，并在覆盖处写明原因。
+   =========================================================================== */
+:root{
+  --gray-000:#fff;
+  --gray-050:#faf9f5;
+  --gray-100:#f5f4ed;
+  --gray-150:#f0eee6;
+  --gray-200:#e8e6dc;
+  --gray-250:#dedcd1;
+  --gray-300:#d1cfc5;
+  --gray-400:#b0aea5;
+  --gray-500:#87867f;
+  --gray-600:#5e5d59;
+  --gray-650:#4d4c48;
+  --gray-700:#3d3d3a;
+  --gray-750:#30302e;
+  --gray-800:#262624;
+  --gray-950:#141413;
+  --clay:#d97757;
+  --clay-hover:#c6613f;
+  --clay-dark:#c46849;
+  --oat:#e3dacc;
+  --olive:#788c5d;
+  --cactus:#bcd1ca;
+  --ok:#2E7D4F;
+  --warn:#B7791F;
+  --danger:#B3402E;
+  --info:#5B4B8A;
+  --focus-ring:#3898EC;
+  --sp-4:4px;
+  --sp-8:8px;
+  --sp-12:12px;
+  --sp-16:16px;
+  --sp-20:20px;
+  --sp-24:24px;
+  --sp-32:32px;
+  --sp-40:40px;
+  --sp-48:48px;
+  --sp-64:64px;
+  --sp-96:96px;
+  --br-8:8px;
+  --br-12:12px;
+  --br-16:16px;
+  --br-24:24px;
+  --br-32:32px;
+  --ring:0 0 0 1px var(--gray-300);
+  --ease-out-power2:cubic-bezier(.25,1,.5,1);
+  --ease-out-quart:cubic-bezier(.165,.84,.44,1);
+  --display-1:clamp(36px,26px + 2.7vw,68px);
+  --body-1:clamp(17px,16.6px + .1vw,20px);
+  --body-2:16px;
+  --body-3:15px;
+  --caption:13px;
+  --label:12px;
+  --micro:11px;
+  --font-serif:Georgia,"Songti SC","Noto Serif CJK SC","Source Han Serif SC",SimSun,serif;
+  --font-sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,-apple-system,sans-serif;
+  --font-mono:ui-monospace,"JetBrains Mono",Consolas,"Courier New",monospace;
+  --font-display:var(--font-serif);
+}

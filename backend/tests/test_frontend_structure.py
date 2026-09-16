@@ -51,10 +51,40 @@ class FrontendStructureTest(unittest.TestCase):
                 self.assertEqual(status, 200, f"{path} 应为 200")
 
     def test_shared_stylesheet_served(self):
+        """公共样式与 token 都要能取到；且 token 是**单一来源**（dsh.css 只 @import，不复制色板）。"""
         status, css = self.get("/static/css/dsh.css")
         self.assertEqual(status, 200)
-        for token in ("--clay:", "--gray-050:", ".shell{", ".rail{", ".appbar{"):
+        for token in (".shell{", ".rail{", ".appbar{"):
             self.assertIn(token, css, f"公共样式缺少 {token}")
+        self.assertIn('@import url("/static/css/tokens.css");', css)
+        self.assertNotIn("--gray-050:", css, "色板应只在 tokens.css 里定义（否则又变两份）")
+
+        status, tokens = self.get("/static/css/tokens.css")
+        self.assertEqual(status, 200)
+        for token in ("--clay:", "--gray-050:", "--sp-16:", "--font-display:"):
+            self.assertIn(token, tokens, f"tokens.css 缺少 {token}")
+
+    def test_home_uses_shared_tokens(self):
+        """首页与工作台共用同一份 token（原先首页自带一份重复的 :root）。"""
+        status, html = self.get("/")
+        self.assertEqual(status, 200)
+        self.assertIn('href="/static/css/tokens.css"', html)
+        home_root = re.search(r":root\{(.*?)\}", html, re.S)
+        self.assertIsNotNone(home_root, "首页应有自己的覆盖块")
+        defined = set(re.findall(r"(--[\w-]+)\s*:", home_root.group(1)))
+        # 页面块只允许出现"覆盖项"或"首页独有别名"；共享 token 一律去 tokens.css
+        _, tokens_css = self.get("/static/css/tokens.css")
+        shared = set(re.findall(r"(--[\w-]+)\s*:", tokens_css))
+        allowed = {
+            # 首页覆盖：更大的编辑式尺度与导航高度
+            "--display-2", "--headline-1", "--headline-3", "--headline-5", "--nav-h",
+            "--shadow-sm", "--shadow-md", "--shadow-lg", "--whisper", "--surface",
+            # 首页独有别名（落地页自己的命名）
+            "--bg", "--border", "--border-strong", "--container", "--surface-2",
+            "--text", "--text-2", "--text-3",
+        }
+        duplicated = defined & shared - allowed
+        self.assertFalse(duplicated, f"这些 token 应在 tokens.css 里定义，不要在首页重复：{sorted(duplicated)}")
 
     def test_old_legacy_page_not_routed(self):
         """旧轮询版前端不再对外路由（旧产品名与旧 UI 不暴露）。"""
@@ -208,6 +238,75 @@ class FrontendStructureTest(unittest.TestCase):
             with self.subTest(path=path):
                 _, html = self.get(path)
                 self.assertIn("不提供诊断", html)
+
+    # ------------------------------------------------- 完整报告的逐段折叠
+    def test_full_report_is_collapsible(self):
+        """完整报告 13 段很长 → 做成可折叠；折叠只能影响显示，不能影响内容。
+
+        这里守住三件事：① 用 `<details>/<summary>`（原生折叠、键盘可达）；
+        ② 打印前会全部展开（否则打印出来的 PDF 只有标题没有正文）；
+        ③ 打印样式里隐藏折叠控件（箭头/摘要/按钮不该印在纸上）。
+        """
+        _, html = self.get("/patient")
+        self.assertIn('<details class="sec"', html)
+        self.assertIn("<summary>", html)
+        self.assertIn("sectionDigest", html, "折叠段应带内容摘要提示")
+        self.assertIn("syncReportToggle", html)
+        self.assertIn("openAllForPrint", html)
+        # 打印前自动展开、打印后恢复
+        self.assertRegex(html, r"addEventListener\(\s*'beforeprint'[^)]*\)")
+        self.assertRegex(html, r"addEventListener\(\s*'afterprint'[^)]*\)")
+        # 旧的"每段都是 section + h2，全部铺开"实现不应回潮
+        self.assertNotIn('<section id="sec-', html)
+
+    def test_print_styles_expand_report_sections(self):
+        """打印样式必须把折叠段落还原成正常文档（隐藏折叠控件）。"""
+        status, css = self.get("/static/css/dsh.css")
+        self.assertEqual(status, 200)
+        print_block = css[css.index("@media print"):]
+        self.assertIn("details.sec", print_block)
+        self.assertIn(".sec-hint,.chev,.doc-tools", print_block.replace(" ", ""))
+        self.assertIn("display:none !important", print_block.replace(" ", " "))
+
+    def test_patient_ui_has_no_internal_jargon(self):
+        """患者端不出现内部代码与实现术语（前端评审 P0：降低认知负担）。
+
+        典型泄漏：`决策路径 rule-dominant`、`（G4 门禁）`、`编排结果（安全约束后）`、
+        `阈值校验`。中文标签由后端随分诊结果一起给出（`decision_path_label` /
+        `behavior_type_label`），前端直接展示。
+        """
+        _, html = self.get("/patient")
+        for jargon in ("G4 门禁", "编排结果", "安全约束后", "阈值校验", "规则引擎"):
+            with self.subTest(jargon=jargon):
+                self.assertNotIn(jargon, html)
+        self.assertIn("decision_path_label", html)
+        self.assertIn("behavior_type_label", html)
+        self.assertNotIn("esc(t.decision_path||", html, "决策路径不应直接显示内部代码")
+
+    # ------------------------------------------- 医生端关键操作的窄屏可见性
+    def test_doctor_publish_entry_survives_narrow_screens(self):
+        """<1440px 时右轨被 CSS 收起 → 主区必须有"发布审核版/录入线下意见"的镜像。
+
+        真实缺陷（前端评审发现）：`.rail-right{display:none}` 在 1440px 以下隐藏右轨，
+        而这些入口原来**只**写在右轨里，于是 1366/1280 屏（很常见的笔记本与投影分辨率）
+        上医生审完却发不出去 —— 流程卡死，业务单测与接口测试都发现不了。
+        """
+        status, html = self.get("/doctor")
+        self.assertEqual(status, 200)
+        review = re.search(r'<section id="s-review".*?</section>', html, re.S)
+        self.assertIsNotNone(review, "医生端应有报告审核屏")
+        self.assertIn('id="rev-publish-inline"', review.group(0),
+                      "发布入口必须有主区镜像，不能只在右轨里")
+        self.assertIn("publishPanelHtml", html)
+        self.assertIn("publishPanelHtml(sum, canPublish, 'rail')", html)
+        self.assertIn("publishPanelHtml(sum, canPublish, 'inline')", html)
+        self.assertNotIn('id="op-text"', html, "线下意见输入框 id 应带前缀，避免两处重复 id")
+
+        _, css = self.get("/static/css/dsh.css")
+        packed = css.replace(" ", "")
+        self.assertIn(".rail-right{display:none;}", packed)
+        self.assertIn("@media(min-width:1440px){.publish-inline{display:none;}}", packed,
+                      "宽屏才隐藏主区镜像（此时右轨常驻）")
 
 
 if __name__ == "__main__":
