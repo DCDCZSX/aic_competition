@@ -273,7 +273,9 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertIn("report_published", events)
         transitions = [(t["from_state"], t["to_state"])
                        for t in self.flow.store.list_transitions(self.case_id)]
-        self.assertIn(("awaiting_doctor", "doctor_confirmed"), transitions)
+        self.assertIn(("awaiting_doctor", "doctor_reviewed"), transitions)
+        self.assertIn(("doctor_reviewed", "doctor_confirmed"), transitions)
+        self.assertNotIn(("awaiting_doctor", "doctor_confirmed"), transitions)
 
     def test_request_more_info_sets_case_state(self):
         ids, _ = self._item_ids()

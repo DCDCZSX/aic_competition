@@ -9,14 +9,14 @@
 
 用法：
     auth = AuthService()
-    session = auth.login(username="doctor", password="doctor")
-    session = auth.login(role="patient")          # 角色入口（等价于该角色账号）
+    session = auth.login(username="doctor", password=os.environ["APP_DOCTOR_PASSWORD"])
     auth.verify(token)                            # -> Session | None
 """
 
 from __future__ import annotations
 
 import os
+import hmac
 import secrets
 import threading
 from dataclasses import dataclass, field
@@ -33,12 +33,24 @@ ROLE_SCOPES: Dict[str, List[str]] = {
     ROLE_DOCTOR: ["review", "case:authorized", "decision", "report:confirm"],
 }
 
-# 内置账号（本机部署的可用账号；真实上线接机构认证并强制改密）
-ACCOUNTS: Dict[str, Dict[str, str]] = {
-    "patient": {"password": "patient", "role": ROLE_PATIENT, "label": "就诊者"},
-    "doctor": {"password": "doctor", "role": ROLE_DOCTOR, "label": "审核医生"},
-}
+def _configured_accounts() -> Dict[str, Dict[str, str]]:
+    """从环境变量构建本地账号。
 
+    密码不再写在代码里；缺少密码时账号不可登录。真实部署仍应替换为
+    机构身份认证，而不是继续扩展这个本地账号表。
+    """
+    return {
+        os.getenv("APP_PATIENT_USERNAME", "patient").strip(): {
+            "password": os.getenv("APP_PATIENT_PASSWORD", ""),
+            "role": ROLE_PATIENT,
+            "label": "就诊者",
+        },
+        os.getenv("APP_DOCTOR_USERNAME", "doctor").strip(): {
+            "password": os.getenv("APP_DOCTOR_PASSWORD", ""),
+            "role": ROLE_DOCTOR,
+            "label": "审核医生",
+        },
+    }
 
 @dataclass
 class Session:
@@ -63,8 +75,13 @@ class Session:
 
 
 def auth_required() -> bool:
-    """是否强制登录（环境变量 APP_AUTH_REQUIRED，默认 false 以兼容本地开发）。"""
-    return os.getenv("APP_AUTH_REQUIRED", "false").strip().lower() in ("1", "true", "yes")
+    """是否强制登录。默认开启；仅显式设为 false 时用于隔离的本地测试。"""
+    return os.getenv("APP_AUTH_REQUIRED", "true").strip().lower() not in ("0", "false", "no")
+
+
+def role_login_allowed() -> bool:
+    """是否允许免密角色入口。默认禁用，仅可在无真实数据的本地演示中显式开启。"""
+    return os.getenv("APP_ALLOW_ROLE_LOGIN", "false").strip().lower() in ("1", "true", "yes")
 
 
 class AuthError(ValueError):
@@ -74,10 +91,12 @@ class AuthError(ValueError):
 class AuthService:
     """内存会话服务（比赛版）。"""
 
-    def __init__(self, ttl_hours: int = 12) -> None:
+    def __init__(self, ttl_hours: int = 12,
+                 accounts: Optional[Dict[str, Dict[str, str]]] = None) -> None:
         self._sessions: Dict[str, Session] = {}
         self._lock = threading.Lock()
         self.ttl = timedelta(hours=ttl_hours)
+        self.accounts = dict(accounts if accounts is not None else _configured_accounts())
 
     # ------------------------------------------------------------------ 登录
     def login(
@@ -90,21 +109,27 @@ class AuthService:
         """登录。
 
         - 传 `username` + `password`：按内置账号校验；
-        - 只传 `role`：角色入口（等价于该角色账号，供页面上的角色卡直接进入）。
+        - 只传 `role`：仅当 `APP_ALLOW_ROLE_LOGIN=true` 时允许，用于无真实数据的隔离演示。
         """
         if username:
-            account = ACCOUNTS.get(username.strip())
+            account = self.accounts.get(username.strip())
             if not account:
                 raise AuthError("账号不存在，请核对账号后重试")
-            if account["password"] != (password or ""):
+            configured_password = account.get("password") or ""
+            if not configured_password:
+                raise AuthError("该账号尚未配置密码，请联系管理员")
+            if not hmac.compare_digest(configured_password, password or ""):
                 raise AuthError("账号或密码不正确")
             return self._create_session(username.strip(), account["role"], account["label"])
 
         if role:
+            if not role_login_allowed():
+                raise AuthError("已禁用免密角色登录，请使用账号和密码")
             if role not in VALID_ROLES:
                 raise AuthError(f"未知角色：{role}（可选：{' / '.join(VALID_ROLES)}）")
-            username = "patient" if role == ROLE_PATIENT else "doctor"
-            account = ACCOUNTS[username]
+            username = next((name for name, item in self.accounts.items()
+                             if item.get("role") == role), "")
+            account = self.accounts[username]
             return self._create_session(username, account["role"], account["label"])
 
         raise AuthError("请提供账号密码，或选择进入患者端 / 医生工作台")
@@ -158,11 +183,10 @@ class AuthService:
             return True
 
 
-def extract_token(header_value: Optional[str], fallback: Optional[str] = None) -> Optional[str]:
-    """从 `Authorization: Bearer xxx` 或查询参数中取出 token。"""
+def extract_token(header_value: Optional[str]) -> Optional[str]:
+    """只从 `Authorization: Bearer xxx` 取 token，避免 token 进入 URL/日志/历史记录。"""
     if header_value:
         parts = header_value.split()
         if len(parts) == 2 and parts[0].lower() == "bearer":
             return parts[1].strip()
-        return header_value.strip()
-    return fallback
+    return None

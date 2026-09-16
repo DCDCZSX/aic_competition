@@ -53,7 +53,7 @@
       <p class="muted">先核对依据，再逐条把 AI 的结论过一遍：接受、修改、驳回、暂不确定，全部留痕可回溯。</p>
 
       <div class="role-cards">
-        <div class="role-card" onclick="loginAs('doctor')">
+        <div class="role-card" onclick="showAccountLogin()">
           <span class="ic">🩺</span>
           <span>
             <span class="t">进入医生工作台</span>
@@ -102,7 +102,7 @@
 
   <footer class="auth-foot">
     <p>⚠️ 本系统提供就医信息整理与决策辅助，<strong>不提供诊断或处方，也不替代医生判断</strong>；出现胸痛、呼吸困难、意识障碍、大出血等急症表现请立即就医。</p>
-    <p>体验账号：<span class="mono">doctor</span>（密码同账号名）；病例数据仅保存在本机。　<span style="white-space:nowrap;">就诊者请前往 <a href="/patient">患者端 →</a></span></p>
+    <p>本机账号：<span class="mono">doctor</span>，密码由部署者在 <span class="mono">.env</span> 中配置；病例数据仅保存在本机。　<span style="white-space:nowrap;">就诊者请前往 <a href="/patient">患者端 →</a></span></p>
   </footer>
 </div>
 
@@ -260,16 +260,14 @@ async function api(path, opt){
 }
 
 /* ===================== 登录 ===================== */
-async function loginAs(role){
-  const r = await api('/api/login', {method:'POST', body:JSON.stringify({role})});
-  if(r.status!==200){ msg('login-msg', r.data.error||'登录失败'); return; }
-  const d = r.data.session || {};
-  if(d.role !== 'doctor'){
-    msg('login-msg', '当前登录的是患者账号；医生工作台需要医生账号（请点「进入医生工作台」）');
-    return;
-  }
-  S.token = d.token; S.me = d;
-  enterApp();
+function showAccountLogin(){
+  const details=document.querySelector('#login details');
+  if(details) details.open=true;
+  const user=$('login-user');
+  if(user && !user.value) user.value='doctor';
+  const pass=$('login-pass');
+  if(pass) pass.focus();
+  msg('login-msg', '请输入医生账号密码', 'info');
 }
 async function loginForm(){
   const username = $('login-user').value.trim(), password = $('login-pass').value;
@@ -287,14 +285,14 @@ async function logout(){
   const rc=$('rail-cases'); if(rc) rc.innerHTML='';
 }
 function enterApp(){
-  // 跨页会话：登录（或从首页一键进入）后写入，供刷新与两端跳转复用
+  // 跨页会话：登录后写入，供刷新与两端跳转复用
   try{ localStorage.setItem('dsh_session', JSON.stringify({token:S.token, role:'doctor',
         username:S.me.username, label:S.me.label})); }catch(e){}
   $('login').classList.add('hide'); $('app').classList.remove('hide');
   $('ident').textContent = (S.me.label||'审核医生') + ' · ' + S.me.username;
   loadList();
 }
-/* 跨页会话恢复：从首页一键进入时免再登录；非医生会话忽略 */
+/* 跨页会话恢复：已有医生会话可复用；非医生会话忽略 */
 function restoreSession(){
   let s=null;
   try{ s = JSON.parse(localStorage.getItem('dsh_session')||'null'); }catch(e){ return false; }
@@ -797,7 +795,7 @@ function renderHistory(){
       <span class="pill ${it.state==='confirmed'||it.state==='modified'?'ok':(it.state==='rejected'?'danger':(it.state==='uncertain'?'warn':'gray'))}">${esc(it.state_label)}</span></div>`).join('')}`;
 }
 
-/* 启动：优先恢复跨页会话（从首页一键进入），否则显示登录页 */
+/* 启动：优先恢复已有跨页会话，否则显示登录页 */
 restoreSession();
 </script>
 </body>

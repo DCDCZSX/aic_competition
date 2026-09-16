@@ -3,7 +3,7 @@
 安全约定（务必遵守）：
 - **绝不把 API Key 写进代码或提交到 git**；
 - 密钥只从环境变量读取：`AI_API_KEY`（必填），可选 `AI_API_URL` / `AI_MODEL_NAME` /
-  `AI_TIMEOUT` / `AI_MAX_RETRIES`；
+  `AI_CONNECT_TIMEOUT` / `AI_READ_TIMEOUT` / `AI_MAX_RETRIES`；`AI_TIMEOUT` 仅作旧配置兼容；
 - 本地开发在 `CHAIS/.env` 或 `backend/.env` 配置（`.env` 已被 .gitignore 忽略），
   模板见仓库根目录 `.env.example`。
 """
@@ -58,7 +58,10 @@ class AIService:
         self.api_url = os.getenv("AI_API_URL", DEFAULT_API_URL).strip()
         self.api_key = (os.getenv("AI_API_KEY") or "").strip()
         self.model_name = os.getenv("AI_MODEL_NAME", DEFAULT_MODEL_NAME).strip()
-        self.timeout = int(os.getenv("AI_TIMEOUT", "3000"))
+        # requests 的 timeout 单位是秒。旧默认值 3000 会让单次请求卡住 50 分钟。
+        self.connect_timeout = max(1, int(os.getenv("AI_CONNECT_TIMEOUT", "10")))
+        self.read_timeout = max(1, int(os.getenv("AI_READ_TIMEOUT",
+                                                os.getenv("AI_TIMEOUT", "60"))))
         self.max_retries = int(os.getenv("AI_MAX_RETRIES", "3"))
 
         if not self.api_key:
@@ -116,7 +119,7 @@ class AIService:
                     self.api_url,
                     headers=headers,
                     json=data,
-                    timeout=self.timeout
+                    timeout=(self.connect_timeout, self.read_timeout)
                 )
                 response.raise_for_status()
                 result = response.json()

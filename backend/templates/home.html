@@ -398,7 +398,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
         <button class="btn btn-clay" onclick="enterAs('patient')">进入患者端</button>
         <button class="btn btn-sand" onclick="enterAs('doctor')">进入医生工作台</button>
       </div>
-      <p class="legal">体验账号：patient / doctor（密码同账号名，可在设置中修改）。本系统提供就医信息整理与决策辅助，不提供诊断或处方；急症请立即就医。</p>
+      <p class="legal">本机账号：patient / doctor（密码由部署者配置）。本系统提供就医信息整理与决策辅助，不提供诊断或处方；急症请立即就医。</p>
     </div>
   </div>
 </header>
@@ -431,7 +431,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
           </button>
           <div class="form-row" id="accountRow">
             <input id="login-user" placeholder="账号" autocomplete="username">
-            <input id="login-pass" type="password" placeholder="密码（与账号相同）" autocomplete="current-password">
+            <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password">
             <button class="btn btn-white btn-block" onclick="loginForm()">登录</button>
           </div>
           <p class="msg" id="loginMsg"></p>
@@ -1070,7 +1070,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 })();
 
 /* ============================================================
-   登录 / 一键进入（跨页保持会话：token 存 localStorage）
+   登录 / 角色入口（跨页保持会话：token 存 localStorage）
    ============================================================ */
 var SESSION_KEY = 'dsh_session';
 
@@ -1090,20 +1090,8 @@ function saveSession(session) {
 }
 function goTo(role) { location.href = (role === 'doctor') ? '/doctor' : '/patient'; }
 
-async function enterAs(role) {
-  setMsg('正在进入' + (role === 'doctor' ? '医生审核台' : '患者端') + '…', true);
-  try {
-    var res = await fetch('/api/login', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: role })
-    });
-    var data = await res.json();
-    if (!res.ok || !data.session) { setMsg(data.error || '登录失败，请重试', false); return; }
-    saveSession(data.session);
-    goTo(data.session.role || role);
-  } catch (e) {
-    setMsg('无法连接本机服务，请确认后端已启动（python app.py）', false);
-  }
+function enterAs(role) {
+  goTo(role);
 }
 async function loginForm() {
   var u = document.getElementById('login-user').value.trim();

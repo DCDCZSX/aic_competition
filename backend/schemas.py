@@ -336,6 +336,8 @@ class SpecialistOpinionCard:
     def validate(self) -> None:
         _require(bool(self.case_id.strip()), "case_id 不能为空")
         _require(bool(self.specialty_name.strip()), "specialty_name 不能为空")
+        _require(bool(self.focus or self.facts or self.inferences or self.checks
+                      or self.information_gaps), "专科意见卡不能为空")
         for inf in self.inferences:
             inf.validate()
         for chk in self.checks:

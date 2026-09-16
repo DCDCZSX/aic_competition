@@ -198,9 +198,9 @@ class FrontendStructureTest(unittest.TestCase):
             with self.subTest(path=path):
                 _, html = self.get(path)
                 login = html[html.index('<div id="login"'):]
-                cards = re.findall(r'<div class="role-card" onclick="loginAs\(\'(\w+)\'\)"', login)
-                self.assertEqual(cards, [own], f"{path} 登录页应只有本端入口，实际 {cards}")
-                self.assertNotIn(f"loginAs('{other}')", login, f"{path} 不应出现对端入口")
+                cards = re.findall(r'<div class="role-card" onclick="showAccountLogin\(\)"', login)
+                self.assertEqual(len(cards), 1, f"{path} 登录页应只有一个本端账号入口")
+                self.assertNotIn("loginAs(", login, f"{path} 不应再调用免密角色登录")
                 # 跨端只允许弱链接，不出现对端的"进入"字样按钮
                 self.assertIn(f'href="/{other}"', login, f"{path} 应有一条跨端弱链接")
                 self.assertNotIn(f'<span class="t">进入{"医生工作台" if own == "patient" else "患者端"}</span>',

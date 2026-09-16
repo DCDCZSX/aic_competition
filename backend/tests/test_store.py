@@ -8,8 +8,10 @@
 """
 
 import os
+import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -80,6 +82,50 @@ class TestCasePersistence(StoreTestBase):
         self.assertEqual(len(self.store.list_cases()), 1, "同一 case_id 应更新而非重复插入")
         self.assertEqual(self.store.load_case("C004")["status"], "completed")
 
+    def test_owner_is_persisted_and_not_erased_by_legacy_save(self):
+        self.store.save_case("C-OWN", owner_id="patient-a", payload={"a": 1})
+        self.store.save_case("C-OWN", payload={"a": 2})
+        case = self.store.load_case("C-OWN")
+        self.assertEqual(case["owner_id"], "patient-a")
+        self.assertEqual(case["payload"], {"a": 2})
+
+    def test_mutate_case_serializes_payload_updates(self):
+        self.store.save_case("C-MUTATE", payload={"count": 0})
+
+        def increment_many():
+            for _ in range(50):
+                def increment(case):
+                    payload = case.setdefault("payload", {})
+                    payload["count"] = int(payload.get("count") or 0) + 1
+                self.store.mutate_case("C-MUTATE", increment)
+
+        threads = [threading.Thread(target=increment_many) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(self.store.load_case("C-MUTATE")["payload"]["count"], 200)
+
+
+class TestSchemaMigration(unittest.TestCase):
+    def test_existing_database_gets_owner_column(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "legacy.db")
+            conn = sqlite3.connect(path)
+            conn.execute("""CREATE TABLE cases (
+                case_id TEXT PRIMARY KEY, patient_name TEXT, main_issue TEXT, status TEXT,
+                case_state TEXT, report_version INTEGER, created_at TEXT, updated_at TEXT,
+                payload TEXT)""")
+            conn.execute("INSERT INTO cases (case_id, payload) VALUES ('C-OLD', '{}')")
+            conn.commit()
+            conn.close()
+
+            store = Store(path)
+            try:
+                self.assertEqual(store.load_case("C-OLD")["owner_id"], "")
+            finally:
+                store.close()
+
 
 class TestAuditLog(StoreTestBase):
     def test_add_and_list_audit(self):
@@ -144,6 +190,24 @@ class TestTransitions(StoreTestBase):
         self.assertEqual(rows[0]["to_state"], "analyzing")
         self.assertEqual(rows[1]["case_state"], "need_more_info")
         self.assertEqual(rows[1]["is_anomaly"], 1, "异常流转必须留痕")
+
+    def test_transition_case_records_each_step_of_valid_path(self):
+        self.store.save_case("C-PUBLISH", case_state="awaiting_doctor")
+        path = self.store.transition_case("C-PUBLISH", "doctor_confirmed", actor="doctor")
+        self.assertEqual(path, ["doctor_reviewed", "doctor_confirmed"])
+        rows = self.store.list_transitions("C-PUBLISH")
+        self.assertEqual([(row["from_state"], row["to_state"]) for row in rows], [
+            ("awaiting_doctor", "doctor_reviewed"),
+            ("doctor_reviewed", "doctor_confirmed"),
+        ])
+
+    def test_transition_case_rejects_unknown_state(self):
+        from services.case_state import UnknownState
+
+        self.store.save_case("C-BAD", case_state="awaiting_doctor")
+        with self.assertRaises(UnknownState):
+            self.store.transition_case("C-BAD", "invented_state")
+        self.assertEqual(self.store.load_case("C-BAD")["case_state"], "awaiting_doctor")
 
 
 class TestMemoryStore(unittest.TestCase):

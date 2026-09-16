@@ -24,7 +24,7 @@ import sqlite3
 import threading
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 DEFAULT_DB_RELATIVE = os.path.join("data", "mdt.db")
 
@@ -50,7 +50,7 @@ class Store:
         if self.db_path != ":memory:":
             parent = os.path.dirname(os.path.abspath(self.db_path))
             os.makedirs(parent, exist_ok=True)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
@@ -62,6 +62,7 @@ class Store:
                 """
                 CREATE TABLE IF NOT EXISTS cases (
                     case_id        TEXT PRIMARY KEY,
+                    owner_id       TEXT NOT NULL DEFAULT '',
                     patient_name   TEXT,
                     main_issue     TEXT,
                     status         TEXT,             -- running / completed / error
@@ -112,6 +113,9 @@ class Store:
                 CREATE INDEX IF NOT EXISTS idx_decisions_case ON decisions(case_id, created_at);
                 """
             )
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(cases)")}
+            if "owner_id" not in columns:
+                self._conn.execute("ALTER TABLE cases ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''")
             self._conn.commit()
 
     # ------------------------------------------------------------------ 病例
@@ -119,6 +123,7 @@ class Store:
         self,
         case_id: str,
         *,
+        owner_id: str = "",
         patient_name: str = "",
         main_issue: str = "",
         status: str = "running",
@@ -130,10 +135,12 @@ class Store:
         with self._lock:
             self._conn.execute(
                 """
-                INSERT INTO cases (case_id, patient_name, main_issue, status, case_state,
+                INSERT INTO cases (case_id, owner_id, patient_name, main_issue, status, case_state,
                                    report_version, created_at, updated_at, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(case_id) DO UPDATE SET
+                    owner_id      = CASE WHEN excluded.owner_id <> '' THEN excluded.owner_id
+                                         ELSE cases.owner_id END,
                     patient_name = excluded.patient_name,
                     main_issue   = excluded.main_issue,
                     status       = excluded.status,
@@ -142,7 +149,7 @@ class Store:
                     updated_at   = excluded.updated_at,
                     payload      = excluded.payload
                 """,
-                (case_id, patient_name, main_issue, status, case_state,
+                (case_id, owner_id, patient_name, main_issue, status, case_state,
                  int(report_version), now, now,
                  json.dumps(payload or {}, ensure_ascii=False)),
             )
@@ -185,6 +192,83 @@ class Store:
                 "SELECT * FROM cases ORDER BY created_at DESC LIMIT ?", (int(limit),)
             ).fetchall()
         return [self._row_to_case(r) for r in rows]
+
+    def mutate_case(self, case_id: str,
+                    mutator: Callable[[Dict[str, Any]], None]) -> Optional[Dict[str, Any]]:
+        """在同一把锁内原子地读-改-写病例，防止 JSON payload 并发覆盖。"""
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM cases WHERE case_id = ?", (case_id,)).fetchone()
+            if not row:
+                return None
+            case = self._row_to_case(row)
+            mutator(case)
+            now = _now()
+            self._conn.execute(
+                """UPDATE cases SET owner_id=?, patient_name=?, main_issue=?, status=?,
+                   case_state=?, report_version=?, updated_at=?, payload=? WHERE case_id=?""",
+                (case.get("owner_id") or "", case.get("patient_name") or "",
+                 case.get("main_issue") or "", case.get("status") or "running",
+                 case.get("case_state") or "pending_materials",
+                 int(case.get("report_version") or 1), now,
+                 json.dumps(case.get("payload") or {}, ensure_ascii=False), case_id),
+            )
+            self._conn.commit()
+            return dict(case)
+
+    def transition_case(self, case_id: str, to_state: str, *, actor: str = "system",
+                        reason: str = "", status: Optional[str] = None,
+                        report_version: Optional[int] = None,
+                        payload: Optional[Dict[str, Any]] = None) -> List[str]:
+        """校验并在一个事务中写入病例状态与逐跳流转记录。"""
+        from services.case_state import TRANSITIONS, UnknownState, IllegalTransition
+
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM cases WHERE case_id = ?", (case_id,)).fetchone()
+            if not row:
+                raise KeyError(f"病例不存在：{case_id}")
+            case = self._row_to_case(row)
+            start = str(case.get("case_state") or "pending_materials")
+            if to_state not in TRANSITIONS:
+                raise UnknownState(f"未知状态: {to_state}")
+
+            path: List[str] = []
+            if start != to_state:
+                queue = [(start, [])]
+                seen = {start}
+                while queue:
+                    current, current_path = queue.pop(0)
+                    for nxt in TRANSITIONS.get(current, ()):
+                        if nxt == to_state:
+                            path = current_path + [nxt]
+                            queue = []
+                            break
+                        if nxt not in seen:
+                            seen.add(nxt)
+                            queue.append((nxt, current_path + [nxt]))
+                    else:
+                        continue
+                    break
+                if not path:
+                    raise IllegalTransition(f"无法从 {start} 转移到 {to_state}")
+
+            new_payload = payload if payload is not None else case.get("payload") or {}
+            self._conn.execute(
+                """UPDATE cases SET status=?, case_state=?, report_version=?, updated_at=?, payload=?
+                   WHERE case_id=?""",
+                (status if status is not None else case.get("status") or "running", to_state,
+                 int(report_version if report_version is not None else case.get("report_version") or 1),
+                 _now(), json.dumps(new_payload, ensure_ascii=False), case_id),
+            )
+            current = start
+            for nxt in path:
+                self._conn.execute(
+                    """INSERT INTO transitions (case_id, case_state, from_state, to_state,
+                       actor, reason, is_anomaly, at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)""",
+                    (case_id, nxt, current, nxt, actor, reason, _now()),
+                )
+                current = nxt
+            self._conn.commit()
+            return path
 
     @staticmethod
     def _row_to_case(row: sqlite3.Row) -> Dict[str, Any]:

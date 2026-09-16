@@ -313,6 +313,22 @@ def analyze_specialty(
                                  error=f"意见卡解析失败{hint}：{last_error}")
 
     card.case_id = case_id
+    try:
+        # `analyze_specialty` 也被离线评测单独调用，评测场景可能没有病例号；
+        # 运行时有 case_id 时仍执行完整 schema 校验。无病例号时只跳过身份字段，
+        # 内容与嵌套条目的校验不能跳过，避免 `{}` 被当成成功意见卡。
+        if not (card.focus or card.facts or card.inferences or card.checks
+                or card.information_gaps):
+            raise ValueError("专科意见卡不能为空")
+        for inference in card.inferences:
+            inference.validate()
+        for check in card.checks:
+            check.validate()
+        if case_id:
+            card.validate()
+    except Exception as exc:
+        return SpecialtyAnalysis(department=department, method=METHOD_FAILED,
+                                 error=f"意见卡校验失败：{exc}")
     method = METHOD_LLM_REPAIRED if notice else METHOD_LLM
     return SpecialtyAnalysis(department=department, card=card, method=method, error=notice)
 

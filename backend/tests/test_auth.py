@@ -7,11 +7,11 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.auth import (  # noqa: E402
-    ACCOUNTS,
     ROLE_DOCTOR,
     ROLE_PATIENT,
     AuthError,
@@ -20,13 +20,18 @@ from services.auth import (  # noqa: E402
     extract_token,
 )
 
+TEST_ACCOUNTS = {
+    "patient": {"password": "patient-test-password", "role": ROLE_PATIENT, "label": "就诊者"},
+    "doctor": {"password": "doctor-test-password", "role": ROLE_DOCTOR, "label": "审核医生"},
+}
+
 
 class TestLogin(unittest.TestCase):
     def setUp(self):
-        self.auth = AuthService()
+        self.auth = AuthService(accounts=TEST_ACCOUNTS)
 
     def test_account_login_success(self):
-        session = self.auth.login(username="patient", password="patient")
+        session = self.auth.login(username="patient", password="patient-test-password")
         self.assertEqual(session.role, ROLE_PATIENT)
         self.assertTrue(session.token)
         self.assertTrue(session.label)
@@ -39,12 +44,15 @@ class TestLogin(unittest.TestCase):
         with self.assertRaises(AuthError):
             self.auth.login(username="admin", password="admin")
 
-    def test_role_shortcut_login(self):
-        patient = self.auth.login(role=ROLE_PATIENT)
-        doctor = self.auth.login(role=ROLE_DOCTOR)
+    def test_role_shortcut_login_disabled_by_default(self):
+        with mock.patch.dict(os.environ, {"APP_ALLOW_ROLE_LOGIN": "false"}):
+            with self.assertRaises(AuthError):
+                self.auth.login(role=ROLE_PATIENT)
+
+    def test_role_shortcut_can_be_explicitly_enabled_for_demo(self):
+        with mock.patch.dict(os.environ, {"APP_ALLOW_ROLE_LOGIN": "true"}):
+            patient = self.auth.login(role=ROLE_PATIENT)
         self.assertEqual(patient.role, ROLE_PATIENT)
-        self.assertEqual(doctor.role, ROLE_DOCTOR)
-        self.assertNotEqual(patient.token, doctor.token)
 
     def test_unknown_role_rejected(self):
         with self.assertRaises(AuthError):
@@ -55,19 +63,26 @@ class TestLogin(unittest.TestCase):
             self.auth.login()
 
     def test_accounts_are_the_only_ones(self):
-        self.assertEqual(set(ACCOUNTS), {"patient", "doctor"})
+        self.assertEqual(set(self.auth.accounts), {"patient", "doctor"})
 
     def test_real_auth_not_implemented(self):
         """比赛版明确不做真实认证：账号表里没有实名/短信相关字段。"""
-        for account in ACCOUNTS.values():
+        for account in self.auth.accounts.values():
             self.assertNotIn("phone", account)
             self.assertNotIn("id_card", account)
+
+    def test_missing_configured_password_rejected(self):
+        auth = AuthService(accounts={
+            "patient": {"password": "", "role": ROLE_PATIENT, "label": "就诊者"},
+        })
+        with self.assertRaises(AuthError):
+            auth.login(username="patient", password="anything")
 
 
 class TestSession(unittest.TestCase):
     def setUp(self):
-        self.auth = AuthService()
-        self.session = self.auth.login(role=ROLE_PATIENT)
+        self.auth = AuthService(accounts=TEST_ACCOUNTS)
+        self.session = self.auth.login(username="patient", password="patient-test-password")
 
     def test_verify_valid_token(self):
         self.assertEqual(self.auth.verify(self.session.token).username, "patient")
@@ -88,8 +103,8 @@ class TestSession(unittest.TestCase):
         self.assertFalse(self.auth.logout(self.session.token))
 
     def test_expired_session_is_rejected(self):
-        auth = AuthService(ttl_hours=0)
-        session = auth.login(role=ROLE_PATIENT)
+        auth = AuthService(ttl_hours=0, accounts=TEST_ACCOUNTS)
+        session = auth.login(username="patient", password="patient-test-password")
         self.assertIsNone(auth.verify(session.token), "0 小时 TTL 应立即过期")
 
     def test_to_dict_hides_token_when_asked(self):
@@ -101,16 +116,16 @@ class TestScopes(unittest.TestCase):
     """后台按角色鉴权，而不是靠前端跳转（规格书 §3.1）。"""
 
     def setUp(self):
-        self.auth = AuthService()
+        self.auth = AuthService(accounts=TEST_ACCOUNTS)
 
     def test_patient_scopes(self):
-        s = self.auth.login(role=ROLE_PATIENT)
+        s = self.auth.login(username="patient", password="patient-test-password")
         self.assertTrue(self.auth.has_scope(s, "intake"))
         self.assertTrue(self.auth.has_scope(s, "case:own"))
         self.assertFalse(self.auth.has_scope(s, "decision"), "患者不能做医生审核决策")
 
     def test_doctor_scopes(self):
-        s = self.auth.login(role=ROLE_DOCTOR)
+        s = self.auth.login(username="doctor", password="doctor-test-password")
         self.assertTrue(self.auth.has_scope(s, "review"))
         self.assertTrue(self.auth.has_scope(s, "decision"))
         self.assertFalse(self.auth.has_scope(s, "intake"), "医生端不承担患者录入")
@@ -124,20 +139,20 @@ class TestTokenExtraction(unittest.TestCase):
         self.assertEqual(extract_token("Bearer abc123"), "abc123")
 
     def test_raw_header(self):
-        self.assertEqual(extract_token("abc123"), "abc123")
+        self.assertIsNone(extract_token("abc123"))
 
-    def test_fallback(self):
-        self.assertEqual(extract_token(None, "from-query"), "from-query")
+    def test_query_fallback_is_not_supported(self):
+        self.assertIsNone(extract_token(None))
 
     def test_empty(self):
         self.assertIsNone(extract_token(None))
 
 
 class TestAuthRequiredFlag(unittest.TestCase):
-    def test_default_is_false(self):
+    def test_default_is_true(self):
         old = os.environ.pop("APP_AUTH_REQUIRED", None)
         try:
-            self.assertFalse(auth_required())
+            self.assertTrue(auth_required())
         finally:
             if old is not None:
                 os.environ["APP_AUTH_REQUIRED"] = old
