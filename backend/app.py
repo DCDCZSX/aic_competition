@@ -401,29 +401,14 @@ def get_changes(case_id):
 
 @app.route('/api/v2/cases', methods=['GET'])
 def list_review_cases():
-    """队列主屏（屏 A）：风险优先排序 + 异常筛选 + 分页（2026-09-17 队列优先重做）。
-
-    查询参数：`limit`（默认 50）、`offset`、`filter`（conflict/gaps/low_reliability/
-    analysis_failed/doctor_pending/exempt/recheck）、`sort`（risk/pending/updated）、
-    `department`、`state`（病例状态）。
-    """
+    """屏 A 病例列表（待审优先）。"""
     session, error = _guard_doctor()
     if error:
         return error
-    page = case_flow.list_review_cases(
-        limit=int(request.args.get('limit') or 50),
-        state_filter=request.args.get('state') or '',
-        offset=int(request.args.get('offset') or 0),
-        filter_kind=request.args.get('filter') or '',
-        sort=request.args.get('sort') or 'risk',
-        department=request.args.get('department') or '',
-    )
+    state_filter = request.args.get('state') or ''
     return jsonify({
-        'cases': page['rows'],
-        'total': page['total'],
-        'has_more': page['has_more'],
-        'filters': page['filters'],
-        'sorts': page['sorts'],
+        'cases': case_flow.list_review_cases(limit=int(request.args.get('limit') or 100),
+                                             state_filter=state_filter),
         'reviewer': session.to_dict(include_token=False),
     })
 
@@ -471,60 +456,6 @@ def publish_review(case_id):
         reviewer_name=str(data.get('reviewer') or (session.label if session else '审核医生')),
         accept_all=bool(data.get('accept_all')),
     )
-    return jsonify(result), (200 if result.get('ok') else 400)
-
-
-@app.route('/api/v2/case/<case_id>/batch/preview', methods=['GET'])
-def preview_batch(case_id):
-    """详情收敛（7.3）：批量接受的只读预览（将接受哪些 / 哪些必须逐条处理及原因）。"""
-    session, error = _guard_doctor('decision')
-    if error:
-        return error
-    result = case_flow.preview_batch(case_id)
-    return jsonify(result), (200 if result.get('ok') else 400)
-
-
-@app.route('/api/v2/case/<case_id>/batch/accept', methods=['POST'])
-def submit_batch(case_id):
-    """详情收敛（7.3）：批量接受低风险必审条目（逐条落库、共享批次号、可整批撤销）。"""
-    session, error = _guard_doctor('decision')
-    if error:
-        return error
-    data = request.get_json(silent=True) or {}
-    result = case_flow.submit_batch(
-        case_id,
-        reviewer_name=str(data.get('reviewer') or (session.label if session else '审核医生')),
-        reason=str(data.get('reason') or ''),
-    )
-    return jsonify(result), (200 if result.get('ok') else 400)
-
-
-@app.route('/api/v2/case/<case_id>/batch/undo', methods=['POST'])
-def undo_batch(case_id):
-    """详情收敛（7.3）：整批撤销一次批量接受（追加"撤销"记录，不删除历史）。"""
-    session, error = _guard_doctor('decision')
-    if error:
-        return error
-    data = request.get_json(silent=True) or {}
-    result = case_flow.undo_batch(
-        case_id,
-        batch_id=str(data.get('batch_id') or ''),
-        reviewer_name=str(data.get('reviewer') or (session.label if session else '审核医生')),
-        reason=str(data.get('reason') or ''),
-    )
-    return jsonify(result), (200 if result.get('ok') else 400)
-
-
-@app.route('/api/v2/case/<case_id>/sample', methods=['POST'])
-def sample_exempt(case_id):
-    """详情收敛（7.3）：随机抽检免审条目（只读抽检 + 一条审计，不改条目状态）。"""
-    session, error = _guard_doctor('decision')
-    if error:
-        return error
-    data = request.get_json(silent=True) or {}
-    result = case_flow.sample_exempt(
-        case_id, k=int(data.get('k') or 3),
-        reviewer_name=str(data.get('reviewer') or (session.label if session else '审核医生')))
     return jsonify(result), (200 if result.get('ok') else 400)
 
 

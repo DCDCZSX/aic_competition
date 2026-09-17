@@ -232,19 +232,6 @@ def uncertainties_for_report(items: Any) -> List[Dict[str, Any]]:
     return out
 
 
-def _exempt_note(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """报告里如实标注"免审条目"：它们是规则判定不需要医生确认的（如未要求医生决定的路径步骤）。
-
-    与"医生已确认"严格区分（红线：AI/规则不得冒充医生确认）—— 所以这里单独出一行，
-    而不是并进"审核条目数"里。
-    """
-    steps = ((payload or {}).get("path") or {}).get("steps") or []
-    exempt = sum(1 for s in steps if not bool(s.get("requires_doctor")))
-    if not exempt:
-        return {}
-    return {"免审条目": f"{exempt} 条（路径步骤未要求医生决定，未计入医生审核）"}
-
-
 def recent_decisions_for_report(decisions: Any, limit: int = 3) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for decision in list(decisions or [])[-limit:]:
@@ -438,7 +425,8 @@ def build_full_report(case: Dict[str, Any]) -> Report:
             "报告版本": case.get("report_version", 1),
             "病例状态": CASE_STATE_LABELS.get(str(case.get("case_state")), "（未记录）"),
             "审核条目数": len(decisions),
-            **_exempt_note(payload),
+            # 免审条目如实单列：规则判定免审 ≠ 医生确认（红线），不能让读者以为医生看过
+            "免审条目": _exempt_note(payload),
             "最近操作": recent_decisions_for_report(decisions),
         },
     }
@@ -459,6 +447,15 @@ def build_full_report(case: Dict[str, Any]) -> Report:
         if value in (None, [], {}):
             sections[name] = "（本版本未生成：模型未配置或无可用意见卡/审核记录）"
     return report
+
+
+def _exempt_note(payload: Dict[str, Any]) -> str:
+    """免审条目的报告口径：**不计入医生审核**（红线：规则放行 ≠ 医生确认）。"""
+    review = (payload or {}).get("review") or {}
+    auto = int(review.get("auto_processed") or 0)
+    if not auto:
+        return "0 条"
+    return f"{auto} 条（路径步骤未要求医生决定，未计入医生审核）"
 
 
 def _doctor_opinions(decisions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

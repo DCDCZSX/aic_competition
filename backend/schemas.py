@@ -82,9 +82,6 @@ DOCTOR_ACTIONS = (
     "uncertain",
     "supplement_opinion",
     "request_more_info",
-    # 撤销（回到待审）：用于撤回一次批量接受。**追加一条反向记录**而不是删除历史，
-    # 审核记录里"接受过又被撤回"必须看得见（红线：医生操作只增不改，可回溯）。
-    "reopen",
 )
 DECISION_TARGET_TYPES = (
     "department_selection",  # 科室入选
@@ -474,9 +471,6 @@ class DoctorDecision:
                      "「修改」必须记录修改前与修改后内容")
         if self.action == "reject":
             _require(bool(self.reason.strip()), "「驳回」必须填写原因")
-        if self.action == "reopen":
-            # 撤销是"推翻一条已经落库的医生决定"，必须写清为什么撤（否则审计上分不清是误点还是复核）
-            _require(bool(self.reason.strip()), "「撤销」必须填写原因")
 
 
 # ---------------------------------------------------------------------------

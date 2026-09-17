@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import os
-import random
 import sys
 import threading
 import uuid
@@ -1217,46 +1216,12 @@ class CaseFlow:
         }
 
     # ------------------------------------------------------------------ 医生端审核台（4.1-4.5）
-    # 队列主屏的筛选维度（2026-09-17 队列优先重做）：把"医生真正想先看的异常"变成可筛可排
-    QUEUE_FILTERS = ("conflict", "gaps", "low_reliability", "analysis_failed",
-                     "doctor_pending", "exempt", "recheck")
-    QUEUE_SORTS = ("risk", "pending", "updated")
-
-    @staticmethod
-    def _case_risk(*, conflict_count: int, analysis_state: str, reliability: str,
-                   pending: int, gap_count: int) -> str:
-        """风险分级（队列默认排序依据；只看客观事实，不看模型置信度）。
-
-        高：有未裁决冲突 / 分析失败或部分失败 / 可靠性低
-        中：仍有必审条目 / 有信息缺口 / 可靠性中
-        低：其余
-        """
-        if conflict_count or analysis_state in ("failed", "partial_failed") or reliability == "低":
-            return "高"
-        if pending or gap_count or reliability == "中":
-            return "中"
-        return "低"
-
-    def list_review_cases(self, limit: int = 100, state_filter: str = "",
-                          *, offset: int = 0, filter_kind: str = "",
-                          sort: str = "risk", department: str = "",
-                          total_only: bool = False) -> Any:
-        """屏 A / 队列主屏：风险优先排序 + 异常筛选 + 分页。
-
-        - `filter_kind` ∈ QUEUE_FILTERS（见上）；`department` 按入选科室过滤；
-        - `sort` ∈ QUEUE_SORTS：`risk`（默认，高风险→待审多→等得久）/`pending`/`updated`；
-        - `offset`+`limit` 分页（**不再静默截断**：返回值带 `total`/`has_more`）。
-        单例返回 `{"rows": [...], "total": n, "has_more": bool}`；`limit=None` 兼容旧调用返回列表。
-        """
+    def list_review_cases(self, limit: int = 100, state_filter: str = "") -> List[Dict[str, Any]]:
+        """屏 A 病例列表：按"待审优先"排序，带待审条数与关键摘要。"""
         if not self.store:
-            return {"rows": [], "total": 0, "has_more": False}
-        # 队列要给出**真实总数**（不能是取样窗口内的数，否则分页与计数都会骗人）：
-        # 逐例展开审核条目是有成本的，但队列是医生主屏、且比赛规模在千例以内，全量扫描可接受。
-        # `scanned` 一并返回，便于将来发现触顶。
-        scan_limit = 5000
-        cases = self.store.list_cases(limit=scan_limit)
+            return []
         rows: List[Dict[str, Any]] = []
-        for case in cases:
+        for case in self.store.list_cases(limit=limit):
             payload = case.get("payload") or {}
             triage = payload.get("triage") or {}
             items = review_service.apply_decisions(
@@ -1265,14 +1230,6 @@ class CaseFlow:
             )
             summary = review_service.summarize(items)
             primary = triage.get("primary") or {}
-            analysis_state = ((payload.get("analysis") or {}).get("state")
-                              or ("done" if payload.get("mdt") else "none"))
-            reliability = (triage.get("reliability") or {}).get("level") or ""
-            conflict_count = len(triage.get("conflicts") or [])
-            gap_count = len(payload.get("gaps") or [])
-            risk = self._case_risk(conflict_count=conflict_count, analysis_state=analysis_state,
-                                   reliability=reliability, pending=int(summary["pending"]),
-                                   gap_count=gap_count)
             rows.append({
                 "case_id": case.get("case_id"),
                 "case_state": case.get("case_state"),
@@ -1294,47 +1251,13 @@ class CaseFlow:
                                     for k, v in ((payload.get("analysis") or {}).get("phases") or {}).items()},
                 "created_at": case.get("created_at"),
                 "updated_at": case.get("updated_at"),
-                # 队列主屏新增列（2026-09-17）：风险 / 冲突 / 缺口 / 免审条数
-                "risk_level": risk,
-                "risk_rank": {"高": 3, "中": 2, "低": 1}.get(risk, 0),
-                "conflict_count": conflict_count,
-                "gap_count": gap_count,
-                "exempt_items": int(summary.get("auto_processed") or 0),
             })
         if state_filter:
             rows = [r for r in rows if r["case_state"] == state_filter]
-        if department:
-            rows = [r for r in rows if r.get("primary_department") == department]
-        if filter_kind in ("conflict", "gaps", "low_reliability", "analysis_failed",
-                           "doctor_pending", "exempt", "recheck"):
-            if filter_kind == "conflict":
-                rows = [r for r in rows if r["conflict_count"] > 0]
-            elif filter_kind == "gaps":
-                rows = [r for r in rows if r["gap_count"] > 0]
-            elif filter_kind == "low_reliability":
-                rows = [r for r in rows if r.get("reliability") == "低"]
-            elif filter_kind == "analysis_failed":
-                rows = [r for r in rows if r.get("analysis_state") in ("failed", "partial_failed")]
-            elif filter_kind == "doctor_pending":
-                rows = [r for r in rows if int(r["pending_items"] or 0) > 0]
-            elif filter_kind == "exempt":
-                rows = [r for r in rows if r["exempt_items"] > 0]
-            elif filter_kind == "recheck":
-                rows = [r for r in rows if r["case_state"] == "awaiting_recheck"]
-        # 排序（默认风险优先：高风险 → 待审多 → 等得久）
-        if sort == "pending":
-            rows.sort(key=lambda r: (-int(r["pending_items"] or 0), str(r["created_at"] or "")))
-        elif sort == "updated":
-            rows.sort(key=lambda r: str(r.get("updated_at") or r.get("created_at") or ""),
-                      reverse=True)
-        else:
-            rows.sort(key=lambda r: (-int(r["risk_rank"] or 0), -int(r["pending_items"] or 0),
-                                     str(r.get("updated_at") or r.get("created_at") or "")))
-        total = len(rows)
-        page = rows[offset: offset + limit] if limit else rows
-        return {"rows": page, "total": total, "has_more": bool(limit) and (offset + limit) < total,
-                "scanned": len(cases), "scan_limit": scan_limit,
-                "filters": list(self.QUEUE_FILTERS), "sorts": list(self.QUEUE_SORTS)}
+        # 待审优先 → 新病例优先
+        rows.sort(key=lambda r: (-int(r["pending_items"] or 0), str(r["created_at"] or "")), reverse=False)
+        rows.sort(key=lambda r: (-int(r["pending_items"] or 0),))
+        return rows
 
     def get_review(self, case_id: str) -> Optional[Dict[str, Any]]:
         """屏 B-F 数据：决策条目 + 审核进度 + 是否可发布 + 线下意见。"""
@@ -1357,162 +1280,13 @@ class CaseFlow:
             "doctor_opinions": payload.get("doctor_opinions") or [],
             "change_summary": payload.get("change_summary"),
             "published": bool((payload.get("review") or {}).get("published")),
-            # 详情收敛（7.3）：分组与"当前仍生效的批量批次"，前端据此折叠与渲染撤销按钮
-            "groups": review_service.group_items(items),
-            "group_hints": dict(review_service.GROUP_HINTS),
-            "active_batch": review_service.active_batch(decisions),
         }
-
-    def preview_batch(self, case_id: str) -> Dict[str, Any]:
-        """批量接受的**只读预览**（7.3）：将接受哪些、哪些必须逐条处理、为什么。
-
-        批量只覆盖"低风险必审条目"；分歧待裁决条目不参与批量（红线：人做最终判断）。
-        """
-        case = self.store.load_case(case_id) if self.store else None
-        if not case:
-            return {"ok": False, "error": f"病例不存在：{case_id}"}
-        items = review_service.apply_decisions(
-            review_service.build_items(case),
-            self.store.list_decisions(case_id) if self.store else [])
-        plan = review_service.batch_plan(items)
-        return {"ok": True, "case_id": case_id, "accept": plan["accept"],
-                "excluded": plan["excluded"], "accept_count": len(plan["accept_ids"]),
-                "accept_ids": plan["accept_ids"],
-                "note": ("批量接受只作用于低风险必审条目（科室入选 / 患者建议 / 要求医生决定的路径步骤），"
-                         "每条都会留下审核记录；分歧与证据冲突条目必须逐条判断。")}
-
-    @serialized_case
-    def submit_batch(self, case_id: str, *, reviewer_name: str = "审核医生",
-                     reason: str = "") -> Dict[str, Any]:
-        """执行批量接受（7.3）：落库前**重新算一遍**影响面，并给同一批一个 batch_id。
-
-        - 预览与执行共用 `batch_plan`，避免"预览 3 条、实际动 5 条"；
-        - 每条都写独立决策记录（不是静默通过），共享 `batch_id` → 可整批撤销；
-        - 审计里写清"批量接受 N 条 + 批次号"。
-        """
-        case = self.store.load_case(case_id) if self.store else None
-        if not case:
-            return {"ok": False, "error": f"病例不存在：{case_id}"}
-        items = review_service.apply_decisions(
-            review_service.build_items(case),
-            self.store.list_decisions(case_id) if self.store else [])
-        plan = review_service.batch_plan(items)
-        if not plan["accept_ids"]:
-            return {"ok": False, "error": "没有可批量接受的低风险条目；如需发布，请逐条处理必审条目",
-                    "excluded": plan["excluded"]}
-        batch_id = f"B-{case_id[-5:]}-{len(self.store.list_decisions(case_id)) + 1}" if self.store else "B-0"
-        batch_reason = (reason or "").strip() or "批量接受低风险必审条目"
-        accepted: List[str] = []
-        for item_id in plan["accept_ids"]:
-            result = self.submit_decision(
-                case_id, item_id, "accept",
-                reason=f"{batch_reason}｜批次 {batch_id}",
-                reviewer_name=reviewer_name, batch_id=batch_id)
-            if result.get("ok"):
-                accepted.append(item_id)
-        if self.store:
-            self.store.add_audit(
-                case_id, "batch_accepted",
-                f"批量接受低风险条目 {len(accepted)} 条（批次 {batch_id}，审核人={reviewer_name}）"
-                + (f"｜排除需逐条判断的条目 {len(plan['excluded'])} 条" if plan["excluded"] else "")
-                + "｜该批次可整批撤销")
-        review = self.get_review(case_id) or {}
-        return {"ok": True, "batch_id": batch_id, "accepted": accepted,
-                "accepted_count": len(accepted), "excluded": plan["excluded"],
-                "items": review.get("items"), "summary": review.get("summary"),
-                "groups": review.get("groups"), "active_batch": review.get("active_batch")}
-
-    @serialized_case
-    def sample_exempt(self, case_id: str, *, k: int = 3, reviewer_name: str = "审核医生") -> Dict[str, Any]:
-        """随机抽检免审条目（7.3 的质量控制环节）。
-
-        免审条目（规则判定不需要医生决定）**不等于没人看**：发布前随机抽几条给医生过一眼，
-        发现问题可直接接管。抽检本身**不改条目状态**（只留一条审计），医生真的接受了才计入
-        "医生处理"——否则抽检就变成了给免审条目偷偷盖医生章（红线）。
-        """
-        case = self.store.load_case(case_id) if self.store else None
-        if not case:
-            return {"ok": False, "error": f"病例不存在：{case_id}"}
-        items = review_service.apply_decisions(
-            review_service.build_items(case),
-            self.store.list_decisions(case_id) if self.store else [])
-        exempt = [i for i in items if i.state == review_service.AUTO_PROCESSED]
-        if not exempt:
-            return {"ok": False, "error": "该病例没有免审条目可抽检（全部条目都需要医生确认）"}
-        size = max(1, min(int(k or 3), len(exempt)))
-        picked = random.sample(exempt, size)
-        if self.store:
-            self.store.add_audit(
-                case_id, "exempt_sampled",
-                f"随机抽检免审条目 {size}/{len(exempt)} 条："
-                + "、".join(i.title for i in picked)
-                + "｜抽检不改变条目状态，医生接管才计入医生处理")
-        return {"ok": True, "case_id": case_id, "exempt_total": len(exempt),
-                "sample": [{"item_id": i.item_id, "title": i.title,
-                            "target_type": i.target_type,
-                            "content": i.to_dict()["ai_content"]} for i in picked],
-                "note": "抽检是随机的、只读的：条目不会被标成「医生已确认」；"
-                        "发现问题请在条目上直接操作（接受/修改/驳回），那才会计入医生处理。"}
-
-    @serialized_case
-    def undo_batch(self, case_id: str, batch_id: str, *, reviewer_name: str = "审核医生",
-                   reason: str = "") -> Dict[str, Any]:
-        """整批撤销一次批量接受（7.3）：**追加**"撤销（回到待审）"记录，不删除任何历史。
-
-        规则：
-        - 只撤未发布的病例。已发布后要改，必须由患者端补充资料触发复核（否则报告版本与
-          角标会和实际状态打架）；
-        - 撤销后条目回到待审、并从免审升为必审（医生明确要自己重新处理）；
-        - 审核记录里"接受过 → 又被撤回"两条都在，审计看得出是谁在什么时候撤的。
-        """
-        case = self.store.load_case(case_id) if self.store else None
-        if not case:
-            return {"ok": False, "error": f"病例不存在：{case_id}"}
-        payload = case.get("payload") or {}
-        if (payload.get("review") or {}).get("published"):
-            return {"ok": False,
-                    "error": "该病例的审核版已发布，不能直接撤销批次；"
-                             "请由患者端补充资料触发复核，或在「审核记录与版本」里追溯原始批次"}
-        decisions = self.store.list_decisions(case_id) if self.store else []
-        if review_service.active_batch(decisions) != str(batch_id or ""):
-            return {"ok": False, "error": f"批次不存在或已被撤销：{batch_id}"}
-        target_ids = [d.get("target_type", "") + ":" + str(d.get("target_id") or "")
-                      for d in decisions
-                      if str(d.get("batch_id") or "") == str(batch_id)
-                      and str(d.get("action") or "") == "accept"]
-        if not target_ids:
-            return {"ok": False, "error": f"批次里没有可撤销的条目：{batch_id}"}
-        # 撤销是推翻一条已经落库的决定，必须写明原因（与修改/驳回同规格），不给默认值兜底
-        undo_reason = (reason or "").strip()
-        if not undo_reason:
-            return {"ok": False, "error": "「撤销」必须填写原因（会写进审核记录，便于回溯）",
-                    "need_reason": True}
-        undone: List[str] = []
-        for item_id in target_ids:
-            result = self.submit_decision(
-                case_id, item_id, "reopen", reason=undo_reason,
-                reviewer_name=reviewer_name, batch_id=str(batch_id))
-            if result.get("ok"):
-                undone.append(item_id)
-        if self.store:
-            self.store.add_audit(
-                case_id, "batch_undone",
-                f"撤销批量接受批次 {batch_id}：{len(undone)} 条回到待审（审核人={reviewer_name}）"
-                f"｜原因：{undo_reason}｜原始接受记录保留可追溯")
-        review = self.get_review(case_id) or {}
-        return {"ok": True, "batch_id": batch_id, "undone": undone, "undone_count": len(undone),
-                "items": review.get("items"), "summary": review.get("summary"),
-                "groups": review.get("groups"), "active_batch": review.get("active_batch")}
 
     @serialized_case
     def submit_decision(self, case_id: str, item_id: str, action: str, *,
                         after: str = "", reason: str = "",
-                        reviewer_name: str = "审核医生", reviewer_dept: str = "",
-                        batch_id: str = "") -> Dict[str, Any]:
-        """逐条审核（屏 F）：接受 / 修改 / 驳回 / 暂不确定 / 请求补资料 / 撤销。
-
-        `batch_id` 只在"批量接受"内部传：让同批次的记录可整体撤销。
-        """
+                        reviewer_name: str = "审核医生", reviewer_dept: str = "") -> Dict[str, Any]:
+        """逐条审核（屏 F）：接受 / 修改 / 驳回 / 暂不确定 / 请求补资料。"""
         case = self.store.load_case(case_id) if self.store else None
         if not case:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
@@ -1521,11 +1295,6 @@ class CaseFlow:
         try:
             item = review_service.find_item(items, item_id)
             decisions = self.store.list_decisions(case_id) if self.store else []
-            settled = review_service.apply_decisions(
-                review_service.build_items(case), decisions)
-            current = review_service.find_item(settled, item_id)
-            if action == "reopen" and current.state == review_service.AWAITING:
-                return {"ok": False, "error": "该条目已经是待审状态，无需撤销", "action": action}
             decision = review_service.make_decision(
                 case_id=case_id, item=item, action=action, after=after, reason=reason,
                 reviewer_name=reviewer_name, reviewer_dept=reviewer_dept,
@@ -1540,17 +1309,13 @@ class CaseFlow:
             # reviewer 必须以普通 dict 落库（payload 走 json.dumps，不能塞 dataclass）
             record["reviewer"] = {"role": reviewer_name or "审核医生", "dept": reviewer_dept}
             record["reviewer_name"] = reviewer_name
-            if batch_id:
-                record["batch_id"] = str(batch_id)
             self.store.save_decision(record)
-            if not batch_id:
-                # 批量接受由批次统一留一条审计（避免 N 条噪音）；单条操作逐条留痕
-                self.store.add_audit(
-                    case_id, "decision_recorded",
-                    f"{review_service.ACTION_LABELS.get(action, action)} {item.title}"
-                    + (f"｜原因：{reason}" if reason else "")
-                    + (f"｜改为：{after}" if action == "modify" and after else ""),
-                )
+            self.store.add_audit(
+                case_id, "decision_recorded",
+                f"{review_service.ACTION_LABELS.get(action, action)} {item.title}"
+                + (f"｜原因：{reason}" if reason else "")
+                + (f"｜改为：{after}" if action == "modify" and after else ""),
+            )
 
         # 请求补资料 → 病例退回补资料（状态机 + 留痕）
         state_changed = None
@@ -1574,9 +1339,10 @@ class CaseFlow:
         """发布审核版报告（屏 F 底部）：状态 → doctor_confirmed、版本 +1、角标转绿。
 
         规则（写死）：
-        - 仍有"待审"条目时**不得发布**；`accept_all=True` 时只批量接受**低风险**必审条目
-          （逐条落库、共享 batch_id、可整批撤销）—— **分歧待裁决条目必须医生逐条判断**，
-          批量通道不能替医生裁决（红线），所以它们仍会阻塞发布并如实列出来；
+        - 仍有"**必审**条目未处理"时不得发布；`accept_all=True` 时把这些条目**逐条**批量接受并留痕
+          （不是静默通过：每条都落一条决策记录）；
+        - **规则判定免审的条目不计入待审、也不阻塞发布**（修复前它们会，实测占条目 21.9%），
+          且**不得**被批量记成"医生接受"；
         - 发布后病例状态 `doctor_confirmed`、`report_version + 1`、审计留痕。
         """
         case = self.store.load_case(case_id) if self.store else None
@@ -1586,20 +1352,18 @@ class CaseFlow:
         items = review_service.apply_decisions(
             review_service.build_items(case),
             self.store.list_decisions(case_id) if self.store else [])
-        # 待审 = 必审且未处理；免审条目（auto_processed）不阻塞发布，也不能被"批量接受"
-        # 记成医生确认（否则审计里分不清"医生点过"和"机器放行"）
+        # 待审 = 必审且未处理（auto_processed 既不计入待审，也不能被批量接受写成医生确认）
         pending = [i for i in items
                    if i.needs_doctor_review and i.state == review_service.AWAITING]
 
         accepted_ids: List[str] = []
-        batch_id = ""
-        excluded_high_risk: List[Dict[str, Any]] = []
         if pending and accept_all:
-            batch = self.submit_batch(case_id, reviewer_name=reviewer_name,
-                                      reason="发布前批量接受低风险条目")
-            accepted_ids = list(batch.get("accepted") or [])
-            batch_id = str(batch.get("batch_id") or "")
-            excluded_high_risk = list(batch.get("excluded") or [])
+            for item in pending:
+                result = self.submit_decision(
+                    case_id, item.item_id, "accept",
+                    reason="批量接受必审条目（发布时统一确认）", reviewer_name=reviewer_name)
+                if result.get("ok"):
+                    accepted_ids.append(item.item_id)
             items = review_service.apply_decisions(
                 review_service.build_items(case),
                 self.store.list_decisions(case_id) if self.store else [])
@@ -1607,12 +1371,8 @@ class CaseFlow:
                        if i.needs_doctor_review and i.state == review_service.AWAITING]
 
         if pending:
-            # 如实说明"卡在哪几条、为什么不能批量"（可见的失败必须可操作）
-            names = "；".join(i.title for i in pending[:3])
-            more = f" 等 {len(pending)} 条" if len(pending) > 3 else ""
-            hint = "（这些条目需要医生逐条判断，不参与批量接受）" if excluded_high_risk else ""
             return {"ok": False,
-                    "error": f"仍有 {len(pending)} 条必审条目未处理，不能发布审核版：{names}{more}{hint}",
+                    "error": f"仍有 {len(pending)} 条必审条目未处理，不能发布审核版",
                     "pending_items": [i.item_id for i in pending]}
 
         summary = review_service.summarize(items)
@@ -1633,10 +1393,9 @@ class CaseFlow:
             "counts": summary["by_state"],
             "human_touched": summary["human_touched"],
             "doctor_reviewed": summary["doctor_reviewed"],
-            # 免审条目：如实记进报告与审计，且**不写成医生确认**
+            # 免审条目如实记进报告与审计，且**不写成医生确认**
             "auto_processed": summary["auto_processed"],
             "batch_accepted": accepted_ids,
-            "batch_id": batch_id,
         }
         # "暂不确定"条目进入报告的待医生确认问题清单
         payload["review_pending_questions"] = review_service.pending_questions(items)
@@ -1649,9 +1408,9 @@ class CaseFlow:
                 case_id, "report_published",
                 f"审核人={reviewer_name} 版本={new_version} 医生处理={summary['doctor_reviewed']}/"
                 f"{summary['total']} 免审自动处理={summary['auto_processed']} "
-                f"批量接受={len(accepted_ids)}" + (f"（批次 {batch_id}）" if batch_id else ""))
+                f"批量接受={len(accepted_ids)}")
         return {"ok": True, "case_state": "doctor_confirmed", "report_version": new_version,
-                "summary": summary, "batch_accepted": accepted_ids, "batch_id": batch_id,
+                "summary": summary, "batch_accepted": accepted_ids,
                 "review": payload["review"]}
 
     def get_review_history(self, case_id: str) -> Optional[Dict[str, Any]]:

@@ -251,25 +251,6 @@ class TestFullReport(unittest.TestCase):
         report = build_full_report(case)
         self.assertIn("仅 1 个就医方向", str(report.sections["各专科 AI 视角"]))
 
-    def test_report_labels_exempt_items_separately(self):
-        """免审条目（未要求医生决定的路径步骤）要在报告里单独标注。
-
-        红线：**不得并进"审核条目数"或写成医生确认过** —— 报告必须能区分
-        "医生确认过的"与"规则判定免审的"。
-        """
-        case = sample_case()
-        for step in case["payload"]["path"]["steps"]:
-            step["requires_doctor"] = False
-        record = build_full_report(case).sections["审核记录与版本"]
-        self.assertIn("免审条目", record)
-        self.assertIn("未计入医生审核", str(record["免审条目"]))
-        case2 = sample_case()
-        for step in case2["payload"]["path"]["steps"]:
-            step["requires_doctor"] = True
-        record2 = build_full_report(case2).sections["审核记录与版本"]
-        self.assertNotIn("免审条目", record2, "全部需医生决定时不应出现免审标注")
-
-
     def test_no_imperative_medical_advice(self):
         case = sample_case()
         markdown = render_markdown(build_full_report(case))
@@ -393,6 +374,23 @@ class TestEndToEnd(unittest.TestCase):
 
     def test_report_unknown_case(self):
         self.assertIsNone(self.flow.build_reports("C-NOT-EXIST"))
+
+    def test_report_labels_exempt_items_separately(self):
+        """报告必须把"免审（规则判定）"与"医生审核"分开写，不能让读者以为医生看过（红线）。"""
+        r = self.flow.create_case(medical_history=CASE_B, main_issue="该看哪个科", age=58)
+        review = self.flow.get_review(r.case_id)
+        auto = review["summary"]["auto_processed"]
+        self.assertTrue(auto, "该病例应有免审条目")
+        # 尚未发布：报告照实写 0 条
+        before = self.flow.build_reports(r.case_id)["full"]["sections"]["审核记录与版本"]
+        self.assertEqual(before.get("免审条目"), "0 条")
+        # 发布后：免审条数如实单列，且写明"未计入医生审核"
+        self.flow.publish_review(r.case_id, reviewer_name="医学生", accept_all=True)
+        after = self.flow.build_reports(r.case_id)["full"]["sections"]["审核记录与版本"]
+        self.assertIn(f"{auto} 条", str(after.get("免审条目")))
+        self.assertIn("未计入医生审核", str(after.get("免审条目")))
+        markdown = self.flow.build_reports(r.case_id)["full_markdown"]
+        self.assertIn("免审条目", markdown)
 
 
 if __name__ == "__main__":

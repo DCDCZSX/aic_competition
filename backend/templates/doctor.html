@@ -126,24 +126,27 @@
       </div>
       <div class="ab-right">
         <span class="ident muted" id="ident">—</span>
-        <button class="ghost btn-sm" id="rail-toggle" onclick="toggleRail()" title="在窄屏上以抽屉形式打开审核面板">审核面板</button>
         <button class="ghost btn-sm" onclick="logout()">退出登录</button>
       </div>
     </div>
   </header>
 
   <div class="shell">
-    <!-- 左轨：队列筛选 + 视图导航（2026-09-17 队列优先：删掉与主区重复的病例列表） -->
+    <!-- 左轨：待办病例 + 视图导航 -->
     <aside class="rail rail-left">
-      <div class="rail-sec">
-        <div class="rail-title">队列筛选</div>
-        <div class="rail-filters" id="rail-filters"></div>
-      </div>
+      <div class="rail-title">待办病例</div>
+      <div class="rail-cases" id="rail-cases"><div class="skeleton">加载中…</div></div>
       <div class="rail-sec">
         <div class="rail-title">审阅视图</div>
-        <!-- 七屏 → 四区（2026-09-17 收敛）：队列是入口，四个工作区各自带子视图。
-             由 renderNav() 渲染，避免手写 HTML 与状态机脱节。 -->
-        <nav class="view-nav" id="nav"></nav>
+        <nav class="view-nav" id="nav">
+          <a onclick="go('list')" data-s="list">病例列表</a>
+          <a onclick="navCase('overview')" data-s="overview" class="dis">病例总览</a>
+          <a onclick="navCase('triage')" data-s="triage" class="dis">分诊依据</a>
+          <a onclick="navCase('evidence')" data-s="evidence" class="dis">证据板</a>
+          <a onclick="navCase('mdt')" data-s="mdt" class="dis">多学科审阅 ★</a>
+          <a onclick="navCase('review')" data-s="review" class="dis">报告审核 ★</a>
+          <a onclick="navCase('history')" data-s="history" class="dis">审核记录与版本</a>
+        </nav>
       </div>
       <div class="rail-foot">
         <div class="progress"><i id="rev-bar" style="width:0%"></i></div>
@@ -153,8 +156,8 @@
 
     <main class="work">
       <section id="s-list" class="card">
-        <h2>待审队列（风险优先）</h2>
-        <div class="queue-bar">
+        <h2>病例列表（待审优先）</h2>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
           <select id="f-state" style="width:auto;" onchange="loadList()">
             <option value="">全部状态</option>
             <option value="awaiting_doctor">AI 分析完成 / 待医生审核</option>
@@ -162,19 +165,11 @@
             <option value="need_more_info">退回补资料</option>
             <option value="doctor_confirmed">医生已确认</option>
           </select>
-          <select id="f-sort" style="width:auto;" onchange="loadList()">
-            <option value="risk">排序：风险优先</option>
-            <option value="pending">排序：待审最多</option>
-            <option value="updated">排序：最近更新</option>
-          </select>
           <button class="ghost mini" onclick="loadList()">刷新</button>
           <button class="ghost mini" onclick="analyzePending()">批量补齐分析</button>
           <span class="tiny" id="list-note"></span>
         </div>
         <div id="list-body"><div class="skeleton">加载中…</div></div>
-        <div style="margin-top:12px;text-align:center;">
-          <button class="ghost mini hide" id="list-more" onclick="loadMore()">加载更多</button>
-        </div>
       </section>
 
       <section id="s-overview" class="card hide">
@@ -248,11 +243,7 @@
 <script>
 /* ===================== 状态与工具 ===================== */
 const S = { token:'', me:null, cases:[], caseId:'', caseData:null, review:null,
-            audit:null, screen:'list', modal:null, mdtTimer:null,
-            batchPreview:null,          // 批量接受的预览结果（确认前只读）
-            sample:null,                // 免审条目随机抽检结果（只读，不改状态）
-            // 队列状态（队列优先：筛选 / 排序 / 分页 都在这里，切换病例后回来不丢）
-            queue:{ filter:'', sort:'risk', offset:0, pageSize:20, total:null, hasMore:false, scroll:0 } };
+            audit:null, screen:'list', modal:null, mdtTimer:null };
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function $(id){ return document.getElementById(id); }
@@ -291,9 +282,7 @@ async function logout(){
   try{ localStorage.removeItem('dsh_session'); }catch(e){}
   S.token=''; S.me=null; $('app').classList.add('hide'); $('login').classList.remove('hide');
   $('ctx').textContent='未选择病例'; enableCaseNav(false); S.caseId='';
-  S.cases=[]; S.queue.filter=''; S.queue.offset=0; S.queue.total=null;
-  S.batchPreview=null; toggleRail(false);
-  renderQueueFilters();
+  const rc=$('rail-cases'); if(rc) rc.innerHTML='';
 }
 function enterApp(){
   // 跨页会话：登录后写入，供刷新与两端跳转复用
@@ -313,39 +302,13 @@ function restoreSession(){
   return true;
 }
 
-/* ===================== 导航（七屏收敛为：队列 + 四区）=====================
-   四区 = 概览 / 证据与推理 / 审核 / 历史。每区可含多个子视图，子视图用同一套锚点，
-   这样状态机（S.screen）与渲染函数都不用改，只把"入口"收敛成医生能记住的四个。 */
-const NAV_GROUPS = [
-  ['病例队列', 'list', [['list', '待审队列']]],
-  ['概览', 'overview', [['overview', '病例总览'], ['triage', '分诊依据']]],
-  ['证据与推理', 'evidence', [['evidence', '证据板'], ['mdt', '多学科审阅 ★']]],
-  ['审核', 'review', [['review', '报告审核 ★']]],
-  ['历史', 'history', [['history', '审核记录与版本']]],
-];
-function renderNav(){
-  const box = $('nav');
-  if(!box) return;
-  box.innerHTML = NAV_GROUPS.map(([label, key, subs])=>`
-    <div class="nav-group" data-g="${key}">
-      <span class="nav-g-label">${esc(label)}</span>
-      <div class="nav-g-sub">
-        ${subs.map(([s, t])=>`<a data-s="${s}" class="${s==='list'?'':'dis'}"
-           onclick="${s==='list'?"go('list')":`navCase('${s}')`}">${esc(t)}</a>`).join('')}
-      </div>
-    </div>`).join('');
-}
+/* ===================== 导航 ===================== */
 function go(screen){
   S.screen = screen;
   ['list','overview','triage','evidence','mdt','review','history'].forEach(s=>{
     $('s-'+s).classList.toggle('hide', s!==screen);
   });
   document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on', a.dataset.s===screen));
-  // 所属大区高亮：医生在左轨上要能看出"我在四个区里的哪一个"
-  document.querySelectorAll('#nav .nav-group').forEach(g=>{
-    const subs = (NAV_GROUPS.find(n=>n[1]===g.dataset.g)||[])[2]||[];
-    g.classList.toggle('on', subs.some(([s])=>s===screen));
-  });
   if(screen==='list') loadList();
   if(screen==='overview') renderOverview();
   if(screen==='triage') renderTriage();
@@ -363,97 +326,43 @@ function enableCaseNav(on){
     if(a.dataset.s!=='list') a.classList.toggle('dis', !on);
   });
 }
-/* 右轨抽屉（窄屏 <1440px 右轨被 CSS 收起，点顶栏「审核面板」以抽屉形式打开）。
-   注意：抽屉靠 body 上的类控制显隐，静态 CSS 里 `.rail-right` 仍是 display:none，
-   所以窄屏"关键操作必须有主区镜像"的回归约定不受影响。 */
-function toggleRail(force){
-  const open = (force==null) ? !document.body.classList.contains('rail-open') : !!force;
-  document.body.classList.toggle('rail-open', open);
-  const btn = $('rail-toggle');
-  if(btn) btn.classList.toggle('on', open);
-}
 
-/* ===================== 屏 A：待审队列（队列优先，2026-09-17 重做）=====================
-   设计：主区是**唯一的**病例队列（单列、风险优先、可筛选可排序可分页），
-   左轨只留筛选器与视图导航 —— 不再重复渲染一份迷你病例列表。 */
-const QUEUE_FILTERS = [
-  ['', '全部'],
-  ['doctor_pending', '待我处理'],
-  ['conflict', '有冲突'],
-  ['gaps', '缺关键证据'],
-  ['analysis_failed', '分析失败/部分'],
-  ['low_reliability', '可靠性低'],
-  ['recheck', '待复核'],
-  ['exempt', '含免审条目'],
-];
-function renderQueueFilters(){
-  const box = $('rail-filters');
-  if(!box) return;
-  box.innerHTML = QUEUE_FILTERS.map(([val,label])=>
-    `<a class="q-filter ${(S.queue.filter||'')===val?'on':''}" onclick="setQueueFilter('${val}')">${esc(label)}</a>`
-  ).join('') + `<div class="tiny" id="q-sum"></div>`;
-  const sum = $('q-sum');
-  if(sum) sum.textContent = S.queue.total!=null ? `共 ${S.queue.total} 例（已载入 ${S.cases.length}）` : '';
-}
-function setQueueFilter(val){
-  S.queue.filter = val || '';
-  S.queue.offset = 0;
-  loadList();
-}
-async function loadList(append){
-  if(!append){ S.queue.offset = 0; }
-  const state = $('f-state') ? $('f-state').value : '';
-  const sort = $('f-sort') ? $('f-sort').value : 'risk';
-  S.queue.sort = sort;
-  const qs = new URLSearchParams();
-  if(state) qs.set('state', state);
-  if(S.queue.filter) qs.set('filter', S.queue.filter);
-  qs.set('sort', sort);
-  qs.set('limit', String(S.queue.pageSize));
-  qs.set('offset', String(S.queue.offset));
-  const r = await api('/api/v2/cases?' + qs.toString());
+/* ===================== 屏 A：病例列表 ===================== */
+async function loadList(){
+  const state = $('f-state').value;
+  const r = await api('/api/v2/cases' + (state?('?state='+encodeURIComponent(state)):''));
   if(r.status!==200){ $('list-body').innerHTML = `<div class="banner danger">${esc(r.data.error||'加载失败')}</div>`; return; }
-  const page = r.data.cases || [];
-  S.queue.total = r.data.total;
-  S.queue.hasMore = !!r.data.has_more;
-  S.cases = append ? (S.cases||[]).concat(page) : page;
-  const noteName = (QUEUE_FILTERS.find(f=>f[0]===(S.queue.filter||''))||['','全部'])[1];
-  $('list-note').textContent = `共 ${r.data.total} 例 · 筛选：${noteName} · 已载入 ${S.cases.length}`;
-  renderQueueFilters();
-  const more = $('list-more');
-  if(more) more.classList.toggle('hide', !S.queue.hasMore);
+  S.cases = r.data.cases || [];
+  $('list-note').textContent = `共 ${S.cases.length} 例（按待审条数排序）`;
   if(!S.cases.length){
-    $('list-body').innerHTML = '<div class="banner warn">当前筛选下没有病例。可切换筛选条件，或先在患者端提交一份就诊资料。</div>';
+    $('list-body').innerHTML = '<div class="banner warn">暂无待办病例。可切换筛选条件，或先在患者端提交一份就诊资料。</div>';
     return;
   }
-  // 单列队列：一行一例，列固定，便于扫读与比较
-  $('list-body').innerHTML = `
-    <div class="queue-table">
-      <div class="queue-head">
-        <span>病例</span><span>主诉 / 牵头方向</span><span>风险</span><span>可靠性</span>
-        <span>分析</span><span>待医生处理</span><span>更新</span>
+  const rows = S.cases.map(c=>`
+    <div class="case-row" onclick="openCase('${esc(c.case_id)}')">
+      <div class="head" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div class="t">病例 #${esc(c.case_id)}　${esc(c.sex||'—')} ${esc(c.age||'—')}</div>
+        <div>
+          ${c.behavior_type?`<span class="pill info">行为类型 ${esc(c.behavior_type)}</span>`:''}
+          <span class="pill ${c.reliability==='高'?'ok':(c.reliability==='中'?'warn':'danger')}">可靠性 ${esc(c.reliability||'—')}</span>
+          <span class="pill gray">${esc(c.case_state_label||c.case_state||'')}</span>
+          ${c.pending_items?`<span class="pill danger"><span class="dot"></span>待审 ${c.pending_items}</span>`:'<span class="pill ok">已审完</span>'}
+          ${analysisBadge(c)}
+        </div>
       </div>
-      ${S.cases.map(c=>`
-        <div class="queue-row" onclick="openCase('${esc(c.case_id)}')">
-          <span class="q-id">#${esc(String(c.case_id).slice(-5))}
-            <span class="tiny">${esc(c.sex||'—')} ${esc(c.age||'—')}</span></span>
-          <span class="q-main">
-            <span class="t">${esc(c.chief_complaint||'（未提供主诉）')}</span>
-            <span class="tiny">${esc(c.primary_department||'—')}${c.behavior_type?(' · 类型 '+esc(c.behavior_type)):''}</span>
-          </span>
-          <span><span class="pill ${c.risk_level==='高'?'danger':(c.risk_level==='中'?'warn':'ok')}">${esc(c.risk_level||'—')}</span></span>
-          <span><span class="pill ${c.reliability==='高'?'ok':(c.reliability==='中'?'warn':'danger')}">${esc(c.reliability||'—')}</span></span>
-          <span>${analysisBadge(c)}</span>
-          <span>${c.pending_items?`<span class="pill danger"><span class="dot"></span>${c.pending_items} 条</span>`:'<span class="pill ok">已处理</span>'}
-            ${c.exempt_items?`<span class="tiny">免审 ${c.exempt_items}</span>`:''}
-            ${c.conflict_count?`<span class="tiny" style="color:var(--danger);">冲突 ${c.conflict_count}</span>`:''}</span>
-          <span class="tiny">${esc((c.updated_at||c.created_at||'').replace('T',' ').slice(0,16))}</span>
-        </div>`).join('')}
-    </div>`;
-}
-function loadMore(){
-  S.queue.offset += S.queue.pageSize;
-  loadList(true);
+      <div class="muted" style="margin-top:6px;">主诉：${esc(c.chief_complaint||'（未提供）')}</div>
+      <div class="tiny">牵头方向：${esc(c.primary_department||'—')}　版本 v${esc(c.report_version)}　${c.reviewed_by?('审核人 '+esc(c.reviewed_by)):''}</div>
+    </div>`).join('');
+  $('list-body').innerHTML = rows;
+  /* 左轨：待办病例紧凑列表（与主区列表同源，随时可切换病例） */
+  const rail = $('rail-cases');
+  if(rail){
+    rail.innerHTML = S.cases.slice(0,20).map(c=>`
+      <div class="case-row" onclick="openCase('${esc(c.case_id)}')">
+        <div class="t">#${esc(c.case_id)} ${c.pending_items?`<span class="pill danger">待审 ${c.pending_items}</span>`:'<span class="pill ok">已审完</span>'}</div>
+        <div class="sub">${esc(c.sex||'—')} ${esc(c.age||'—')} · 可靠性 ${esc(c.reliability||'—')} · ${esc(c.primary_department||'—')}</div>
+      </div>`).join('') || '<div class="tiny">暂无病例</div>';
+  }
 }
 
 /* 分析状态徽章：医生一眼看出这条病例的模型分析是否就绪（批处理依赖它） */
@@ -481,9 +390,6 @@ async function analyzePending(){
 /* ===================== 打开病例 ===================== */
 async function openCase(caseId){
   S.caseId = caseId;
-  S.batchPreview = null;      // 换病例时清掉上一例的批量预览（避免误确认到别的病例）
-  S.sample = null;            // 抽检结果同样按病例隔离
-  toggleRail(false);          // 窄屏抽屉在进入病例后自动收好，不挡住内容
   const [c, rev, aud] = await Promise.all([
     api('/api/v2/case/'+caseId), api('/api/v2/case/'+caseId+'/review'), api('/api/v2/case/'+caseId+'/audit')
   ]);
@@ -715,34 +621,15 @@ function addToQuestions(topic){
 }
 
 /* ===================== 屏 F：逐条审核 ===================== */
-/* ===================== 屏 F：报告审核（详情收敛，2026-09-17）=====================
-   实测平均 25.6 条/例：全部铺开时医生要滚很久才能找到真正要处理的那几条。
-   现在分三组：必审待处理（默认展开）/ 医生已处理（折起）/ 免审自动（折起 + 原因）。 */
-const ITEM_GROUPS = [['must','必审待处理'], ['decided','医生已处理'], ['exempt','免审（自动）']];
-const GROUP_HINT_FALLBACK = {
-  must:'这些条目需要医生逐条确认后才能发布审核版',
-  decided:'已留下审核记录，可展开复核；改判会再追加一条记录',
-  exempt:'规则判定免审：不计入待审、不算医生确认；可展开抽检或接管',
-};
-/* 后端给了 groups 就用后端的（唯一口径）；旧响应/测试桩没有就按同规则在前端派生 */
-function reviewGroups(r){
-  if(r && r.groups) return r.groups;
-  const out = {must:[], decided:[], exempt:[]};
-  ((r&&r.items)||[]).forEach(it=>{
-    if(it.state==='auto_processed') out.exempt.push(it.item_id);
-    else if(it.needs_doctor_review!==false && it.state==='awaiting') out.must.push(it.item_id);
-    else out.decided.push(it.item_id);
-  });
-  return out;
-}
 function renderReview(){
   const r = S.review||{};
   const items = r.items||[];
   const sum = r.summary||{};
+  const stateCls = {'awaiting':'st-awaiting','confirmed':'st-confirmed','modified':'st-modified','rejected':'st-rejected','uncertain':'st-uncertain'};
   const bar = $('rev-bar'), note = $('rev-note');
-  if(bar) bar.style.width = Math.round((sum.progress!=null?sum.progress:(sum.total?((sum.total-(sum.pending||0))/(sum.total)):0))*100) + '%';
+  if(bar) bar.style.width = Math.round((sum.human_touched||0)/(sum.total||1)*100) + '%';
   if(note) note.textContent = sum.total
-      ? `医生已处理 ${sum.doctor_reviewed||0} · 免审自动处理 ${sum.auto_processed||0} · 待审 ${sum.pending||0}`
+      ? `人工操作 ${sum.human_touched||0} / ${sum.total} · 待审 ${sum.pending||0}`
       : '该病例暂无可审条目';
   $('pub-badge').className = 'banner ' + (r.published?'ok':'gray');
   $('pub-badge').textContent = r.published
@@ -751,9 +638,8 @@ function renderReview(){
   $('rev-summary').innerHTML = `
     <div class="ai-block">共 ${sum.total||0} 条决策条目：待审 <strong>${sum.pending||0}</strong>　
       已接受 ${sum.by_state.confirmed||0}　已修改 ${sum.by_state.modified||0}　
-      已驳回 ${sum.by_state.rejected||0}　暂不确定 ${sum.by_state.uncertain||0}
-      ${(sum.auto_processed||0)?`　<span class="tiny">免审自动处理 ${sum.auto_processed}（不计入待审、不算医生确认）</span>`:''}
-      <div class="tiny">医生已处理 ${sum.doctor_reviewed||0}/${sum.total||0}（只统计医生真正点过的条目）</div>
+      已驳回 ${sum.by_state.rejected||0}　暂不确定 ${sum.by_state.uncertain||0}　
+      （人工痕迹 ${sum.human_touched||0}/${sum.total||0}）
       ${S.extraQuestion?`<div class="tiny">已从 MDT 审阅台加入待确认问题：${esc(S.extraQuestion)}（可在下方对应分歧条目上操作）</div>`:''}
     </div>`;
   if(!items.length){
@@ -762,77 +648,28 @@ function renderReview(){
     const emptyInline = $('rev-publish-inline'); if(emptyInline) emptyInline.innerHTML = '';
     return;
   }
-  const byId = {}; items.forEach(it=>it.item_id&&(byId[it.item_id]=it));
-  const groups = reviewGroups(r);
-  const hints = r.group_hints || GROUP_HINT_FALLBACK;
-  const sampled = (S.sample && S.sample.sample) ? S.sample.sample.map(s=>s.item_id) : [];
-  $('rev-body').innerHTML = batchBarHtml(r, sum) + ITEM_GROUPS.map(([key, label])=>{
-    const ids = (groups[key]||[]).filter(id=>byId[id]);
-    if(!ids.length) return '';
-    // 只默认展开"必审待处理"：真正需要医生动手的那一组；
-    // 抽检过免审条目时，免审组也自动展开（不然抽检结果藏在折起的面板里）
-    const open = (key==='must' || (key==='exempt' && sampled.length)) ? ' open' : '';
-    const exempt = key==='exempt'
-        ? `<span class="tiny">${esc((byId[ids[0]]||{}).auto_reason||'规则判定免审')}</span>
-           <button class="mini" onclick="event.stopPropagation();sampleExempt()">随机抽检 3 条</button>`
-        : '';
-    const sampleNote = (key==='exempt' && sampled.length)
-        ? `<div class="sample-note tiny">本次随机抽检 ${sampled.length} 条（共 ${S.sample.exempt_total||ids.length} 条免审）：
-             抽检不改变条目状态，也不会计入"医生处理"；发现问题请直接在该条目上操作，那才记为医生接管。</div>`
-        : '';
-    return `<details class="item-group" data-group="${key}"${open}>
-      <summary><strong>${esc(label)}</strong>
-        <span class="pill gray">${ids.length} 条</span>
-        ${(key==='must'&&ids.some(id=>(byId[id]||{}).risk_level==='高'))?'<span class="pill danger">含需逐条判断项</span>':''}
-        <span class="tiny">${esc(hints[key]||GROUP_HINT_FALLBACK[key]||'')}</span></summary>
-      ${exempt?`<div class="group-note">${exempt}</div>`:''}
-      ${sampleNote}
-      <div class="group-body">${ids.map(id=>itemCardHtml(byId[id], key, sampled.includes(id))).join('')}</div>
-    </details>`;
-  }).join('');
-
-  // 可否发布以后端 summary 为唯一口径（必审条目全处理完）；前端不再自己算一套
-  const canPublish = (sum.can_publish!=null) ? !!sum.can_publish : (sum.pending===0 && sum.total>0);
-  /* 同一份面板渲染到两处：右轨（≥1440px 常驻）+ 屏 F 主区（窄屏时右轨被隐藏）。
-     id 用前缀区分，避免重复 id 导致 getElementById 取错元素。 */
-  $('rev-publish').innerHTML = publishPanelHtml(sum, canPublish, 'rail');
-  const inlineBox = $('rev-publish-inline');
-  if(inlineBox) inlineBox.innerHTML = publishPanelHtml(sum, canPublish, 'inline');
-}
-
-/* 单个条目卡：必审组直接铺开；已处理/免审组把正文折进详情（组已经折起，避免两层长文） */
-function itemCardHtml(it, groupKey, isSampled){
-  const stateCls = {'awaiting':'st-awaiting','confirmed':'st-confirmed','modified':'st-modified','rejected':'st-rejected','uncertain':'st-uncertain','auto_processed':''};
   const typeLabel = {'department_selection':'科室入选','path_step':'路径步骤','consensus_item':'共识/分歧','patient_advice':'患者建议'};
-  const risk = it.risk_level || (it.state==='auto_processed' ? '低' : (it.target_type==='consensus_item'?'高':'中'));
-  const riskCls = risk==='高' ? 'danger' : (risk==='低' ? 'gray' : 'warn');
-  const body = `
-    ${it.state==='auto_processed'?`<div class="banner gray" style="margin:0 0 8px;">${esc(it.auto_reason||'规则判定免审')}　<span class="tiny">不计入待审，也不需要医生确认；如需干预仍可用下方按钮处理（会记为医生接管）。</span></div>`:''}
-    <div class="field"><div class="muted" style="min-width:66px;">AI 原稿</div>
-      <div style="flex:1;" class="${it.changed_by_doctor?'old':''}">${esc(it.ai_content)}</div></div>
-    ${it.changed_by_doctor?`<div class="diff">医生改写为：${esc(it.reviewer_content)}
-      <div class="tiny">原因：${esc(it.decision_reason)}</div></div>`:''}
-    ${it.reason_hint?`<div class="field"><div class="muted" style="min-width:66px;">依据</div>
-      <div style="flex:1;" class="tiny">${esc(it.reason_hint)}</div></div>`:''}
-    ${(it.evidence_refs||[]).length?`<div class="field"><div class="muted" style="min-width:66px;">证据</div>
-      <div style="flex:1;">${it.evidence_refs.map(x=>`<span class="ref">${esc(x)}</span>`).join(' ')}</div></div>`:''}
-    ${it.decision_reason&&!it.changed_by_doctor?`<div class="tiny">审核记录：${esc(it.state_label)}｜原因：${esc(it.decision_reason)}｜${esc(it.reviewer||'')} ${esc(it.decided_at||'')}</div>`:''}`;
-  const expanded = groupKey==='must';
-  return `
-    <div class="item ${stateCls[it.state]||''}${isSampled?' sampled':''}" data-item="${esc(it.item_id)}">
+  $('rev-body').innerHTML = items.map((it,i)=>`
+    <div class="item ${stateCls[it.state]||''}">
       <div class="head">
-        <div><strong>${esc(it.title)}</strong>
+        <div><strong>${i+1}. ${esc(it.title)}</strong>
           <span class="pill gray">${esc(typeLabel[it.target_type]||it.target_type)}</span>
           <span class="pill ${it.state==='confirmed'?'ok':(it.state==='modified'?'ok':(it.state==='rejected'?'danger':(it.state==='uncertain'?'warn':'gray')))}">${esc(it.state_label)}</span>
-          <span class="pill ${riskCls}">风险 ${esc(risk)}</span>
-          ${isSampled?'<span class="pill warn">本次抽检</span>':''}
           ${it.changed_by_doctor?'<span class="pill ok">医生已改写</span>':''}
         </div>
         <div class="tiny mono">${esc(it.item_id)}</div>
       </div>
-      ${expanded ? `<div class="body">${body}</div>`
-                 : `<details class="item-detail"><summary class="tiny">展开 AI 原稿 / 依据 / 证据 / 审核记录</summary>
-                      <div class="body">${body}</div></details>`}
+      <div class="body">
+        <div class="field"><div class="muted" style="min-width:66px;">AI 原稿</div>
+          <div style="flex:1;" class="${it.changed_by_doctor?'old':''}">${esc(it.ai_content)}</div></div>
+        ${it.changed_by_doctor?`<div class="diff">医生改写为：${esc(it.reviewer_content)}
+          <div class="tiny">原因：${esc(it.decision_reason)}</div></div>`:''}
+        ${it.reason_hint?`<div class="field"><div class="muted" style="min-width:66px;">依据</div>
+          <div style="flex:1;" class="tiny">${esc(it.reason_hint)}</div></div>`:''}
+        ${(it.evidence_refs||[]).length?`<div class="field"><div class="muted" style="min-width:66px;">证据</div>
+          <div style="flex:1;">${it.evidence_refs.map(x=>`<span class="ref">${esc(x)}</span>`).join(' ')}</div></div>`:''}
+        ${it.decision_reason&&!it.changed_by_doctor?`<div class="tiny">审核记录：${esc(it.state_label)}｜原因：${esc(it.decision_reason)}｜${esc(it.reviewer||'')} ${esc(it.decided_at||'')}</div>`:''}
+      </div>
       <div class="btnbar">
         <button class="primary mini" onclick="decide('${esc(it.item_id)}','accept')">接受</button>
         <button class="mini" onclick="openModal('modify','${esc(it.item_id)}')">修改</button>
@@ -840,108 +677,27 @@ function itemCardHtml(it, groupKey, isSampled){
         <button class="mini" onclick="openModal('uncertain','${esc(it.item_id)}')">暂不确定</button>
         <button class="mini" onclick="openModal('request_more_info','${esc(it.item_id)}')">请求补资料</button>
       </div>
-    </div>`;
-}
+    </div>`).join('');
 
-/* 随机抽检免审条目（7.3）：给"规则放行的条目"留一道人工抽检的口子。
-   抽检只读：不改状态、不算医生处理，医生真的接管了才计入医生处理。 */
-async function sampleExempt(k){
-  const r = await api('/api/v2/case/'+S.caseId+'/sample', {method:'POST',
-    body:JSON.stringify({k: k||3, reviewer:(S.me&&S.me.label)||'审核医生'})});
-  if(r.status!==200 || !r.data.ok){ alert(r.data.error||'抽检失败'); return; }
-  S.sample = r.data;
-  renderReview();
-  const first = (r.data.sample||[])[0];
-  if(first){
-    const box = document.querySelector(`[data-item="${first.item_id}"]`);
-    if(box && box.scrollIntoView) box.scrollIntoView({block:'center'});
-  }
-}
-
-/* 批量接受（7.3）：先预览影响面 → 确认 → 整批可撤销。批量只覆盖低风险必审条目。 */
-function batchBarHtml(r, sum){
-  const active = r.active_batch||'';
-  const pv = S.batchPreview;
-  let html = '';
-  if(active){
-    const n = (sum.by_state&&sum.by_state.confirmed)||0;
-    html += `<div class="batch-bar active">
-      <span class="tiny">本病例有一次批量接受仍在生效（批次 <span class="mono">${esc(active)}</span>）：
-        已接受条目可按批次整批撤回，撤回会留一条"撤销"记录，历史不删除。</span>
-      <button class="mini" onclick="openModal('undo_batch')">撤销本批次</button></div>`;
-  } else if((sum.pending||0) > 0){
-    html += `<div class="batch-bar">
-      <button class="mini" onclick="previewBatch()">批量接受低风险条目…</button>
-      <span class="tiny">先看影响面再决定；只作用于低风险必审条目（科室入选 / 患者建议 / 要求医生决定的路径步骤），
-        多学科分歧与证据冲突必须逐条判断</span></div>`;
-  }
-  if(pv) html += batchPreviewHtml(pv);
-  return html;
-}
-function batchPreviewHtml(pv){
-  const accept = pv.accept||[], excluded = pv.excluded||[];
-  return `<div class="batch-preview">
-    <div class="bp-head">批量接受预览（尚未落库）
-      <span class="pill gray">将接受 ${accept.length} 条</span>
-      ${excluded.length?`<span class="pill warn">需逐条判断 ${excluded.length} 条</span>`:''}</div>
-    <div class="tiny">${esc(pv.note||'')}</div>
-    ${accept.length?`<ol class="bp-list">${accept.map(a=>
-        `<li><strong>${esc(a.title)}</strong> <span class="pill gray">风险 ${esc(a.risk_level||'中')}</span>
-          <div class="tiny">${esc(a.content||'')}</div></li>`).join('')}</ol>`
-      :'<div class="banner warn" style="margin:6px 0 0;">当前没有可批量接受的低风险条目，请逐条处理。</div>'}
-    ${excluded.length?`<div class="bp-excluded"><div class="tiny">以下条目<strong>不参与批量</strong>，必须医生逐条判断：</div>
-      ${excluded.map(e=>`<div class="tiny">· ${esc(e.title)}（${esc(e.why)}）</div>`).join('')}</div>`:''}
-    <div class="actions">
-      <button class="ghost mini" onclick="cancelBatch()">取消</button>
-      <button class="primary mini" onclick="confirmBatch()" ${accept.length?'':'disabled'}>
-        确认接受 ${accept.length} 条</button>
-    </div></div>`;
-}
-async function previewBatch(){
-  const r = await api('/api/v2/case/'+S.caseId+'/batch/preview');
-  if(r.status!==200 || !r.data.ok){ alert(r.data.error||'预览失败'); return; }
-  S.batchPreview = r.data;
-  renderReview();
-}
-function cancelBatch(){ S.batchPreview = null; renderReview(); }
-async function confirmBatch(){
-  const r = await api('/api/v2/case/'+S.caseId+'/batch/accept', {method:'POST',
-    body:JSON.stringify({reason:'医生在预览后确认批量接受低风险条目',
-                         reviewer:(S.me&&S.me.label)||'审核医生'})});
-  if(r.status!==200 || !r.data.ok){ alert(r.data.error||'批量接受失败'); return; }
-  S.batchPreview = null;
-  S.review.items = r.data.items; S.review.summary = r.data.summary;
-  S.review.groups = r.data.groups; S.review.active_batch = r.data.active_batch;
-  await refreshHeader();
-  renderReview();
-}
-async function undoBatch(batchId, reason){
-  const r = await api('/api/v2/case/'+S.caseId+'/batch/undo', {method:'POST',
-    body:JSON.stringify({batch_id:batchId, reason:reason||'',
-                         reviewer:(S.me&&S.me.label)||'审核医生'})});
-  if(r.status!==200 || !r.data.ok){ alert(r.data.error||'撤销失败'); return false; }
-  S.review.items = r.data.items; S.review.summary = r.data.summary;
-  S.review.groups = r.data.groups; S.review.active_batch = r.data.active_batch;
-  await refreshHeader();
-  renderReview();
-  return true;
+  const canPublish = sum.pending===0 && sum.total>0;
+  /* 同一份面板渲染到两处：右轨（≥1440px 常驻）+ 屏 F 主区（窄屏时右轨被隐藏）。
+     id 用前缀区分，避免重复 id 导致 getElementById 取错元素。 */
+  $('rev-publish').innerHTML = publishPanelHtml(sum, canPublish, 'rail');
+  const inlineBox = $('rev-publish-inline');
+  if(inlineBox) inlineBox.innerHTML = publishPanelHtml(sum, canPublish, 'inline');
 }
 
 /* 发布审核版 + 录入线下意见（两处入口共用同一份 HTML 与同一套接口） */
 function publishPanelHtml(sum, canPublish, pfx){
   sum = sum || {};
-  const auto = sum.auto_processed||0;
-  const blocking = (sum.blocking_reasons||[]).filter(x=>x!=='该病例暂无决策条目');
   return `
     <div class="card" style="margin-top:6px;">
       <h3 style="margin-top:0;">发布审核版报告</h3>
-      <div class="tiny">审核进度：医生已处理 ${sum.doctor_reviewed||0}/${sum.total||0}　已确认 ${(sum.by_state&&sum.by_state.confirmed)||0}　驳回 ${(sum.by_state&&sum.by_state.rejected)||0}　暂不确定 ${(sum.by_state&&sum.by_state.uncertain)||0}</div>
-      ${auto?`<div class="tiny">免审自动处理 <strong>${auto}</strong> 条（路径步骤未要求医生决定）：<strong>不计入待审、不算医生确认</strong>，报告与审计里单独标注。</div>`:''}
-      <div class="tiny">规则：<strong>必审条目</strong>全部处理完才能发布；免审条目不会阻塞发布。批量接受只覆盖<strong>低风险</strong>必审条目（逐条留痕、可整批撤销）——多学科分歧与证据冲突必须医生逐条判断。</div>
-      ${(!canPublish && blocking.length)?`<div class="tiny" style="color:var(--warn);">当前不能发布：${esc(blocking.join('；'))}</div>`:''}
+      <div class="tiny">审核进度：已确认 ${(sum.by_state&&sum.by_state.confirmed)||0}　驳回 ${(sum.by_state&&sum.by_state.rejected)||0}　暂不确定 ${(sum.by_state&&sum.by_state.uncertain)||0}　（人工痕迹 ${sum.human_touched||0}/${sum.total||0}）</div>
+      <div class="tiny">规则：仍有"待审"条目时不能发布；可点「全部接受并发布」（会为每条留一条审核记录，不是静默通过）。</div>
       <div class="actions">
         <button class="mini" onclick="publish(false)" ${canPublish?'':'disabled'}>确认发布审核版（${sum.pending||0} 条待审）</button>
-        <button class="primary mini" onclick="publish(true)" ${(sum.pending||0)?'':'disabled'}>批量接受低风险条目并发布（${sum.pending||0} 条待处理）</button>
+        <button class="primary mini" onclick="publish(true)" ${sum.total?'':'disabled'}>全部接受并发布</button>
       </div>
       <h3>录入线下实际意见（就诊后闭环）</h3>
       <div class="tiny">由医生端录入线下真实医生意见（来源=医生上传），用于生成「AI 建议 vs 医生意见」对照；患者端不承担"替医生写意见"。</div>
@@ -967,15 +723,14 @@ async function decide(itemId, action, after, reason){
   return true;
 }
 function openModal(action, itemId){
-  const labels = {modify:'修改条目', reject:'驳回条目', uncertain:'标记为暂不确定', request_more_info:'请求补充资料', undo_batch:'撤销批量接受'};
+  const labels = {modify:'修改条目', reject:'驳回条目', uncertain:'标记为暂不确定', request_more_info:'请求补充资料'};
   const needAfter = action==='modify';
-  S.modal = {action, itemId, batchId: action==='undo_batch' ? ((S.review||{}).active_batch||'') : ''};
+  S.modal = {action, itemId};
   $('modal-title').textContent = labels[action] || '审核操作';
   $('modal-body').innerHTML = `
-    ${action==='undo_batch'?`<div class="muted">将撤回批次 <span class="mono">${esc(S.modal.batchId)}</span> 里已接受的条目，它们会回到"待审"，并由免审升为必审（医生要自己重新处理）。历史只增不删：接受记录与撤销记录都会留在审核记录里。</div>`:''}
     ${needAfter?`<div class="muted">修改后内容（必填）</div><textarea id="m-after" placeholder="改写为面向患者/医生的中性表述"></textarea>`:''}
-    <div class="muted" style="margin-top:8px;">原因（修改/驳回/撤销必填，其他建议填写）</div>
-    <textarea id="m-reason" placeholder="例如：依据不足，需补充眼底检查结果${action==='undo_batch'?'；或：误点批量接受，需要逐条看':''}"></textarea>
+    <div class="muted" style="margin-top:8px;">原因（修改/驳回必填，其他建议填写）</div>
+    <textarea id="m-reason" placeholder="例如：依据不足，需补充眼底检查结果"></textarea>
     <div id="m-msg"></div>`;
   $('modal').classList.remove('hide');
 }
@@ -984,12 +739,6 @@ async function submitModal(){
   if(!S.modal) return;
   const after = $('m-after') ? $('m-after').value.trim() : '';
   const reason = $('m-reason') ? $('m-reason').value.trim() : '';
-  if(S.modal.action==='undo_batch'){
-    if(!reason){ msg('m-msg','撤销必须填写原因'); return; }
-    const ok = await undoBatch(S.modal.batchId, reason);
-    if(ok) closeModal();
-    return;
-  }
   const ok = await decide(S.modal.itemId, S.modal.action, after, reason);
   if(ok) closeModal();
 }
@@ -1047,9 +796,6 @@ function renderHistory(){
 }
 
 /* 启动：优先恢复已有跨页会话，否则显示登录页 */
-renderNav();
-enableCaseNav(false);
-renderQueueFilters();
 restoreSession();
 </script>
 </body>
