@@ -186,10 +186,11 @@ class Store:
             ).fetchone()
         return self._row_to_case(row) if row else None
 
-    def list_cases(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def list_cases(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM cases ORDER BY created_at DESC LIMIT ?", (int(limit),)
+                "SELECT * FROM cases ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (int(limit), max(0, int(offset)))
             ).fetchall()
         return [self._row_to_case(r) for r in rows]
 
@@ -337,9 +338,11 @@ class Store:
             self._conn.commit()
 
     def list_decisions(self, case_id: str) -> List[Dict[str, Any]]:
+        # created_at 只精确到秒，同一秒内的多条（如"批量接受 → 整批撤销"）必须靠 rowid
+        # 保持**写入顺序**，否则"最新决策"可能取到被撤销前的那条（撤销会静默失效）。
         with self._lock:
             rows = self._conn.execute(
-                "SELECT payload FROM decisions WHERE case_id = ? ORDER BY created_at ASC",
+                "SELECT payload FROM decisions WHERE case_id = ? ORDER BY created_at ASC, rowid ASC",
                 (case_id,),
             ).fetchall()
         out: List[Dict[str, Any]] = []

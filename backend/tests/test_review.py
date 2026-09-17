@@ -116,6 +116,83 @@ class TestBuildItems(unittest.TestCase):
         self.assertEqual(rs.build_items({"case_id": "C0", "payload": {}}), [])
 
 
+class TestRiskGroupsAndBatchPlan(unittest.TestCase):
+    """详情收敛（7.3）：风险分级 / 三组折叠 / 批量影响面预览。"""
+
+    def setUp(self):
+        self.items = rs.build_items(sample_case())
+        self.by_id = {i.item_id: i for i in self.items}
+
+    def test_disagreement_is_high_risk(self):
+        disputes = [i for i in self.items
+                    if i.target_type == "consensus_item" and i.target_id.startswith("X-")]
+        self.assertTrue(disputes, "样例病例应有分歧条目")
+        for item in disputes:
+            self.assertEqual(item.risk_level, "高", item.item_id)
+
+    def test_exempt_step_is_low_risk(self):
+        # S1 未要求医生决定 → 免审（不进批量清单：它本来就不需要医生操作）
+        self.assertFalse(self.by_id["path_step:S1"].needs_doctor_review)
+        # S2 要求医生决定 → 低风险必审 → 可以进批量清单
+        plan = rs.batch_plan(self.items)
+        ids = {row["item_id"] for row in plan["accept"]}
+        self.assertIn("path_step:S2", ids)
+        self.assertNotIn("path_step:S1", ids)
+        self.assertTrue(rs.is_batch_low_risk(self.by_id["path_step:S2"]))
+        # 免审条目在 apply_decisions 之后是"低风险"，且不属于必审
+        rs.apply_decisions(self.items, [])
+        self.assertEqual(self.by_id["path_step:S1"].risk_level, "低")
+        self.assertEqual(self.by_id["path_step:S1"].state, rs.AUTO_PROCESSED)
+
+    def test_dispute_never_batchable(self):
+        """红线：分歧待裁决不能走批量通道。"""
+        for item in self.items:
+            if item.target_type == "consensus_item":
+                self.assertFalse(rs.is_batch_low_risk(item), item.item_id)
+
+    def test_plan_explains_exclusions(self):
+        plan = rs.batch_plan(self.items)
+        self.assertTrue(plan["excluded"], "应列出必须逐条判断的条目")
+        for row in plan["excluded"]:
+            self.assertTrue(row["why"])
+        accepted_ids = set(plan["accept_ids"])
+        for row in plan["excluded"]:
+            self.assertNotIn(row["item_id"], accepted_ids)
+        # 预览与执行共用同一份判定：accept + excluded = 全部待审必审条目
+        pending = [i.item_id for i in self.items if i.needs_doctor_review and i.state == rs.AWAITING]
+        self.assertEqual(sorted(list(accepted_ids) + [r["item_id"] for r in plan["excluded"]]),
+                         sorted(pending))
+
+    def test_groups_partition_all_items(self):
+        groups = rs.group_items(self.items)
+        merged = groups["must"] + groups["decided"] + groups["exempt"]
+        self.assertEqual(sorted(merged), sorted(i.item_id for i in self.items))
+        self.assertEqual(len(merged), len(set(merged)), "条目不能同时出现在两组")
+
+    def test_decided_item_moves_group(self):
+        item = self.by_id["department_selection:内分泌科"]
+        self.assertIn(item.item_id, rs.group_items(self.items)["must"])
+        decision = {"target_type": "department_selection", "target_id": "内分泌科",
+                    "action": "accept", "reviewer": {"role": "医学生"}, "created_at": "2026-09-17T10:00:00",
+                    "decision_id": "d1"}
+        rs.apply_decisions(self.items, [decision])
+        groups = rs.group_items(self.items)
+        self.assertIn(item.item_id, groups["decided"])
+        self.assertNotIn(item.item_id, groups["must"])
+
+    def test_reopen_raises_exempt_item_to_required(self):
+        """撤销 = 医生要自己重新处理：免审条目也要变成必审（否则会出现"待审但不计入待审数"）。"""
+        item = self.by_id["path_step:S1"]
+        self.assertFalse(item.needs_doctor_review)
+        decision = {"target_type": "path_step", "target_id": "S1", "action": "reopen",
+                    "reason": "我要自己看", "reviewer": {"role": "医学生"},
+                    "created_at": "2026-09-17T10:00:00", "decision_id": "d1"}
+        rs.apply_decisions([item], [decision])
+        self.assertEqual(item.state, rs.AWAITING)
+        self.assertTrue(item.needs_doctor_review)
+        self.assertEqual(item.risk_level, "中")
+
+
 class TestDecisions(unittest.TestCase):
     def setUp(self):
         self.items = rs.build_items(sample_case())
@@ -183,15 +260,68 @@ class TestDecisions(unittest.TestCase):
         self.assertEqual(applied["眼科"].state, rs.CONFIRMED)
 
     def test_summary_progress(self):
+        """待审 = **必审且未处理**；免审条目（未要求医生决定的路径步骤）不计入待审。"""
         items = rs.build_items(sample_case())
-        s0 = rs.summarize(items)
-        self.assertEqual(s0["pending"], s0["total"])
+        applied = rs.apply_decisions(items, [])          # 走一遍派生（auto_processed）
+        s0 = rs.summarize(applied)
+        exempt = [i for i in applied if not i.needs_doctor_review]
+        self.assertTrue(exempt, "样例里应有免审的路径步骤")
+        self.assertEqual(s0["pending"], s0["total"] - len(exempt))
+        self.assertEqual(s0["auto_processed"], len(exempt))
+        self.assertEqual(s0["doctor_reviewed"], 0)
         self.assertFalse(s0["can_publish"])
-        for item in items:
+        for item in applied:
             item.state = rs.CONFIRMED
-        s1 = rs.summarize(items)
+        s1 = rs.summarize(applied)
         self.assertTrue(s1["can_publish"])
         self.assertEqual(s1["progress"], 1.0)
+
+    def test_exempt_items_do_not_block_publishing(self):
+        """真缺陷回归：免审条目曾是 awaiting，仅此就把发布卡死。
+
+        现在只要"必审条目"都终态即可发布，且在报告/审计里**不能**算成医生确认。
+        """
+        items = rs.apply_decisions(rs.build_items(sample_case()), [])
+        for item in items:
+            if not item.needs_doctor_review:
+                self.assertEqual(item.state, rs.AUTO_PROCESSED, item.item_id)
+                self.assertTrue(item.auto_reason, "免审要有可解释的原因")
+            else:
+                item.state = rs.CONFIRMED
+                item.decision_id = "D-1"
+                item.reviewer = "doctor"
+        summary = rs.summarize(items)
+        self.assertEqual(summary["pending"], 0)
+        self.assertTrue(summary["can_publish"], summary)
+        self.assertGreater(summary["auto_processed"], 0)
+        # 免审不能计入"医生处理过"
+        self.assertEqual(summary["doctor_reviewed"], summary["total"] - summary["auto_processed"])
+
+    def test_required_step_still_blocks_publishing(self):
+        """反向保护：要求医生决定的路径步骤仍然必须审完才能发布。"""
+        case = sample_case()
+        for step in (case["payload"]["path"]["steps"]):
+            step["requires_doctor"] = True
+        items = rs.apply_decisions(rs.build_items(case), [])
+        summary = rs.summarize(items)
+        self.assertEqual(summary["pending"], summary["total"])
+        self.assertFalse(summary["can_publish"])
+        self.assertTrue(summary["blocking_reasons"], summary)
+        self.assertIn("必审条目", "；".join(summary["blocking_reasons"]))
+
+    def test_doctor_can_still_override_exempt_item(self):
+        """免审不等于不可干预：医生若对免审条目做了决定，以医生决定为准（不标成自动处理）。"""
+        case = sample_case()
+        items = rs.build_items(case)
+        exempt = next(i for i in items if not i.needs_doctor_review)
+        decisions = [{"target_type": exempt.target_type, "target_id": exempt.target_id,
+                      "action": "reject", "reason": "该步骤不适用本例",
+                      "decision_id": "D-9", "created_at": "1",
+                      "reviewer": {"role": "doctor"}}]
+        applied = {i.item_id: i for i in rs.apply_decisions(items, decisions)}
+        self.assertEqual(applied[exempt.item_id].state, rs.REJECTED)
+        self.assertEqual(applied[exempt.item_id].decision_id, "D-9")
+        self.assertEqual(applied[exempt.item_id].auto_reason, "")
 
     def test_pending_questions_only_uncertain(self):
         items = rs.build_items(sample_case())
@@ -225,15 +355,22 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
     def test_review_items_generated(self):
         ids, review = self._item_ids()
         self.assertTrue(ids, "应产生可审核条目")
-        self.assertEqual(review["summary"]["pending"], len(ids))
+        # 待审只算"必审"条目：未要求医生决定的路径步骤是免审（auto_processed）
+        exempt = [i for i in review["items"] if not i["needs_doctor_review"]]
+        self.assertTrue(exempt, "本例应有免审的路径步骤")
+        self.assertEqual(review["summary"]["pending"], len(ids) - len(exempt))
+        self.assertEqual(review["summary"]["auto_processed"], len(exempt))
         self.assertTrue(review["items"][0]["item_id"].startswith("department_selection:"))
 
     def test_accept_decision_recorded(self):
-        ids, _ = self._item_ids()
-        result = self.flow.submit_decision(self.case_id, ids[0], "accept",
+        ids, review = self._item_ids()
+        first_required = next(i["item_id"] for i in review["items"] if i["needs_doctor_review"])
+        before = review["summary"]["pending"]
+        result = self.flow.submit_decision(self.case_id, first_required, "accept",
                                            reviewer_name="医学生")
         self.assertTrue(result["ok"], result.get("error"))
-        self.assertEqual(result["summary"]["pending"], len(ids) - 1)
+        self.assertEqual(result["summary"]["pending"], before - 1)
+        self.assertEqual(result["summary"]["doctor_reviewed"], 1)
         events = [a["event"] for a in self.flow.store.list_audit(self.case_id)]
         self.assertIn("decision_recorded", events)
 
@@ -302,7 +439,7 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertTrue(review["doctor_opinions"][0]["is_verified"])
 
     def test_list_cases_pending_priority(self):
-        rows = self.flow.list_review_cases()
+        rows = self.flow.list_review_cases()["rows"]
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertEqual(row["case_id"], self.case_id)
@@ -311,8 +448,8 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertIn(row["case_state"], ("awaiting_doctor", "analyzing"))
 
     def test_list_cases_filter(self):
-        self.assertEqual(self.flow.list_review_cases(state_filter="doctor_confirmed"), [])
-        self.assertEqual(len(self.flow.list_review_cases(state_filter="awaiting_doctor")), 1)
+        self.assertEqual(self.flow.list_review_cases(state_filter="doctor_confirmed")["rows"], [])
+        self.assertEqual(len(self.flow.list_review_cases(state_filter="awaiting_doctor")["rows"]), 1)
 
     def test_history_has_timeline_and_decisions(self):
         ids, _ = self._item_ids()
@@ -338,6 +475,198 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         text = json.dumps(self.flow.get_review(self.case_id), ensure_ascii=False)
         for token in ("概率", "置信度", "confidence"):
             self.assertNotIn(token, text)
+
+    # ---------------- 详情收敛 7.3：批量接受（预览 → 执行 → 撤销）----------------
+    def _inject_mdt_disagreement(self):
+        """给病例注入一条多学科分歧（真实链路要跑 LLM，单测里直接写 payload）。"""
+        def mutate(case):
+            payload = case.setdefault("payload", {})
+            payload["mdt"] = {"aggregation": {
+                "consensus": [],
+                "disagreements": [{"topic": "先查眼底 vs 先查肾功",
+                                   "positions": {"眼科": "先查眼底", "肾内科": "先查肾功"},
+                                   "resolving_info": "需补充检查依据"}],
+                "open_questions": [],
+            }}
+        self.flow.store.mutate_case(self.case_id, mutate)
+
+    def test_preview_batch_is_read_only(self):
+        review = self.flow.get_review(self.case_id)
+        before = review["summary"]["pending"]
+        plan = self.flow.preview_batch(self.case_id)
+        self.assertTrue(plan["ok"], plan.get("error"))
+        self.assertTrue(plan["accept"], "应给出将接受的条目")
+        self.assertEqual(self.flow.get_review(self.case_id)["summary"]["pending"], before,
+                         "预览不得改动任何条目")
+        self.assertTrue(plan["note"])
+
+    def test_batch_accept_records_batch_id(self):
+        plan = self.flow.preview_batch(self.case_id)
+        result = self.flow.submit_batch(self.case_id, reviewer_name="医学生")
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertEqual(result["accepted_count"], len(plan["accept_ids"]))
+        self.assertTrue(result["batch_id"].startswith("B-"))
+        self.assertEqual(result["active_batch"], result["batch_id"])
+        decisions = self.flow.store.list_decisions(self.case_id)
+        tagged = [d for d in decisions if d.get("batch_id") == result["batch_id"]]
+        self.assertEqual(len(tagged), len(plan["accept_ids"]))
+        events = [a["event"] for a in self.flow.store.list_audit(self.case_id)]
+        self.assertIn("batch_accepted", events)
+        # 批量接受留的是一条批次审计 + 每条独立决策（不是静默通过，也不是 N 条噪音）
+        self.assertEqual(events.count("decision_recorded"), 0)
+
+    def test_batch_can_be_undone(self):
+        before = self.flow.get_review(self.case_id)["summary"]["pending"]
+        reviewed_before = self.flow.get_review(self.case_id)["summary"]["doctor_reviewed"]
+        batch = self.flow.submit_batch(self.case_id, reviewer_name="医学生")
+        self.assertTrue(batch["ok"], batch.get("error"))
+        mid = self.flow.get_review(self.case_id)["summary"]["pending"]
+        self.assertEqual(mid, before - batch["accepted_count"])
+        undo = self.flow.undo_batch(self.case_id, batch["batch_id"], reviewer_name="医学生",
+                                    reason="误点，需要逐条看")
+        self.assertTrue(undo["ok"], undo.get("error"))
+        self.assertEqual(undo["undone_count"], batch["accepted_count"])
+        after = self.flow.get_review(self.case_id)
+        self.assertEqual(after["summary"]["pending"], before, "撤销后条目应回到待审")
+        # 撤销后不能既算"待审"又算"医生已处理"（计数必须自洽）
+        self.assertEqual(after["summary"]["doctor_reviewed"], reviewed_before,
+                         "撤销后医生处理数应回退")
+        self.assertEqual(after["active_batch"], "", "批次已撤销，不应再显示可撤销")
+        events = [a["event"] for a in self.flow.store.list_audit(self.case_id)]
+        self.assertIn("batch_undone", events)
+        # 历史只增不删：接受记录与撤销记录都在
+        decisions = self.flow.store.list_decisions(self.case_id)
+        actions = [d.get("action") for d in decisions if d.get("batch_id") == batch["batch_id"]]
+        self.assertEqual(actions.count("accept"), batch["accepted_count"])
+        self.assertEqual(actions.count("reopen"), batch["accepted_count"])
+
+    def test_undo_twice_is_rejected(self):
+        batch = self.flow.submit_batch(self.case_id, reviewer_name="医学生")
+        self.assertTrue(self.flow.undo_batch(self.case_id, batch["batch_id"],
+                                             reason="第一次撤销")["ok"])
+        again = self.flow.undo_batch(self.case_id, batch["batch_id"], reason="再撤一次")
+        self.assertFalse(again["ok"])
+        self.assertIn("已被撤销", again["error"])
+
+    def test_undo_reason_required_and_unknowable_batch(self):
+        batch = self.flow.submit_batch(self.case_id, reviewer_name="医学生")
+        no_reason = self.flow.undo_batch(self.case_id, batch["batch_id"], reason="")
+        # 撤销必须写明原因：空原因时整批不会被动（条目仍是已接受）
+        self.assertFalse(no_reason["ok"])
+        self.assertTrue(no_reason.get("need_reason"))
+        self.assertEqual(self.flow.get_review(self.case_id)["active_batch"], batch["batch_id"])
+        self.assertFalse(self.flow.undo_batch(self.case_id, "B-不存在", reason="x")["ok"])
+
+    def test_reopen_requires_reason_and_pending_item(self):
+        review = self.flow.get_review(self.case_id)
+        required = next(i["item_id"] for i in review["items"] if i["needs_doctor_review"])
+        self.flow.submit_decision(self.case_id, required, "accept", reviewer_name="医学生")
+        no_reason = self.flow.submit_decision(self.case_id, required, "reopen")
+        self.assertFalse(no_reason["ok"])
+        self.assertIn("原因", no_reason["error"])
+        ok = self.flow.submit_decision(self.case_id, required, "reopen", reason="要重新看",
+                                       reviewer_name="医学生")
+        self.assertTrue(ok["ok"], ok.get("error"))
+        self.assertEqual(ok["state_changed"], None)
+        # 已经回到待审的条目再撤一次没有意义
+        again = self.flow.submit_decision(self.case_id, required, "reopen", reason="再撤")
+        self.assertFalse(again["ok"])
+
+    def test_same_second_undo_beats_accept(self):
+        """created_at 只到秒：同一秒内的"接受→撤销"必须按写入顺序判定，否则撤销会静默失效。"""
+        review = self.flow.get_review(self.case_id)
+        required = next(i["item_id"] for i in review["items"] if i["needs_doctor_review"])
+        self.flow.submit_decision(self.case_id, required, "accept", reviewer_name="医学生")
+        self.flow.submit_decision(self.case_id, required, "reopen", reason="同一秒撤销",
+                                  reviewer_name="医学生")
+        item = next(i for i in self.flow.get_review(self.case_id)["items"]
+                    if i["item_id"] == required)
+        self.assertEqual(item["state"], "awaiting")
+
+    def test_publish_accept_all_leaves_disputes_for_doctor(self):
+        """批量通道不能替医生裁决分歧：即使 accept_all=true，分歧条目仍会阻塞发布并如实说明。"""
+        self._inject_mdt_disagreement()
+        result = self.flow.publish_review(self.case_id, reviewer_name="医学生", accept_all=True)
+        self.assertFalse(result["ok"], result)
+        self.assertIn("不能发布", result["error"])
+        self.assertTrue(any(i.startswith("consensus_item:X-") for i in result["pending_items"]),
+                        result["pending_items"])
+        review = self.flow.get_review(self.case_id)
+        dispute = next(i for i in review["items"] if i["item_id"].startswith("consensus_item:X-"))
+        self.assertEqual(dispute["state"], "awaiting")
+        self.assertEqual(dispute["risk_level"], "高")
+        # 逐条接受分歧后即可发布（医生做了判断）
+        self.flow.submit_decision(self.case_id, dispute["item_id"], "accept",
+                                  reviewer_name="医学生")
+        done = self.flow.publish_review(self.case_id, reviewer_name="医学生")
+        self.assertTrue(done["ok"], done.get("error"))
+
+    def test_undo_refused_after_publish(self):
+        self.flow.publish_review(self.case_id, reviewer_name="医学生", accept_all=True)
+        batch_id = (self.flow.get_case(self.case_id)["payload"]["review"] or {}).get("batch_id")
+        self.assertTrue(batch_id, "发布时应记录批次号")
+        result = self.flow.undo_batch(self.case_id, batch_id, reason="发布后反悔")
+        self.assertFalse(result["ok"])
+        self.assertIn("已发布", result["error"])
+
+    def test_sample_exempt_is_read_only_and_audited(self):
+        """抽检免审条目：只读（不改状态、不算医生处理），但要在审计里留下"抽了哪几条"。"""
+        review = self.flow.get_review(self.case_id)
+        exempt = [i["item_id"] for i in review["items"] if i["state"] == "auto_processed"]
+        self.assertTrue(exempt, "本例应有免审条目")
+        before = review["summary"]
+        result = self.flow.sample_exempt(self.case_id, k=2, reviewer_name="医学生")
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertEqual(len(result["sample"]), min(2, len(exempt)))
+        self.assertTrue(all(s["item_id"] in exempt for s in result["sample"]))
+        self.assertEqual(result["exempt_total"], len(exempt))
+        after = self.flow.get_review(self.case_id)["summary"]
+        self.assertEqual(after["pending"], before["pending"], "抽检不得改变待审数")
+        self.assertEqual(after["doctor_reviewed"], before["doctor_reviewed"],
+                         "抽检不得记成医生处理（红线：不能给免审条目偷偷盖医生章）")
+        self.assertEqual(after["auto_processed"], before["auto_processed"])
+        for item in self.flow.get_review(self.case_id)["items"]:
+            if item["item_id"] in [s["item_id"] for s in result["sample"]]:
+                self.assertEqual(item["state"], "auto_processed", "抽检后条目仍是免审态")
+        events = [a["event"] for a in self.flow.store.list_audit(self.case_id)]
+        self.assertIn("exempt_sampled", events)
+
+    def test_sample_size_is_clamped_to_available(self):
+        result = self.flow.sample_exempt(self.case_id, k=999)
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["sample"]), result["exempt_total"])
+
+    def test_sample_without_exempt_items_is_rejected(self):
+        review = self.flow.get_review(self.case_id)
+        # 把所有免审条目都接管（撤销 → 升为必审），此时没有可抽检对象
+        for item in review["items"]:
+            if item["state"] == "auto_processed":
+                self.flow.submit_decision(self.case_id, item["item_id"], "accept",
+                                          reviewer_name="医学生")
+        result = self.flow.sample_exempt(self.case_id)
+        self.assertFalse(result["ok"])
+        self.assertIn("没有免审条目", result["error"])
+
+    def test_sampled_item_can_be_taken_over_by_doctor(self):
+        """抽检发现问题的正确处置：医生直接接管 → 才计入医生处理。"""
+        result = self.flow.sample_exempt(self.case_id, k=1)
+        item_id = result["sample"][0]["item_id"]
+        taken = self.flow.submit_decision(self.case_id, item_id, "accept",
+                                          reason="抽检确认可接受", reviewer_name="医学生")
+        self.assertTrue(taken["ok"], taken.get("error"))
+        item = next(i for i in self.flow.get_review(self.case_id)["items"]
+                    if i["item_id"] == item_id)
+        self.assertEqual(item["state"], "confirmed")
+        self.assertTrue(item["decision_id"])
+        self.assertGreaterEqual(self.flow.get_review(self.case_id)["summary"]["doctor_reviewed"], 1)
+
+    def test_review_payload_exposes_groups(self):
+        review = self.flow.get_review(self.case_id)
+        self.assertEqual(set(review["groups"]), {"must", "decided", "exempt"})
+        self.assertTrue(review["groups"]["exempt"], "本例应有免审条目")
+        self.assertTrue(review["group_hints"]["exempt"])
+        every = review["groups"]["must"] + review["groups"]["decided"] + review["groups"]["exempt"]
+        self.assertEqual(sorted(every), sorted(i["item_id"] for i in review["items"]))
 
 
 if __name__ == "__main__":
