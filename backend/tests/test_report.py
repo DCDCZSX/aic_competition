@@ -251,25 +251,6 @@ class TestFullReport(unittest.TestCase):
         report = build_full_report(case)
         self.assertIn("仅 1 个就医方向", str(report.sections["各专科 AI 视角"]))
 
-    def test_report_labels_exempt_items_separately(self):
-        """免审条目（未要求医生决定的路径步骤）要在报告里单独标注。
-
-        红线：**不得并进"审核条目数"或写成医生确认过** —— 报告必须能区分
-        "医生确认过的"与"规则判定免审的"。
-        """
-        case = sample_case()
-        for step in case["payload"]["path"]["steps"]:
-            step["requires_doctor"] = False
-        record = build_full_report(case).sections["审核记录与版本"]
-        self.assertIn("免审条目", record)
-        self.assertIn("未计入医生审核", str(record["免审条目"]))
-        case2 = sample_case()
-        for step in case2["payload"]["path"]["steps"]:
-            step["requires_doctor"] = True
-        record2 = build_full_report(case2).sections["审核记录与版本"]
-        self.assertNotIn("免审条目", record2, "全部需医生决定时不应出现免审标注")
-
-
     def test_no_imperative_medical_advice(self):
         case = sample_case()
         markdown = render_markdown(build_full_report(case))

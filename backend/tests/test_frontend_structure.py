@@ -147,25 +147,14 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("--accent", html)
 
     def test_doctor_three_track_shell(self):
-        """医生工作台：左轨 = 队列筛选 + 审阅视图；右轨 = 审核面板；主区 = 待审队列。"""
+        """医生工作台：左轨 = 待办病例 + 审阅视图；右轨 = 审核面板。"""
         _, html = self.get("/doctor")
         self.assertIn('href="/static/css/dsh.css"', html)
         self.assertEqual(html.count('class="rail rail-left"'), 1)
         self.assertEqual(html.count('class="rail rail-right"'), 1)
-        for anchor in ('id="rail-filters"', 'id="rev-summary"', 'id="rev-publish"',
-                       'id="rev-bar"', 'id="nav"', 'id="list-more"', 'id="f-sort"',
-                       'id="rail-toggle"'):   # 窄屏抽屉入口（右轨 <1440px 被 CSS 收起）
+        for anchor in ('id="rail-cases"', 'id="rev-summary"', 'id="rev-publish"',
+                       'id="rev-bar"', 'id="nav"'):
             self.assertIn(anchor, html, f"医生工作台缺少 {anchor}")
-        # 队列优先（2026-09-17）：左轨不再重复渲染一份迷你病例列表
-        self.assertNotIn('id="rail-cases"', html, "左轨病例列表已删除，病例只应出现在主区队列")
-        # 四区导航（2026-09-17 详情收敛）：导航由 renderNav() 渲染，静态 HTML 里只留容器
-        self.assertIn("NAV_GROUPS", html, "缺少四区导航定义")
-        for area in ("'概览'", "'证据与推理'", "'审核'", "'历史'"):
-            self.assertIn(area, html, f"四区导航缺少 {area}")
-        # 分组折叠与批量预览/撤销的锚点（前端逻辑另由 verify_frontend_logic.mjs 断言）
-        for hook in ("item-group", "batch-bar", "batch-preview", "undoBatch", "previewBatch",
-                     "reviewGroups", "toggleRail", "sampleExempt"):
-            self.assertIn(hook, html, f"审核详情收敛缺少 {hook}")
         # 业务屏必须在 <main> 内（与患者端同一约束）
         ids = set(self.sections_of(html, "main"))
         expected = {"s-list", "s-overview", "s-triage", "s-evidence", "s-mdt", "s-review", "s-history"}

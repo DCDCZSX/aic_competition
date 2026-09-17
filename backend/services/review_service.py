@@ -39,21 +39,15 @@ CONFIRMED = "confirmed"
 MODIFIED = "modified"
 REJECTED = "rejected"
 UNCERTAIN = "uncertain"
-# 派生态（**不落库**）：规则判定"不需要医生确认"的条目（如未要求医生决定的路径步骤）。
-# 与"医生已接受"必须严格区分 —— 报告、审计、界面都不能把它写成医生确认过（红线）。
-AUTO_PROCESSED = "auto_processed"
 
-ITEM_STATES = (AWAITING, CONFIRMED, MODIFIED, REJECTED, UNCERTAIN, AUTO_PROCESSED)
+ITEM_STATES = (AWAITING, CONFIRMED, MODIFIED, REJECTED, UNCERTAIN)
 ITEM_STATE_LABELS: Dict[str, str] = {
     AWAITING: "待审",
     CONFIRMED: "已接受",
     MODIFIED: "已修改",
     REJECTED: "已驳回",
     UNCERTAIN: "暂不确定",
-    AUTO_PROCESSED: "免审（自动）",
 }
-AUTO_PROCESSED_REASON = "规则判定免审：该路径步骤未要求医生决定（医生可随时接管）"
-# 需要医生最终负责的状态：auto_processed 不属于"医生处理过"
 TERMINAL_STATES = (CONFIRMED, MODIFIED, REJECTED, UNCERTAIN)
 
 # 医生动作中文标签（审计与审核记录展示用）
@@ -64,7 +58,6 @@ ACTION_LABELS: Dict[str, str] = {
     "uncertain": "暂不确定",
     "supplement_opinion": "录入线下意见",
     "request_more_info": "请求补资料",
-    "reopen": "撤销（回到待审）",
 }
 
 # 审核对象类型中文标签（报告与审核记录对外展示用，避免暴露内部英文枚举）
@@ -83,7 +76,6 @@ ACTION_TO_STATE: Dict[str, str] = {
     "uncertain": UNCERTAIN,
     "supplement_opinion": CONFIRMED,     # 录入线下意见：不改变条目，只登记医生意见
     "request_more_info": UNCERTAIN,      # 请求补资料：条目暂不确定 + 病例退回补资料
-    "reopen": AWAITING,                  # 撤销：条目回到待审（历史决策保留）
 }
 
 # 报告里"患者建议"类条目的来源段落（report_service 一页摘要的段落名）
@@ -132,8 +124,6 @@ class ReviewItem:
     decided_at: str = ""
     decision_id: str = ""
     needs_doctor_review: bool = True
-    auto_reason: str = ""                            # 规则判定免审时的原因（仅派生态有值）
-    batch_id: str = ""                               # 由哪一批"批量接受"落库（可整批撤销）
 
     @property
     def final_content(self) -> str:
@@ -150,24 +140,6 @@ class ReviewItem:
     def changed_by_doctor(self) -> bool:
         """是否被医生改写（报告里用 after、审核记录里保留 before）。"""
         return bool(self.state == MODIFIED and self.reviewer_content)
-
-    @property
-    def risk_level(self) -> str:
-        """条目风险（**只用于"默认展开谁、能否批量"**，不是临床风险预测，也不是概率）。
-
-        - 高：多学科分歧待裁决（必须医生逐条判断）/ 证据状态为冲突 / 医生标了"暂不确定"
-        - 低：规则判定免审（不需要医生决定）
-        - 中：其余必审条目（科室入选、患者建议、要求医生决定的路径步骤）
-        """
-        if self.state == AUTO_PROCESSED:
-            return "低"
-        if self.state == UNCERTAIN:
-            return "高"
-        if self.target_type == "consensus_item" and self.target_id.startswith("X-"):
-            return "高"
-        if any("conflict" in str(r) for r in self.evidence_refs):
-            return "高"
-        return "中"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -188,9 +160,6 @@ class ReviewItem:
             "decision_id": self.decision_id,
             "changed_by_doctor": self.changed_by_doctor,
             "needs_doctor_review": self.needs_doctor_review,
-            "auto_reason": _clean(self.auto_reason),
-            "risk_level": self.risk_level,
-            "batch_id": self.batch_id,
         }
 
 
@@ -343,14 +312,7 @@ def latest_decisions(decisions: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str,
 
 def apply_decisions(items: Sequence[ReviewItem],
                     decisions: Sequence[Dict[str, Any]]) -> List[ReviewItem]:
-    """把医生决策覆盖到条目上（就地更新并返回），并派生"免审"状态。
-
-    两条规则（2026-09-17 修正，此前有缺陷）：
-    1. `needs_doctor_review` 由**条目自身的业务语义**决定（如路径步骤是否要求医生决定），
-       不能被"是否还没审"覆盖 —— 旧实现用 `state in (AWAITING, UNCERTAIN)` 覆盖了它，
-       导致"理论上免审"的条目照样计入待审、照样阻塞发布；
-    2. 医生没干预过、且规则判定免审的条目 → 派生为 `auto_processed`（**不落库、不计入医生处理**）。
-    """
+    """把医生决策覆盖到条目上（就地更新并返回）。"""
     by_id = latest_decisions(decisions)
     for item in items:
         decision = by_id.get(item.item_id)
@@ -358,21 +320,13 @@ def apply_decisions(items: Sequence[ReviewItem],
             continue
         action = str(decision.get("action") or "")
         item.state = ACTION_TO_STATE.get(action, AWAITING)
-        if action == "reopen":
-            # 撤销 = 医生明确表示"这条我要自己重新处理" → 从免审升为必审（否则会出现
-            # "状态是待审、却不计入待审计数、也不阻塞发布"的自相矛盾条目）
-            item.needs_doctor_review = True
         item.reviewer_content = str(decision.get("after") or "")
         item.decision_reason = str(decision.get("reason") or "")
         reviewer = decision.get("reviewer") or {}
         item.reviewer = str(reviewer.get("role") or "") or str(decision.get("reviewer_name") or "")
         item.decided_at = str(decision.get("created_at") or "")
         item.decision_id = str(decision.get("decision_id") or "")
-        item.batch_id = str(decision.get("batch_id") or "")
-    for item in items:
-        if not item.needs_doctor_review and not item.decision_id:
-            item.state = AUTO_PROCESSED
-            item.auto_reason = AUTO_PROCESSED_REASON
+        item.needs_doctor_review = item.state in (AWAITING, UNCERTAIN)
     return list(items)
 
 
@@ -382,30 +336,16 @@ def summarize(items: Sequence[ReviewItem]) -> Dict[str, Any]:
     for item in items or []:
         counts[item.state] = counts.get(item.state, 0) + 1
     total = len(items or [])
-    # 待审 = **必审且未被医生处理**。免审条目（auto_processed）不计入待审，也不阻塞发布。
-    pending = sum(1 for i in items or [] if i.needs_doctor_review and i.state == AWAITING)
-    # "医生已处理" = 医生这次决定**仍然生效**（终态）。被整批撤销（reopen → awaiting）的条目
-    # 不能既算"待审"又算"医生已处理" —— 那种自相矛盾的计数会让进度条骗人。
-    doctor_reviewed = sum(1 for i in items or []
-                          if i.decision_id and i.state in TERMINAL_STATES)
-    auto_processed = counts.get(AUTO_PROCESSED, 0)
-    blocking: List[str] = []
-    if total == 0:
-        blocking.append("该病例暂无决策条目")
-    if pending:
-        blocking.append(f"仍有 {pending} 条必审条目未处理")
+    pending = counts[AWAITING]
+    human_touched = total - pending
     return {
         "total": total,
         "by_state": counts,
         "pending": pending,
-        "doctor_reviewed": doctor_reviewed,
-        "auto_processed": auto_processed,
-        # 兼容字段：语义已收紧为"医生真正处理过"（此前把批量通过也算进去，分不清人和机器）
-        "human_touched": doctor_reviewed,
-        "all_resolved": total > 0 and pending == 0,
+        "human_touched": human_touched,
+        "all_resolved": pending == 0,
         "can_publish": total > 0 and pending == 0,
-        "blocking_reasons": blocking,
-        "progress": round((total - pending) / total, 2) if total else 0.0,
+        "progress": round(human_touched / total, 2) if total else 0.0,
     }
 
 
@@ -463,99 +403,3 @@ def pending_questions(items: Sequence[ReviewItem]) -> List[str]:
                 text += f"（原因：{item.decision_reason}）"
             out.append(text)
     return out
-
-
-# ---------------------------------------------------------------------------
-# 详情收敛（阶段 7.3）：分组 + 可批量判定
-# 设计口径：**默认展开"必审待处理"，医生已处理和免审自动处理的折起来**——
-# 实测平均 25.6 条/例，全展开时医生要滚很久才能找到真要处理的那几条。
-# ---------------------------------------------------------------------------
-
-# 三组（顺序即展示顺序）：key → (标题, 组内说明)
-ITEM_GROUPS: Dict[str, str] = {
-    "must": "必审待处理",
-    "decided": "医生已处理",
-    "exempt": "免审（自动）",
-}
-GROUP_HINTS: Dict[str, str] = {
-    "must": "这些条目需要医生逐条确认后才能发布审核版",
-    "decided": "已留下审核记录，可展开复核；如要改判，可再操作一次（会追加一条记录）",
-    "exempt": "路径步骤未要求医生决定，规则判定免审：不计入待审、不算医生确认；可展开抽检或接管",
-}
-
-# 批量接受的排除理由（高风险条目必须逐条处理）
-BATCH_EXCLUDED_REASON = "多学科分歧需要医生逐条判断，不参与批量接受"
-
-
-def active_batch(decisions: Sequence[Dict[str, Any]]) -> str:
-    """当前**仍然生效**的批量接受批次 id（已被整批撤销的批次不再返回）。
-
-    按时间顺序扫一遍：遇到批量接受 → 记下批次；遇到该批次的撤销 → 清空。
-    只看 append-only 的决策记录，不额外存状态（与"条目状态由决策派生"保持一致）。
-    """
-    current = ""
-    for decision in decisions or []:
-        batch_id = str(decision.get("batch_id") or "")
-        if not batch_id:
-            continue
-        if str(decision.get("action") or "") == "accept":
-            current = batch_id
-        elif str(decision.get("action") or "") == "reopen":
-            current = ""
-    return current
-
-
-def group_items(items: Sequence[ReviewItem]) -> Dict[str, List[str]]:
-    """把条目分成三组（返回 item_id 列表），供界面折叠展示。"""
-    groups: Dict[str, List[str]] = {key: [] for key in ITEM_GROUPS}
-    for item in items or []:
-        if item.state == AUTO_PROCESSED:
-            groups["exempt"].append(item.item_id)
-        elif item.needs_doctor_review and item.state == AWAITING:
-            groups["must"].append(item.item_id)
-        else:
-            groups["decided"].append(item.item_id)
-    return groups
-
-
-def is_batch_low_risk(item: ReviewItem) -> bool:
-    """能否参与"批量接受"。
-
-    低风险 = 必审 + 未处理 + **不是分歧待裁决**。分歧条（`consensus_item:X-xx`）
-    与证据冲突条必须医生逐条判断，任何批量通道都不能替医生裁决（红线：规则先行、人做最终判断）。
-    """
-    if item.state != AWAITING or not item.needs_doctor_review:
-        return False
-    if item.target_type == "consensus_item":
-        return False
-    if item.risk_level == "高":
-        return False
-    return True
-
-
-def batch_plan(items: Sequence[ReviewItem]) -> Dict[str, Any]:
-    """批量接受的影响面预览（**只读**）：将接受哪些、哪些被排除、为什么。
-
-    预览与执行共用这一个函数，避免"预览说 3 条、实际动了 5 条"。
-    """
-    accepted, excluded = [], []
-    for item in items or []:
-        if item.state != AWAITING or not item.needs_doctor_review:
-            continue
-        if is_batch_low_risk(item):
-            accepted.append(item)
-        else:
-            excluded.append((item, BATCH_EXCLUDED_REASON))
-    return {
-        "accept": [
-            {"item_id": i.item_id, "title": _clean(i.title), "target_type": i.target_type,
-             "risk_level": i.risk_level, "content": _clean(i.final_content)}
-            for i in accepted
-        ],
-        "excluded": [
-            {"item_id": i.item_id, "title": _clean(i.title), "risk_level": i.risk_level,
-             "why": why}
-            for i, why in excluded
-        ],
-        "accept_ids": [i.item_id for i in accepted],
-    }
