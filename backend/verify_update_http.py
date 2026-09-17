@@ -36,6 +36,11 @@ def main():
     r = s.post(f"{BASE}/api/login", json={"username": "patient",
                                           "password": "patient"}, timeout=30)
     check("登录", r.status_code == 200, str(r.status_code))
+    # 必须把 token 带上：PR #9 起服务端默认强制鉴权（APP_AUTH_REQUIRED=true），
+    # 之前"登录后不带 token 也能调接口"只是默认未开启鉴权的假象
+    token = ((r.json() or {}).get("session") or {}).get("token")
+    check("拿到会话 token", bool(token), str(token)[:12])
+    s.headers["Authorization"] = f"Bearer {token}"
 
     print("\n[1] 建病例")
     r = s.post(f"{BASE}/api/v2/case", json={
@@ -101,8 +106,13 @@ def main():
           json.dumps(gaps_after, ensure_ascii=False)[:200])
     check("未相关缺口仍保留", any("血常规" in str(g) for g in gaps_after),
           json.dumps(gaps_after, ensure_ascii=False)[:200])
-    check("病例状态=待复核",
-          case_obj.get("case_state") == "awaiting_recheck", str(case_obj.get("case_state")))
+    # 病例状态机口径（PR #9 修正，见 main-3更新说明.md §五）：
+    #   仅"已由医生确认"的病例补充资料后进入 awaiting_recheck（待复核）；
+    #   尚未医生确认的病例保持 awaiting_doctor —— 避免"尚未确认却等待重新审核"的矛盾。
+    # 本例走的是患者自己补充资料、尚未经医生确认，所以期望 awaiting_doctor；
+    # 反向分支（已确认 → awaiting_recheck）由 tests/test_update_flow.py 覆盖。
+    check("病例状态=待医生审核（未确认病例不该变成待复核）",
+          case_obj.get("case_state") == "awaiting_doctor", str(case_obj.get("case_state")))
     events = [a.get("event") for a in (body.get("audit") or [])]
     check("留痕 case_updated", "case_updated" in events, json.dumps(events, ensure_ascii=False)[:200])
 
