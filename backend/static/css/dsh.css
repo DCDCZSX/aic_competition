@@ -119,6 +119,21 @@ input,textarea,select{font-family:inherit;font-size:var(--body-3);}
 }
 .rail-right{display:none;}                      /* <1440px 收回，内容在主区顶部呈现 */
 @media (min-width:1440px){.rail-right{display:flex;}}
+/* 右轨抽屉（2026-09-17 详情收敛）：窄屏不再"只有主区镜像"这一条路 —— 顶栏「审核面板」
+   给 body 加 .rail-open，右轨以浮层抽屉的形式滑出（宽屏本来就常驻，不需要抽屉）。
+   注意：显隐由 .rail-open 类控制，静态 CSS 里 `.rail-right` 依旧是 display:none，
+   所以"窄屏关键操作必须有主区镜像"的回归约定仍然守着（见 tests/test_responsive_layout.py）。 */
+body.rail-open .rail-right{
+  display:flex;position:fixed;z-index:40;
+  top:var(--nav-h);right:0;bottom:0;width:min(360px,92vw);
+  padding:var(--sp-16);overflow:auto;
+  background:var(--gray-050);border-left:1px solid var(--gray-250);
+  box-shadow:0 24px 60px rgba(20,20,19,.18);
+}
+@media (min-width:1440px){
+  body.rail-open .rail-right{position:sticky;box-shadow:none;width:auto;padding:0;border:0;background:none;}
+}
+#rail-toggle.on{border-color:var(--clay);color:var(--clay-dark);}
 /* 右轨里的**关键操作**必须有主区镜像：右轨收起时"发布审核版 / 录入线下意见"仍要能点到
    （真实缺陷：1366/1280 屏上医生发不出去，因为这些入口原来只写在右轨里） */
 .publish-inline{margin-top:var(--sp-16);}
@@ -368,6 +383,71 @@ ul.bullet li{font-size:var(--caption);color:var(--ink2);margin-bottom:4px;}
 .case-row:hover{border-color:var(--gray-300);box-shadow:var(--shadow-sm);}
 .case-row .t{font-weight:500;font-size:var(--caption);}
 .case-row .sub{font-size:var(--micro);color:var(--ink3);margin-top:4px;}
+
+/* 4.14 待审队列（队列优先主屏，2026-09-17）：一行一例、列固定，便于扫读与比较 */
+.queue-bar{display:flex;gap:var(--sp-8);align-items:center;flex-wrap:wrap;margin-bottom:var(--sp-12);}
+.rail-filters{display:flex;flex-direction:column;gap:2px;}
+.q-filter{display:block;padding:5px var(--sp-8);border-radius:var(--br-6);
+          font-size:var(--caption);color:var(--ink2);cursor:pointer;}
+.q-filter:hover{background:var(--gray-100);color:var(--ink);}
+.q-filter.on{background:var(--gray-000);border:1px solid var(--gray-200);color:var(--accent);font-weight:500;}
+.queue-table{display:flex;flex-direction:column;gap:2px;}
+.queue-head,.queue-row{display:grid;gap:var(--sp-12);align-items:center;
+  grid-template-columns:96px minmax(0,2.2fr) 62px 76px 104px minmax(0,1fr) 116px;}
+.queue-head{padding:0 var(--sp-12) 6px;border-bottom:1px solid var(--line);
+  font-size:var(--micro);color:var(--ink3);}
+.queue-row{padding:var(--sp-12);border:1px solid var(--line);border-radius:var(--br-8);
+  background:var(--gray-000);cursor:pointer;}
+.queue-row:hover{border-color:var(--gray-300);box-shadow:var(--shadow-sm);}
+.queue-row .q-id{font-family:var(--font-mono);font-size:var(--micro);color:var(--ink2);}
+.queue-row .q-main{min-width:0;display:flex;flex-direction:column;gap:2px;}
+.queue-row .q-main .t{font-weight:500;font-size:var(--caption);color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.queue-row .tiny{margin-top:2px;}
+@media (max-width:1280px){
+  .queue-head{display:none;}
+  .queue-row{grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);row-gap:6px;}
+}
+
+/* 4.15 审核详情收敛（2026-09-17）：四区导航 + 分组折叠 + 批量预览/撤销 */
+/* 左轨导航：四个大区，每区下面挂子视图（队列是入口，不算区） */
+.nav-group{display:flex;flex-direction:column;gap:2px;margin-bottom:var(--sp-8);}
+.nav-g-label{font-size:var(--micro);color:var(--ink3);letter-spacing:.06em;padding:0 var(--sp-8);}
+.nav-group.on .nav-g-label{color:var(--accent);font-weight:500;}
+.nav-g-sub{display:flex;flex-direction:column;gap:2px;}
+.nav-g-sub a{padding-left:var(--sp-16);}
+/* 条目分组：必审组展开，其余折起（医生先看要动手的那些） */
+.item-group{border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);
+  margin-bottom:var(--sp-12);overflow:hidden;}
+.item-group > summary{display:flex;align-items:center;gap:var(--sp-8);flex-wrap:wrap;
+  padding:var(--sp-12) var(--sp-16);cursor:pointer;list-style:none;}
+.item-group > summary::-webkit-details-marker{display:none;}
+.item-group > summary::before{content:"▸";color:var(--ink3);font-size:var(--micro);}
+.item-group[open] > summary::before{content:"▾";}
+.item-group[data-group="must"] > summary{background:var(--gray-050);}
+.group-note{padding:0 var(--sp-16) var(--sp-8);}
+.group-body{display:grid;gap:var(--sp-8);padding:0 var(--sp-12) var(--sp-12);}
+.group-body .item{border:1px solid var(--line);border-radius:var(--br-8);padding:var(--sp-12);}
+.item-detail > summary{cursor:pointer;color:var(--ink3);padding:4px 0;}
+/* 抽检：被抽到的免审条目高亮，抽检说明单独一行（与"医生已确认"有明确区分） */
+.item.sampled{border-color:var(--clay);box-shadow:0 0 0 1px var(--clay) inset;}
+.sample-note{margin:0 var(--sp-16) var(--sp-8);padding:6px var(--sp-8);
+  border-left:2px solid var(--clay);background:var(--gray-050);color:var(--ink2);}
+.batch-bar{display:flex;gap:var(--sp-8);align-items:center;flex-wrap:wrap;
+  padding:var(--sp-12);border:1px dashed var(--line);border-radius:var(--br-12);
+  margin-bottom:var(--sp-12);background:var(--gray-050);}
+.batch-bar.active{border-style:solid;border-color:var(--warn);background:var(--gray-000);}
+.batch-preview{border:1px solid var(--gray-250);border-radius:var(--br-12);padding:var(--sp-16);
+  background:var(--gray-000);margin-bottom:var(--sp-12);}
+.bp-head{display:flex;gap:var(--sp-8);align-items:center;flex-wrap:wrap;font-weight:500;
+  margin-bottom:6px;}
+.bp-list{margin:var(--sp-8) 0 0 var(--sp-20);padding:0;font-size:var(--caption);color:var(--ink2);}
+.bp-list li{margin-bottom:6px;}
+.bp-excluded{margin-top:var(--sp-8);padding-top:var(--sp-8);border-top:1px dashed var(--line);}
+@media (max-width:640px){
+  .item-group > summary{padding:10px var(--sp-12);}
+  .group-body{padding:0 var(--sp-8) var(--sp-8);}
+}
 
 /* 4.12 弹窗 */
 .modal{position:fixed;inset:0;background:rgba(20,20,19,.45);display:flex;align-items:center;

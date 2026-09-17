@@ -248,29 +248,42 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 
 /* ----------------------------------------------------- 医生工作台断言 */
 {
-  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderReview };');
+  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderReview, setQueueFilter, renderQueueFilters, renderNav, reviewGroups, batchBarHtml, batchPreviewHtml, itemCardHtml, toggleRail, NAV_GROUPS };');
   const D = globalThis.__D;
 
   fetchPayload = {
     status: 200,
     data: {
+      total: 2,
+      has_more: false,
       cases: [
         { case_id: 'CAAA1111', sex: '男', age: 58, behavior_type: 'B', reliability: '中',
           case_state: 'awaiting_doctor', case_state_label: '待医生审核', pending_items: 3,
-          primary_department: '内分泌科', report_version: 1, chief_complaint: '视物模糊3月' },
+          risk_level: '高', conflict_count: 1, gap_count: 4, exempt_items: 2,
+          primary_department: '内分泌科', report_version: 1, chief_complaint: '视物模糊3月',
+          analysis_state: 'done', updated_at: '2026-09-17T10:00:00' },
         { case_id: 'CBBB2222', sex: '女', age: 62, behavior_type: 'C', reliability: '高',
           case_state: 'doctor_confirmed', case_state_label: '医生已确认', pending_items: 0,
-          primary_department: '眼科', report_version: 2, chief_complaint: '眼痛1周' },
+          risk_level: '低', conflict_count: 0, gap_count: 0, exempt_items: 0,
+          primary_department: '眼科', report_version: 2, chief_complaint: '眼痛1周',
+          analysis_state: 'done', updated_at: '2026-09-16T09:00:00' },
       ],
     },
   };
   await D.loadList();
-  const rc = el('rail-cases').innerHTML;
-  check('医生左轨渲染病例列表', rc.includes('CAAA1111') && rc.includes('CBBB2222'), '');
-  check('左轨病例带待审标记', rc.includes('待审 3'), '');
-  check('左轨病例带已审完标记', rc.includes('已审完'), '');
-  check('主区列表同样渲染', el('list-body').innerHTML.includes('CAAA1111'), '');
-  check('列表计数文案', el('list-note').textContent.includes('共 2 例'), el('list-note').textContent);
+  const queue = el('list-body').innerHTML;
+  check('队列优先：主区渲染待审队列（含两例）', queue.includes('CAAA1111') && queue.includes('CBBB2222'), '');
+  check('队列表格有表头（病例/主诉/风险/可靠性/分析/待处理/更新）',
+    queue.includes('queue-head') && queue.includes('待医生处理') && queue.includes('风险'), '');
+  check('队列显示风险等级', queue.includes('>高<'), '');
+  check('队列显示待处理条数与免审条数', queue.includes('3 条') && queue.includes('免审 2'), '');
+  check('队列显示冲突数', queue.includes('冲突 1'), '');
+  check('队列面板计数文案', el('list-note').textContent.includes('共 2 例'), el('list-note').textContent);
+  check('左轨改为筛选器而不是重复病例列表',
+    el('rail-filters').innerHTML.includes('待我处理') && !el('rail-filters').innerHTML.includes('CAAA1111'), '');
+  check('筛选器汇总显示总数', String(el('q-sum').textContent).includes('共 2 例'), el('q-sum').textContent);
+  D.setQueueFilter('conflict');
+  check('筛选后重新请求（offset 归零）', D.S.queue.filter === 'conflict' && D.S.queue.offset === 0, '');
 
   D.S.caseId = 'CAAA1111';
   D.S.review = {
@@ -280,8 +293,41 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   };
   D.renderReview();
   check('左轨审核进度条 60%', el('rev-bar').style.width === '60%', el('rev-bar').style.width);
-  check('左轨审核进度说明', el('rev-note').textContent.includes('人工操作 6 / 10'), el('rev-note').textContent);
+  check('左轨审核进度说明区分医生处理与待审',
+    el('rev-note').textContent.includes('待审 4') && el('rev-note').textContent.includes('医生已处理'),
+    el('rev-note').textContent);
   check('右轨审核面板有内容', el('rev-summary').innerHTML.includes('共 10 条'), '');
+
+  /* 免审条目（auto_processed）：界面要说明"不计入待审、不算医生确认"，发布面板口径一致 */
+  D.S.review = {
+    items: [{ item_id: 'path_step:S1', title: '就医路径：资料准备', target_type: 'path_step',
+              ai_content: '资料准备', state: 'auto_processed', state_label: '免审（自动）',
+              auto_reason: '规则判定免审：该路径步骤未要求医生决定（医生可随时接管）',
+              needs_doctor_review: false },
+            { item_id: 'department_selection:内分泌科', title: '科室入选：内分泌科',
+              target_type: 'department_selection', ai_content: '建议内分泌科牵头',
+              state: 'awaiting', state_label: '待审', needs_doctor_review: true }],
+    published: false, case_state: 'awaiting_doctor', review: {}, doctor_opinions: [],
+    summary: { total: 2, pending: 1, doctor_reviewed: 0, auto_processed: 1, can_publish: false,
+               blocking_reasons: ['仍有 1 条必审条目未处理'],
+               by_state: { awaiting: 1, confirmed: 0, modified: 0, rejected: 0, uncertain: 0,
+                           auto_processed: 1 } },
+  };
+  D.renderReview();
+  const autoHtml = el('rev-body').innerHTML;
+  check('免审条目显示原因说明', autoHtml.includes('规则判定免审'), '');
+  check('免审条目带「免审（自动）」标签', autoHtml.includes('免审（自动）'), '');
+  check('面板区分医生处理数与免审数',
+    el('rev-summary').innerHTML.includes('医生已处理 0/2')
+    && el('rev-summary').innerHTML.includes('免审自动处理 1'),
+    el('rev-summary').innerHTML.slice(0, 140));
+  const autoPubHtml = el('rev-publish-inline').innerHTML;
+  check('发布面板显示不能发布的原因', autoPubHtml.includes('仍有 1 条必审条目未处理'),
+    autoPubHtml.slice(0, 200));
+  check('发布面板说明免审不阻塞发布', autoPubHtml.includes('免审条目不会阻塞发布'), '');
+  check('批量按钮说明只覆盖低风险条目', autoPubHtml.includes('批量接受低风险条目并发布'),
+    autoPubHtml.slice(0, 260));
+  check('发布面板写明分歧必须逐条判断', autoPubHtml.includes('必须医生逐条判断'), '');
 
   /* 发布入口必须"两处都有"：≥1440px 右轨常驻，<1440px 右轨被 CSS 隐藏 → 屏 F 主区兜底
      （真实缺陷：入口只在右轨里，1366/1280 屏上医生审完发不出去） */
@@ -297,13 +343,127 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   const inlinePub = el('rev-publish-inline').innerHTML;
   check('右轨渲染发布面板', railPub.includes('确认发布审核版') && railPub.includes('录入线下实际意见'), '');
   check('主区镜像渲染同一份发布面板（窄屏右轨被隐藏时仍可发布）',
-    inlinePub.includes('确认发布审核版') && inlinePub.includes('全部接受并发布'), '');
+    inlinePub.includes('确认发布审核版') && inlinePub.includes('批量接受低风险条目并发布'), '');
   check('仍有待审条目时发布按钮禁用', railPub.includes('disabled') && inlinePub.includes('disabled'), '');
   check('两处入口 id 不重复（用前缀区分）',
     railPub.includes('id="rail-op-text"') && inlinePub.includes('id="inline-op-text"')
     && !inlinePub.includes('id="op-text"'), '');
   check('镜像里的录入按钮带自己的前缀（不会写进另一处输入框）',
     inlinePub.includes("submitOpinion('inline')") && railPub.includes("submitOpinion('rail')"), '');
+
+  /* ---------------- 详情收敛（7.3）：四区导航 + 分组折叠 + 批量预览/撤销 ---------------- */
+  D.renderNav();
+  const navHtml = el('nav').innerHTML;
+  check('导航收敛为四区（概览 / 证据与推理 / 审核 / 历史）',
+    ['概览', '证据与推理', '审核', '历史'].every(t => navHtml.includes(t))
+    && D.NAV_GROUPS.length === 5, navHtml.slice(0, 120));
+  check('四区里每个子视图仍是可点锚点（data-s 不丢）',
+    ['list', 'overview', 'triage', 'evidence', 'mdt', 'review', 'history']
+      .every(s => navHtml.includes(`data-s="${s}"`)), '');
+  check('未选病例时只有队列可点（其余禁用）',
+    navHtml.includes('data-s="overview" class="dis"') && navHtml.includes('data-s="list" class=""'), '');
+
+  /* 分组折叠：只默认展开"必审待处理"，免审/已处理折起 */
+  D.S.review = {
+    items: [
+      { item_id: 'consensus_item:X-01', title: '分歧待裁决：先查眼底 vs 先查肾功',
+        target_type: 'consensus_item', ai_content: '眼科：先查眼底；肾内科：先查肾功',
+        state: 'awaiting', state_label: '待审', needs_doctor_review: true,
+        risk_level: '高', evidence_refs: ['证据状态：conflict'] },
+      { item_id: 'department_selection:内分泌科', title: '科室入选：牵头 内分泌科',
+        target_type: 'department_selection', ai_content: '牵头建议：内分泌科',
+        state: 'awaiting', state_label: '待审', needs_doctor_review: true, risk_level: '中' },
+      { item_id: 'path_step:S1', title: '就医路径：资料准备', target_type: 'path_step',
+        ai_content: '资料准备', state: 'auto_processed', state_label: '免审（自动）',
+        auto_reason: '规则判定免审：该路径步骤未要求医生决定（医生可随时接管）',
+        needs_doctor_review: false, risk_level: '低' },
+      { item_id: 'department_selection:眼科', title: '科室入选：协同 眼科',
+        target_type: 'department_selection', ai_content: '协同建议：眼科',
+        state: 'confirmed', state_label: '已接受', needs_doctor_review: true,
+        risk_level: '中', decision_reason: '依据充分', reviewer: '医学生',
+        decided_at: '2026-09-17T10:00:00' },
+    ],
+    groups: { must: ['consensus_item:X-01', 'department_selection:内分泌科'],
+              decided: ['department_selection:眼科'], exempt: ['path_step:S1'] },
+    group_hints: { must: '这些条目需要医生逐条确认后才能发布审核版',
+                   decided: '已留下审核记录，可展开复核', exempt: '规则判定免审：不计入待审' },
+    active_batch: '', published: false, case_state: 'awaiting_doctor', review: {},
+    doctor_opinions: [],
+    summary: { total: 4, pending: 2, doctor_reviewed: 1, auto_processed: 1, can_publish: false,
+               blocking_reasons: ['仍有 2 条必审条目未处理'],
+               by_state: { awaiting: 2, confirmed: 1, modified: 0, rejected: 0, uncertain: 0,
+                           auto_processed: 1 } },
+  };
+  D.renderReview();
+  const grouped = el('rev-body').innerHTML;
+  check('分三组渲染（必审 / 已处理 / 免审）',
+    ['must', 'decided', 'exempt'].every(g => grouped.includes(`data-group="${g}"`)), '');
+  check('只默认展开必审待处理组',
+    grouped.includes('data-group="must" open')
+    && !grouped.includes('data-group="decided" open')
+    && !grouped.includes('data-group="exempt" open'), '');
+  check('必审组给出条数与组内说明',
+    grouped.includes('必审待处理') && grouped.includes('2 条')
+    && grouped.includes('需要医生逐条确认'), '');
+  check('免审组在组头上直接给出免审原因', grouped.includes('规则判定免审'), '');
+  check('高风险条目带风险标识（高风险标红）',
+    grouped.includes('风险 高') && grouped.includes('含需逐条判断项'), '');
+  check('免审 / 已处理组里的条目正文折进详情（不铺成长文）',
+    grouped.includes('item-detail') && grouped.includes('展开 AI 原稿'), '');
+  check('必审组里的条目直接铺开（不用再点一层）',
+    grouped.indexOf('data-item="consensus_item:X-01"') < grouped.indexOf('item-detail'), '');
+  check('批量入口先走预览，不直接接受',
+    grouped.includes('previewBatch()') && !grouped.includes("batch/accept"), '');
+  check('批量入口说明只作用于低风险条目',
+    grouped.includes('只作用于低风险必审条目') && grouped.includes('必须逐条判断'), '');
+
+  /* 预览面板：列出将接受与被排除的条目，确认按钮带条数 */
+  D.S.batchPreview = {
+    accept: [{ item_id: 'department_selection:内分泌科', title: '科室入选：牵头 内分泌科',
+               risk_level: '中', content: '牵头建议：内分泌科' }],
+    excluded: [{ item_id: 'consensus_item:X-01', title: '分歧待裁决：先查眼底 vs 先查肾功',
+                 risk_level: '高', why: '多学科分歧需要医生逐条判断，不参与批量接受' }],
+    note: '批量接受只作用于低风险必审条目',
+  };
+  D.renderReview();
+  const pvHtml = el('rev-body').innerHTML;
+  check('预览面板列出将接受的条目', pvHtml.includes('将接受 1 条')
+    && pvHtml.includes('科室入选：牵头 内分泌科'), '');
+  check('预览面板列出被排除的条目与原因',
+    pvHtml.includes('需逐条判断 1 条') && pvHtml.includes('不参与批量') && pvHtml.includes('不参与批量接受'), '');
+  check('确认按钮写明条数（医生知道要点掉几条）', pvHtml.includes('确认接受 1 条'), '');
+  check('预览可取消', pvHtml.includes('cancelBatch()'), '');
+
+  /* 生效批次：给撤销入口（撤销要填原因，走弹窗） */
+  D.S.batchPreview = null;
+  D.S.review.active_batch = 'B-AAA11-7';
+  D.renderReview();
+  const activeHtml = el('rev-body').innerHTML;
+  check('有生效批次时显示批次号与撤销入口',
+    activeHtml.includes('B-AAA11-7') && activeHtml.includes("openModal('undo_batch')"), '');
+  check('撤销说明强调历史不删除', activeHtml.includes('历史不删除'), '');
+  check('已处理组里的已接受条目显示审核记录',
+    grouped.includes('审核记录') && grouped.includes('依据充分'), '');
+
+  /* 抽检：免审组给"随机抽检"入口；抽完自动展开并标注"本次抽检"，且不改状态 */
+  check('免审组提供随机抽检入口', grouped.includes('sampleExempt()')
+    && grouped.includes('随机抽检 3 条'), '');
+  D.S.sample = { exempt_total: 5, sample: [{ item_id: 'path_step:S1', title: '就医路径：资料准备' }],
+                 note: '抽检是随机的、只读的' };
+  D.renderReview();
+  const sampleHtml = el('rev-body').innerHTML;
+  check('抽检后免审组自动展开（结果不能被折起藏住）',
+    sampleHtml.includes('data-group="exempt" open'), '');
+  check('抽检结果标注"本次抽检"并高亮条目',
+    sampleHtml.includes('本次抽检') && sampleHtml.includes('sampled'), '');
+  check('抽检说明强调不计入医生处理（红线）',
+    sampleHtml.includes('不会计入') || sampleHtml.includes('不改变条目状态'), '');
+  check('抽检只作用于被抽中的条目', sampleHtml.includes('data-item="path_step:S1"'), '');
+  D.S.sample = null;
+
+  /* 抽屉：窄屏右轨可用顶栏按钮打开（静态 CSS 里右轨仍是 display:none） */
+  D.toggleRail(true);
+  check('抽屉开关可调用（窄屏打开审核面板）', typeof D.toggleRail === 'function', '');
 }
 
 /* ------------------------------------------------------------------ 输出 */
