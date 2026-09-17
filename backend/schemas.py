@@ -92,6 +92,9 @@ DECISION_TARGET_TYPES = (
 
 # 可靠性等级（主文档 §6.5 / 规格书 §5.7）
 RELIABILITY_LEVELS = ("高", "中", "低")
+EVIDENCE_SUFFICIENCY = ("sufficient", "partial", "insufficient")
+INFORMATION_CONSISTENCY = ("consistent", "conflict", "unable_to_compare")
+REVIEW_STATUSES = ("ai_unreviewed", "doctor_reviewed", "doctor_confirmed", "need_more_info")
 
 # 质询结果（规格书 §6.3：质询产出只能是结构化工作产物，不得是概率）
 CHALLENGE_STANCES = ("补充证据", "修正观点", "维持原判断")
@@ -435,7 +438,7 @@ class TaskItem:
 
 @dataclass
 class Reviewer:
-    role: str = "审核医生"
+    role: str = "模拟审核员"
     dept: str = ""
 
     def validate(self) -> None:
@@ -491,9 +494,6 @@ def reliability_level(
     """
     reasons: List[str] = []
 
-    if doctor_confirmed:
-        return Reliability(level="高", reasons=["已经医生确认"])
-
     if only_model_inference:
         reasons.append("仅为模型推断，缺少原始证据支持")
         return Reliability(level="低", reasons=reasons)
@@ -511,4 +511,6 @@ def reliability_level(
         return Reliability(level="中", reasons=reasons)
 
     reasons.append("关键资料完整、无冲突、多模块结论一致")
+    if doctor_confirmed:
+        reasons.append("人工审核已完成，但不改变证据充分度")
     return Reliability(level="高", reasons=reasons)

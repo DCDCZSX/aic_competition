@@ -13,11 +13,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.auth import (  # noqa: E402
     ROLE_DOCTOR,
+    ROLE_GUEST,
     ROLE_PATIENT,
     AuthError,
     AuthService,
     auth_required,
     extract_token,
+    hash_password,
 )
 
 TEST_ACCOUNTS = {
@@ -49,10 +51,10 @@ class TestLogin(unittest.TestCase):
             with self.assertRaises(AuthError):
                 self.auth.login(role=ROLE_PATIENT)
 
-    def test_role_shortcut_can_be_explicitly_enabled_for_demo(self):
+    def test_role_shortcut_cannot_be_enabled_for_demo(self):
         with mock.patch.dict(os.environ, {"APP_ALLOW_ROLE_LOGIN": "true"}):
-            patient = self.auth.login(role=ROLE_PATIENT)
-        self.assertEqual(patient.role, ROLE_PATIENT)
+            with self.assertRaises(AuthError):
+                self.auth.login(role=ROLE_PATIENT)
 
     def test_unknown_role_rejected(self):
         with self.assertRaises(AuthError):
@@ -77,6 +79,16 @@ class TestLogin(unittest.TestCase):
         })
         with self.assertRaises(AuthError):
             auth.login(username="patient", password="anything")
+
+    def test_pbkdf2_password_hash_login(self):
+        auth = AuthService(accounts={
+            "patient": {"password_hash": hash_password("strong-password"),
+                        "role": ROLE_PATIENT, "label": "就诊者"},
+        })
+        self.assertEqual(auth.login(username="patient", password="strong-password").role,
+                         ROLE_PATIENT)
+        with self.assertRaises(AuthError):
+            auth.login(username="patient", password="wrong-password")
 
 
 class TestSession(unittest.TestCase):
@@ -110,6 +122,17 @@ class TestSession(unittest.TestCase):
     def test_to_dict_hides_token_when_asked(self):
         self.assertNotIn("token", self.session.to_dict(include_token=False))
         self.assertIn("token", self.session.to_dict())
+
+    def test_guest_session_is_short_lived_and_limited_scope(self):
+        guest = self.auth.create_guest_session(ttl_minutes=5)
+        self.assertEqual(guest.role, ROLE_GUEST)
+        self.assertTrue(self.auth.has_scope(guest, "guest:triage"))
+        self.assertFalse(self.auth.has_scope(guest, "case:own"))
+
+    def test_guest_allowance_is_atomic(self):
+        guest = self.auth.create_guest_session(ttl_minutes=5)
+        self.assertTrue(self.auth.consume(guest, "triage", 1))
+        self.assertFalse(self.auth.consume(guest, "triage", 1))
 
 
 class TestScopes(unittest.TestCase):

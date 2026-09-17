@@ -992,16 +992,19 @@ class CaseFlow:
         return {"ok": started, "retried": phases if started else [],
                 "error": "" if started else "无法启动后台任务"}
 
-    def analyze_pending_cases(self, limit: int = 3) -> Dict[str, Any]:
+    def analyze_pending_cases(self, limit: int = 3, reviewer_id: str = "") -> Dict[str, Any]:
         """医生端批处理：把"分析未完成（含个别科室未完成）"的病例排进后台任务。"""
         started: List[str] = []
         skipped: List[str] = []
         if not self.store:
             return {"ok": False, "started": [], "skipped": [], "error": "无存储"}
+        allowed = set(self.store.list_authorized_case_ids(reviewer_id)) if reviewer_id else set()
         for case in self.store.list_cases(limit=limit * 4):
             if len(started) >= limit:
                 break
             case_id = case.get("case_id") or ""
+            if reviewer_id and case_id not in allowed:
+                continue
             payload = case.get("payload") or {}
             if not payload.get("triage"):
                 skipped.append(case_id)          # 连规则分诊都没有，不具备分析条件
@@ -1216,12 +1219,16 @@ class CaseFlow:
         }
 
     # ------------------------------------------------------------------ 医生端审核台（4.1-4.5）
-    def list_review_cases(self, limit: int = 100, state_filter: str = "") -> List[Dict[str, Any]]:
+    def list_review_cases(self, limit: int = 100, state_filter: str = "",
+                          reviewer_id: str = "") -> List[Dict[str, Any]]:
         """屏 A 病例列表：按"待审优先"排序，带待审条数与关键摘要。"""
         if not self.store:
             return []
         rows: List[Dict[str, Any]] = []
+        allowed = set(self.store.list_authorized_case_ids(reviewer_id)) if reviewer_id else set()
         for case in self.store.list_cases(limit=limit):
+            if reviewer_id and case.get("case_id") not in allowed:
+                continue
             payload = case.get("payload") or {}
             triage = payload.get("triage") or {}
             items = review_service.apply_decisions(
@@ -1285,7 +1292,7 @@ class CaseFlow:
     @serialized_case
     def submit_decision(self, case_id: str, item_id: str, action: str, *,
                         after: str = "", reason: str = "",
-                        reviewer_name: str = "审核医生", reviewer_dept: str = "") -> Dict[str, Any]:
+                        reviewer_name: str = "模拟审核员", reviewer_dept: str = "") -> Dict[str, Any]:
         """逐条审核（屏 F）：接受 / 修改 / 驳回 / 暂不确定 / 请求补资料。"""
         case = self.store.load_case(case_id) if self.store else None
         if not case:
@@ -1307,7 +1314,7 @@ class CaseFlow:
         if self.store:
             record = dict(decision.__dict__)
             # reviewer 必须以普通 dict 落库（payload 走 json.dumps，不能塞 dataclass）
-            record["reviewer"] = {"role": reviewer_name or "审核医生", "dept": reviewer_dept}
+            record["reviewer"] = {"role": reviewer_name or "模拟审核员", "dept": reviewer_dept}
             record["reviewer_name"] = reviewer_name
             self.store.save_decision(record)
             self.store.add_audit(
@@ -1334,7 +1341,7 @@ class CaseFlow:
                 "pending_questions": review.get("pending_questions") or []}
 
     @serialized_case
-    def publish_review(self, case_id: str, *, reviewer_name: str = "审核医生",
+    def publish_review(self, case_id: str, *, reviewer_name: str = "模拟审核员",
                        accept_all: bool = False) -> Dict[str, Any]:
         """发布审核版报告（屏 F 底部）：状态 → doctor_confirmed、版本 +1、角标转绿。
 

@@ -11,6 +11,7 @@ import json
 import sys
 
 import requests
+from verify_http_helpers import login, preview_token
 
 BASE = "http://127.0.0.1:5000"
 
@@ -34,12 +35,10 @@ def check(name, cond, detail=""):
 def main():
     print("[0] 患者端建病例（用于审核）")
     patient = requests.Session()
-    r = patient.post(f"{BASE}/api/login",
-                     json={"username": "patient", "password": "patient"}, timeout=30)
-    patient_token = r.json()["session"]["token"]
-    patient.headers["Authorization"] = f"Bearer {patient_token}"
+    login(patient, BASE, "patient")
     r = patient.post(f"{BASE}/api/v2/case", json={
-        "medical_history": CASE, "main_issue": "该看哪个科", "age": 62, "sex": "女"}, timeout=300)
+        "preview_token": preview_token(patient, BASE, CASE, "该看哪个科"),
+        "age": 62, "sex": "女"}, timeout=300)
     check("建病例", r.status_code == 200, str(r.status_code))
     case_id = r.json().get("case_id")
     print(f"       case_id={case_id}")
@@ -59,12 +58,10 @@ def main():
 
     print("\n[2] 医生登录")
     doctor = requests.Session()
-    r = doctor.post(f"{BASE}/api/login",
-                    json={"username": "doctor", "password": "doctor"}, timeout=30)
-    check("doctor 登录", r.status_code == 200, str(r.status_code))
-    session = r.json()["session"]
+    body = login(doctor, BASE, "doctor")
+    check("doctor 登录", True)
+    session = body["session"]
     check("角色=doctor", session["role"] == "doctor", session["role"])
-    doctor.headers["Authorization"] = f"Bearer {session['token']}"
     r = doctor.get(f"{BASE}/api/me", timeout=30)
     check("scopes 含 review/decision", {"review", "decision"} <= set(r.json().get("scopes") or []),
           json.dumps(r.json().get("scopes"), ensure_ascii=False))

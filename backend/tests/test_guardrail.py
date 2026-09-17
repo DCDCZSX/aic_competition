@@ -87,6 +87,18 @@ class TestCrisisDetection(unittest.TestCase):
             with self.subTest(text=text[:16]):
                 self.assertEqual(detect_crisis(text), [], "正常病例不应误触发危象")
 
+    def test_negated_crisis_terms_do_not_trigger(self):
+        """否定的症状和组合条件不应被当成实际危象。"""
+        cases = (
+            "近两周反复头痛，偶有恶心，无意识障碍。",
+            "家属否认曾有昏迷或抽搐。",
+            "胸痛但无大汗，休息后缓解。",
+            "无明显意识障碍，对答切题。",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(detect_crisis(text), [])
+
     def test_combination_rule_chest_pain_plus_sweat(self):
         """组合规则：需"胸痛 + 大汗"同时出现。"""
         self.assertTrue(detect_crisis("胸痛伴大汗"))

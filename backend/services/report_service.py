@@ -152,21 +152,37 @@ def evidence_cards_for_report(cards: Any) -> List[Dict[str, Any]]:
             row["依据"] = card["reason"]
         row["证据状态"] = STATE_LABELS.get(str(card.get("evidence_state")),
                                        str(card.get("evidence_state") or "—"))
+        row["证据充分度"] = {
+            "sufficient": "充分", "partial": "部分充分", "insufficient": "不充分",
+        }.get(str(card.get("evidence_sufficiency")), "未评估")
+        row["信息一致性"] = {
+            "consistent": "一致", "conflict": "存在冲突", "unable_to_compare": "无法比较",
+        }.get(str(card.get("information_consistency")), "未评估")
+        row["审核状态"] = {
+            "ai_unreviewed": "AI 生成，未审核", "doctor_reviewed": "已审阅",
+            "doctor_confirmed": "已确认", "need_more_info": "需补充资料",
+        }.get(str(card.get("review_status")), "未审核")
         supports = [{"证据": s.get("text") or "",
                      "原文出处": _refs_text(s.get("source_refs")),
                      "强度": LEVEL_LABELS.get(str(s.get("level")), "支持")}
                     for s in (card.get("supports") or [])]
         row["支持证据"] = supports or ["（暂无支持证据：该判断的依据不足）"]
+        related = [str(item.get("text") or "") for item in (card.get("related_candidates") or [])]
+        if related:
+            row["相关资料候选（未验证支持关系）"] = related
         opposes = [{"证据": o.get("text") or "", "说明": o.get("reason") or ""}
                    for o in (card.get("opposes") or [])]
         row["反向 / 不足证据"] = opposes or ["（未发现反向证据）"]
         external = [{"依据": e.get("title") or "", "来源": e.get("source") or "",
-                     "要点": e.get("note") or ""}
+                     "要点": e.get("note") or "", "版本": e.get("version") or "未补齐",
+                     "标识符": e.get("identifier") or "未补齐",
+                     "官方链接": e.get("url") or "未补齐",
+                     "最近复核": e.get("reviewed_at") or "未复核",
+                     "可追溯": "是" if e.get("traceable") else "否（仅作参考候选）"}
                     for e in (card.get("external") or [])]
         row["外部依据"] = external or ["（暂无可靠外部依据，本版不做文献检索）"]
         if card.get("resolving_info"):
             row["如何收敛"] = card["resolving_info"]
-        row["医生确认"] = "已确认" if card.get("doctor_confirmed") else "尚未确认"
         out.append(row)
     return out
 
@@ -366,6 +382,14 @@ def build_full_report(case: Dict[str, Any]) -> Report:
     decisions = payload.get("decisions") or []
 
     cards = build_evidence_cards(profile, triage, mdt)
+    review_status = {
+        "doctor_confirmed": "doctor_confirmed",
+        "doctor_reviewed": "doctor_reviewed",
+        "need_more_info": "need_more_info",
+    }.get(str(case.get("case_state") or ""), "ai_unreviewed")
+    for card in cards:
+        card["review_status"] = review_status
+        card["doctor_confirmed"] = review_status == "doctor_confirmed"
     evidence_stat = summarize_evidence(cards)
 
     report = Report(kind="full", case_id=case.get("case_id", ""),
@@ -478,7 +502,7 @@ def _differences(decisions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def render_markdown(report: Report) -> str:
     lines: List[str] = []
-    title = "一页就医摘要" if report.kind == "summary" else "多学科就医辅助报告（医生审核版）"
+    title = "一页就医摘要" if report.kind == "summary" else "多学科就医辅助报告（模拟审核版）"
     lines.append(f"# {title}")
     lines.append("")
     lines.append(f"> 病例号：{report.case_id}　生成时间：{report.generated_at}")

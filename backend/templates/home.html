@@ -1112,9 +1112,9 @@ function fillAccount(name) {
   if (row) row.classList.add('open');
   if (toggle) toggle.setAttribute('aria-expanded', 'true');
   document.getElementById('login-user').value = name;
-  document.getElementById('login-pass').value = name;
+  document.getElementById('login-pass').value = '';
   document.getElementById('login-pass').focus();
-  setMsg('已填入体验账号，点「登录」即可进入', true);
+  setMsg('已填入账号，请输入部署者配置的密码', true);
 }
 </script>
 </body>

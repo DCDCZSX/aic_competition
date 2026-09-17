@@ -9,6 +9,7 @@ import json
 import sys
 
 import requests
+from verify_http_helpers import login, preview_token
 
 BASE = "http://127.0.0.1:5000"
 
@@ -33,18 +34,12 @@ def check(name, cond, detail=""):
 def main():
     s = requests.Session()
 
-    r = s.post(f"{BASE}/api/login", json={"username": "patient",
-                                          "password": "patient"}, timeout=30)
-    check("登录", r.status_code == 200, str(r.status_code))
-    # 必须把 token 带上：PR #9 起服务端默认强制鉴权（APP_AUTH_REQUIRED=true），
-    # 之前"登录后不带 token 也能调接口"只是默认未开启鉴权的假象
-    token = ((r.json() or {}).get("session") or {}).get("token")
-    check("拿到会话 token", bool(token), str(token)[:12])
-    s.headers["Authorization"] = f"Bearer {token}"
+    login(s, BASE, "patient")
+    check("登录并建立 Bearer 会话", True)
 
     print("\n[1] 建病例")
     r = s.post(f"{BASE}/api/v2/case", json={
-        "medical_history": CASE, "main_issue": "该看哪个科",
+        "preview_token": preview_token(s, BASE, CASE, "该看哪个科"),
         "age": 61, "sex": "男"}, timeout=300)
     check("建病例 200", r.status_code == 200, str(r.status_code))
     data = r.json()
@@ -133,9 +128,7 @@ def main():
         "source": "医生上传", "department": "眼科"}, timeout=60)
     check("非医生会话以「医生上传」来源提交被拒", r.status_code in (401, 403), str(r.status_code))
     doctor = requests.Session()
-    r = doctor.post(f"{BASE}/api/login",
-                    json={"username": "doctor", "password": "doctor"}, timeout=30)
-    doctor.headers["Authorization"] = f"Bearer {r.json()['session']['token']}"
+    login(doctor, BASE, "doctor")
     r = doctor.post(f"{BASE}/api/v2/case/{case_id}/updates", json={
         "kind": "医生意见", "content": "建议眼科评估后行眼底激光，同步内分泌科控糖",
         "source": "医生上传", "department": "眼科"}, timeout=60)
@@ -195,7 +188,7 @@ def main():
     import time as _time
     t0 = _time.time()
     r = s.post(f"{BASE}/api/v2/case", json={
-        "medical_history": CASE, "main_issue": "该看哪个科", "age": 61, "sex": "男",
+        "preview_token": preview_token(s, BASE, CASE, "该看哪个科"), "age": 61, "sex": "男",
         "defer_mdt": True}, timeout=120)
     fast = _time.time() - t0
     two = r.json() or {}
@@ -229,7 +222,7 @@ def main():
     print("\n[12] 渐进式：规则秒开 + 模型三相后台 + 可重试")
     t0 = _time.time()
     r = s.post(f"{BASE}/api/v2/case", json={
-        "medical_history": CASE, "main_issue": "该看哪个科", "age": 61, "sex": "男",
+        "preview_token": preview_token(s, BASE, CASE, "该看哪个科"), "age": 61, "sex": "男",
         "progressive": True}, timeout=60)
     first = _time.time() - t0
     prog = r.json() or {}
