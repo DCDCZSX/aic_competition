@@ -289,7 +289,7 @@ function enterApp(){
   try{ localStorage.setItem('dsh_session', JSON.stringify({token:S.token, role:'doctor',
         username:S.me.username, label:S.me.label})); }catch(e){}
   $('login').classList.add('hide'); $('app').classList.remove('hide');
-  $('ident').textContent = (S.me.label||'审核医生') + ' · ' + S.me.username;
+  $('ident').textContent = (S.me.label||'模拟审核员') + ' · ' + S.me.username;
   loadList();
 }
 /* 跨页会话恢复：已有医生会话可复用；非医生会话忽略 */
@@ -714,7 +714,7 @@ function publishPanelHtml(sum, canPublish, pfx){
 async function decide(itemId, action, after, reason){
   const r = await api('/api/v2/case/'+S.caseId+'/decisions', {method:'POST',
     body:JSON.stringify({item_id:itemId, action:action, after:after||'', reason:reason||'',
-                         reviewer: (S.me&&S.me.label)||'审核医生'})});
+                         reviewer: (S.me&&S.me.label)||'模拟审核员'})});
   if(r.status!==200 || !r.data.ok){ alert(r.data.error||'操作失败'); return false; }
   S.review.items = r.data.items; S.review.summary = r.data.summary;
   S.review.pending_questions = S.review.pending_questions||[];
@@ -744,7 +744,7 @@ async function submitModal(){
 }
 async function publish(acceptAll){
   const r = await api('/api/v2/case/'+S.caseId+'/publish', {method:'POST',
-    body:JSON.stringify({accept_all: !!acceptAll, reviewer:(S.me&&S.me.label)||'审核医生'})});
+    body:JSON.stringify({accept_all: !!acceptAll, reviewer:(S.me&&S.me.label)||'模拟审核员'})});
   if(r.status!==200 || !r.data.ok){ alert(r.data.error||'发布失败'); return; }
   await openCase(S.caseId);
   go('review');

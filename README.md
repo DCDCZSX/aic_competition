@@ -55,17 +55,25 @@ Set-Location backend
 | 医生工作台 | http://127.0.0.1:5000/doctor | 病例审阅 → 逐条审核 → 发布审核版 |
 
 默认账号名为 `patient` / `doctor`，密码必须通过 `.env` 中的
-`APP_PATIENT_PASSWORD` / `APP_DOCTOR_PASSWORD` 配置。代码中没有默认密码，
-免密角色入口默认关闭；真实部署应接入机构统一身份认证并更换本地密码。
+`APP_PATIENT_PASSWORD` / `APP_DOCTOR_PASSWORD` 配置（也可使用 PBKDF2 的
+`APP_*_PASSWORD_HASH`）。代码中没有默认密码。完整病例接口始终需要账号会话。
+
+游客可通过 `POST /api/guest/session` 获取短期匿名令牌，再使用
+`/api/guest/preview` 和 `/api/guest/triage` 体验有限的规则链路。游客不创建病例、
+不调用 MDT、不生成审核版报告；会话、输入长度和次数均受限。游客不能把令牌用于
+`/api/v2/case/*`。
 
 ### 必要安全配置
 
-- `APP_AUTH_REQUIRED=true`：默认开启，未登录不能访问病例接口；
-- `APP_ALLOW_ROLE_LOGIN=false`：关闭免密角色登录；
+- `APP_AUTH_REQUIRED` 已保留为兼容配置，但完整病例接口始终强制认证；游客使用独立接口；
+- 免密角色登录已从后端下线，不能用配置重新开启；
+- `APP_REVIEWER_MODE=simulation`：比赛版显示“模拟审核员”；真实机构认证接入后才切换为 `clinical`；
 - `APP_CORS_ORIGINS`：只填写实际前端来源，不要使用 `*`；
 - `AI_CONNECT_TIMEOUT=10` / `AI_READ_TIMEOUT=60`：分别限制连接和读取等待时间；
 - 访问令牌只接受 `Authorization: Bearer ...`，不接受 URL 查询参数；
-- 患者只能访问自己创建的病例；旧数据库中没有所有者的病例仅医生可访问。
+- 患者只能访问自己创建的病例；无主旧病例不归属任意患者，审核账号也需显式授权。
+- 脱敏预览返回短期一次性凭证，创建病例只能消费服务端保存的脱敏文本。
+- 审核账号还必须获得逐病例授权；`APP_AUTO_ASSIGN_REVIEWER=true` 仅用于单审核员演示自动分配。
 
 旧版 `/api/start_consultation`、`/api/get_discussion_status/*` 和
 `/api/get_all_discussions` 已下线，避免绕过新版鉴权、脱敏和病例状态机。
@@ -119,13 +127,13 @@ Set-Location backend
 
 ```bash
 cd backend
-python -m unittest discover -s tests -t .        # 521 项单元/回归测试
+python -m unittest discover -s tests -t .        # 531 项单元/回归测试
 python verify_update_http.py                     # 患者端全流程 HTTP 断言
 python verify_doctor_http.py                     # 医生工作台全流程 HTTP 断言
 python eval_triage_v1.py                         # 分诊评测（规则 / 模型 / 完整链路三方法对比）
 ```
 
-- 521 项测试覆盖：护栏、脱敏、鉴权与病例所有权、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、并发更新、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新；
+- 531 项测试覆盖：护栏、脱敏、鉴权与病例所有权、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、并发更新、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新；
 - 分诊评测（自建小样本集，n=9）：完整链路 Macro 召回 **0.900**、纯规则 **0.872**，早期基线 0.447–0.513；
 - 完整报告结构完整性 13 / 13，无空段与占位。
 

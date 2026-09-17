@@ -47,6 +47,16 @@ class ExternalEvidence:
     title: str
     source: str
     note: str = ""
+    version: str = ""
+    identifier: str = ""
+    url: str = ""
+    scope: str = ""
+    excerpt: str = ""
+    reviewed_at: str = ""
+
+    @property
+    def traceable(self) -> bool:
+        return bool(self.version and self.identifier and self.url and self.reviewed_at)
 
 
 EXTERNAL_WHITELIST: tuple = (
@@ -100,7 +110,19 @@ def external_evidence_for(text: str) -> List[Dict[str, str]]:
     found: List[Dict[str, str]] = []
     for item in EXTERNAL_WHITELIST:
         if any(k in text for k in item.keywords):
-            found.append({"title": item.title, "source": item.source, "note": item.note})
+            found.append({
+                "title": item.title,
+                "source": item.source,
+                "note": item.note,
+                "version": item.version,
+                "identifier": item.identifier,
+                "url": item.url,
+                "scope": item.scope,
+                "excerpt": item.excerpt,
+                "reviewed_at": item.reviewed_at,
+                "traceable": item.traceable,
+                "verification_status": "verified" if item.traceable else "metadata_incomplete",
+            })
     return found[:3]
 
 
@@ -165,8 +187,7 @@ def build_timeline(profile: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def _evidence_state(supports: Sequence[Dict[str, Any]],
                     opposes: Sequence[Dict[str, Any]],
                     doctor_confirmed: bool = False) -> str:
-    if doctor_confirmed:
-        return STATE_DOCTOR_CONFIRMED
+    # Human review is tracked separately; it must never upgrade evidence quality.
     if opposes:
         return STATE_CONFLICT
     direct = [s for s in supports if s.get("level") == STATE_DIRECT]
@@ -175,6 +196,24 @@ def _evidence_state(supports: Sequence[Dict[str, Any]],
     if supports:
         return STATE_INDIRECT
     return STATE_MISSING
+
+
+def _dimensions(supports: Sequence[Dict[str, Any]],
+                opposes: Sequence[Dict[str, Any]],
+                review_status: str = "ai_unreviewed") -> Dict[str, str]:
+    direct_count = sum(1 for item in supports if item.get("level") == STATE_DIRECT)
+    if direct_count:
+        sufficiency = "sufficient" if not opposes else "partial"
+    elif supports:
+        sufficiency = "partial"
+    else:
+        sufficiency = "insufficient"
+    consistency = "conflict" if opposes else ("consistent" if supports else "unable_to_compare")
+    return {
+        "evidence_sufficiency": sufficiency,
+        "information_consistency": consistency,
+        "review_status": review_status,
+    }
 
 
 def build_evidence_cards(profile: Optional[Dict[str, Any]],
@@ -213,39 +252,45 @@ def build_evidence_cards(profile: Optional[Dict[str, Any]],
                     return True
         return False
 
-    def match_facts(text: str) -> List[Dict[str, Any]]:
-        """在事实池里找与判断文本相关的条目。
-
-        匹配规则（保守，避免"相关"被当成"支持"）：
-        - 事实文本与判断文本存在 ≥2 字公共片段 → 视为相关；
-        - 该事实**带 source_refs**（同源直引）才标记为 `direct`，否则 `indirect`。
-        """
-        hits = []
+    def match_facts(text: str, evidence_refs: Optional[Sequence[str]] = None
+                    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Return verified supports and text-only related candidates separately."""
+        requested_refs = {str(ref).strip() for ref in (evidence_refs or []) if str(ref).strip()}
+        supports: List[Dict[str, Any]] = []
+        related: List[Dict[str, Any]] = []
         for fact in fact_pool:
-            if _has_common_fragment(str(fact["text"]), text or ""):
-                hits.append({"text": fact["text"], "source_refs": fact["source_refs"],
-                             "level": STATE_DIRECT if fact["source_refs"] else STATE_INDIRECT})
-        return hits
+            exact_refs = requested_refs.intersection(str(ref).strip() for ref in fact["source_refs"])
+            if exact_refs:
+                supports.append({"text": fact["text"], "source_refs": sorted(exact_refs),
+                                 "level": STATE_DIRECT, "citation_valid": True})
+            elif _has_common_fragment(str(fact["text"]), text or "", min_len=4, cap=8):
+                related.append({"text": fact["text"], "source_refs": fact["source_refs"],
+                                "relationship": "related_only"})
+        return supports, related
 
     # ① 分诊判断
     triage = triage or {}
     picks = ([triage.get("primary")] if triage.get("primary") else []) + list(triage.get("secondary") or [])
     for pick in picks:
         reason = str(pick.get("reason") or "；".join(pick.get("signals") or []))
-        supports = match_facts(reason) or [
+        supports, related = match_facts(reason, pick.get("evidence_refs") or [])
+        supports = supports or [
             {"text": s, "source_refs": [], "level": STATE_INDIRECT}
             for s in (pick.get("signals") or [])[:3]
         ]
-        cards.append({
+        card = {
             "scope": "triage",
             "judgement": f"建议就诊方向：{pick.get('department')}（{pick.get('role')}）",
             "reason": reason,
             "supports": supports,
+            "related_candidates": related,
             "opposes": [],          # 分诊层暂未收集反向证据 → 显式标注为空
             "external": external_evidence_for(reason),
             "evidence_state": _evidence_state(supports, []),
             "doctor_confirmed": False,
-        })
+        }
+        card.update(_dimensions(supports, []))
+        cards.append(card)
 
     # ② 各专科判断
     mdt = mdt or {}
@@ -256,28 +301,33 @@ def build_evidence_cards(profile: Optional[Dict[str, Any]],
         for inf in (analysis.get("inferences") or []):
             text = str(inf.get("text") or "")
             refs = list(inf.get("evidence_refs") or [])
-            supports = match_facts(text) or [
-                {"text": r, "source_refs": [], "level": STATE_INDIRECT} for r in refs
-            ]
+            supports, related = match_facts(text, refs)
+            invalid_refs = [ref for ref in refs
+                            if not any(ref in fact["source_refs"] for fact in fact_pool)]
+            supports.extend({"text": ref, "source_refs": [], "level": STATE_INDIRECT,
+                             "citation_valid": False} for ref in invalid_refs)
             # 信息缺口本身构成"反对/不足"证据（诚实呈现）
             opposes = [{"text": gap, "reason": "该项信息缺失，暂无法支持该判断"}
                        for gap in (analysis.get("information_gaps") or [])[:2]]
-            cards.append({
+            card = {
                 "scope": "specialty",
                 "department": dept,
                 "judgement": text,
                 "reason": f"{dept}的 AI 分析视角（未经医生审核）",
                 "supports": supports,
+                "related_candidates": related,
                 "opposes": opposes,
                 "external": external_evidence_for(text),
                 "evidence_state": _evidence_state(supports, opposes),
                 "doctor_confirmed": False,
-            })
+            }
+            card.update(_dimensions(supports, opposes))
+            cards.append(card)
 
     # ③ 分歧条目也是"判断"（证据状态=冲突）
     for dis in ((mdt.get("aggregation") or {}).get("disagreements") or []):
         positions = dis.get("positions") or {}
-        cards.append({
+        card = {
             "scope": "disagreement",
             "judgement": f"分歧：{dis.get('topic')}",
             "reason": dis.get("reason") or "",
@@ -288,7 +338,9 @@ def build_evidence_cards(profile: Optional[Dict[str, Any]],
             "evidence_state": STATE_CONFLICT,
             "resolving_info": dis.get("resolving_info") or "",
             "doctor_confirmed": False,
-        })
+        }
+        card.update(_dimensions(card["supports"], card["opposes"]))
+        cards.append(card)
 
     return cards
 
