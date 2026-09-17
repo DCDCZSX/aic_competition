@@ -348,6 +348,7 @@ ul.bullet li{font-size:var(--caption);color:var(--ink2);margin-bottom:4px;}
 .item{border:1px solid var(--line);border-radius:var(--br-12);padding:var(--sp-16);
       margin-bottom:var(--sp-12);background:var(--gray-000);}
 .item.st-confirmed{border-left:4px solid var(--ok);}
+.item.st-auto{border-left:4px solid var(--info);}
 .item.st-modified{border-left:4px solid var(--ok);background:rgba(46,125,79,.03);}
 .item.st-rejected{border-left:4px solid var(--danger);}
 .item.st-uncertain{border-left:4px solid var(--warn);}
@@ -430,6 +431,12 @@ details summary{cursor:pointer;color:var(--accent);font-size:var(--caption);marg
 .auth-preview .pv-row{display:flex;justify-content:space-between;gap:8px;padding:5px 0;
   border-bottom:1px dashed var(--line);font-size:var(--micro);}
 .auth-preview .pv-row:last-child{border-bottom:0;}
+
+/* 医生端队列模式：病例列表需要完整横向空间，详情模式再恢复审核侧栏。 */
+.doctor-queue-mode .rail-right{display:none;}
+@media (min-width:1440px){
+  .doctor-queue-mode .shell{grid-template-columns:220px minmax(0,1fr);}
+}
 
 /* ------------------------------- 5. 打印 ------------------------------- */
 @media print{

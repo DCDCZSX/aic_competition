@@ -186,11 +186,24 @@ class Store:
             ).fetchone()
         return self._row_to_case(row) if row else None
 
-    def list_cases(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def list_cases(self, limit: Optional[int] = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """按创建时间倒序取病例窗口。
+
+        ``offset`` 只负责持久化层的窗口读取；医生端队列的风险排序仍由
+        ``CaseFlow.list_review_cases`` 在计算审核摘要后完成。
+        """
+        safe_offset = max(0, int(offset))
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM cases ORDER BY created_at DESC LIMIT ?", (int(limit),)
-            ).fetchall()
+            if limit is None:
+                rows = self._conn.execute(
+                    "SELECT * FROM cases ORDER BY created_at DESC"
+                ).fetchall()
+            else:
+                safe_limit = max(0, int(limit))
+                rows = self._conn.execute(
+                    "SELECT * FROM cases ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (safe_limit, safe_offset),
+                ).fetchall()
         return [self._row_to_case(r) for r in rows]
 
     def mutate_case(self, case_id: str,

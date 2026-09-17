@@ -147,14 +147,15 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("--accent", html)
 
     def test_doctor_three_track_shell(self):
-        """医生工作台：左轨 = 待办病例 + 审阅视图；右轨 = 审核面板。"""
+        """医生工作台：左轨 = 队列筛选 + 审阅视图；右轨 = 审核面板。"""
         _, html = self.get("/doctor")
         self.assertIn('href="/static/css/dsh.css"', html)
         self.assertEqual(html.count('class="rail rail-left"'), 1)
         self.assertEqual(html.count('class="rail rail-right"'), 1)
-        for anchor in ('id="rail-cases"', 'id="rev-summary"', 'id="rev-publish"',
+        for anchor in ('id="rail-filters"', 'id="rev-summary"', 'id="rev-publish"',
                        'id="rev-bar"', 'id="nav"'):
             self.assertIn(anchor, html, f"医生工作台缺少 {anchor}")
+        self.assertNotIn('id="rail-cases"', html, "病例队列不应在左轨重复渲染")
         # 业务屏必须在 <main> 内（与患者端同一约束）
         ids = set(self.sections_of(html, "main"))
         expected = {"s-list", "s-overview", "s-triage", "s-evidence", "s-mdt", "s-review", "s-history"}
@@ -163,6 +164,20 @@ class FrontendStructureTest(unittest.TestCase):
         main_close = html.index("</main>")
         self.assertLess(main_close, html.index('class="rail rail-right"'))
         self.assertNotIn("--blue", html)
+
+    def test_doctor_queue_has_server_pagination_controls(self):
+        _, html = self.get("/doctor")
+        self.assertIn('id="list-pager"', html)
+        self.assertIn('id="f-sort"', html)
+        self.assertIn('id="f-page-size"', html)
+        self.assertIn("offset", html)
+        self.assertIn("has_more", html)
+
+    def test_doctor_review_template_exposes_auto_processed_group(self):
+        _, html = self.get("/doctor")
+        self.assertIn("auto_processed", html)
+        self.assertIn("doctor_reviewed", html)
+        self.assertIn("免审（自动）", html)
 
     # ------------------------------------------------------------------ 4. 合规
     def test_login_pages_are_full_bleed_two_column(self):
