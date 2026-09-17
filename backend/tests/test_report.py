@@ -375,6 +375,23 @@ class TestEndToEnd(unittest.TestCase):
     def test_report_unknown_case(self):
         self.assertIsNone(self.flow.build_reports("C-NOT-EXIST"))
 
+    def test_report_labels_exempt_items_separately(self):
+        """报告必须把"免审（规则判定）"与"医生审核"分开写，不能让读者以为医生看过（红线）。"""
+        r = self.flow.create_case(medical_history=CASE_B, main_issue="该看哪个科", age=58)
+        review = self.flow.get_review(r.case_id)
+        auto = review["summary"]["auto_processed"]
+        self.assertTrue(auto, "该病例应有免审条目")
+        # 尚未发布：报告照实写 0 条
+        before = self.flow.build_reports(r.case_id)["full"]["sections"]["审核记录与版本"]
+        self.assertEqual(before.get("免审条目"), "0 条")
+        # 发布后：免审条数如实单列，且写明"未计入医生审核"
+        self.flow.publish_review(r.case_id, reviewer_name="医学生", accept_all=True)
+        after = self.flow.build_reports(r.case_id)["full"]["sections"]["审核记录与版本"]
+        self.assertIn(f"{auto} 条", str(after.get("免审条目")))
+        self.assertIn("未计入医生审核", str(after.get("免审条目")))
+        markdown = self.flow.build_reports(r.case_id)["full_markdown"]
+        self.assertIn("免审条目", markdown)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

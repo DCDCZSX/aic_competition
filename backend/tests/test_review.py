@@ -183,9 +183,14 @@ class TestDecisions(unittest.TestCase):
         self.assertEqual(applied["眼科"].state, rs.CONFIRMED)
 
     def test_summary_progress(self):
-        items = rs.build_items(sample_case())
+        # 免审态由 apply_decisions 派生（build_items 只给出 needs_doctor_review 语义）
+        items = rs.apply_decisions(rs.build_items(sample_case()), [])
+        exempt = [i for i in items if i.state == rs.AUTO_PROCESSED]
+        self.assertTrue(exempt, "样例病例应有免审的路径步骤")
         s0 = rs.summarize(items)
-        self.assertEqual(s0["pending"], s0["total"])
+        # 待审只算"必审"条目：未要求医生决定的路径步骤不计入待审
+        self.assertEqual(s0["pending"], s0["total"] - len(exempt))
+        self.assertEqual(s0["auto_processed"], len(exempt))
         self.assertFalse(s0["can_publish"])
         for item in items:
             item.state = rs.CONFIRMED
@@ -207,6 +212,59 @@ class TestDecisions(unittest.TestCase):
         with self.assertRaises(rs.ReviewError):
             rs.find_item(self.items, "no_such_item")
 
+    # --------- 2026-09-17 修的真缺陷：免审条目不能计入待审、不能阻塞发布 ---------
+    def test_exempt_items_do_not_block_publishing(self):
+        """规则判定免审的条目：不计入待审，也不阻塞发布（修复前它们会把发布卡死）。"""
+        items = rs.apply_decisions(rs.build_items(sample_case()), [])
+        exempt = [i for i in items if i.state == rs.AUTO_PROCESSED]
+        self.assertTrue(exempt)
+        summary = rs.summarize(items)
+        self.assertEqual(summary["pending"], summary["total"] - len(exempt))
+        self.assertEqual(summary["auto_processed"], len(exempt))
+        # 免审条目既不属于"医生已处理"，也不出现在阻塞原因里
+        self.assertEqual(summary["doctor_reviewed"], 0)
+        self.assertNotIn("免审", "；".join(summary["blocking_reasons"]))
+        for item in items:
+            if item.needs_doctor_review:
+                item.state = rs.CONFIRMED
+                item.decision_id = f"d-{item.item_id}"
+        done = rs.summarize(items)
+        self.assertTrue(done["can_publish"], done["blocking_reasons"])
+        self.assertEqual(done["pending"], 0)
+        self.assertEqual(done["auto_processed"], len(exempt))
+
+    def test_required_step_still_blocks_publishing(self):
+        """要求医生决定的路径步骤（requires_doctor）仍然必须审 —— 不能借"免审"漏掉。"""
+        items = rs.apply_decisions(rs.build_items(sample_case()), [])
+        required_steps = [i for i in items
+                          if i.target_type == "path_step" and i.needs_doctor_review]
+        self.assertTrue(required_steps, "样例里 S2 要求医生决定")
+        summary = rs.summarize(items)
+        self.assertIn(summary["pending"], range(1, summary["total"] + 1))
+        self.assertIn("仍有", "".join(summary["blocking_reasons"]))
+        self.assertFalse(summary["can_publish"])
+        for item in items:
+            if item.needs_doctor_review:
+                item.state = rs.CONFIRMED
+                item.decision_id = f"d-{item.item_id}"
+        self.assertTrue(rs.summarize(items)["can_publish"])
+
+    def test_doctor_can_still_override_exempt_item(self):
+        """免审条目医生仍可接管：接受后就变成"医生已处理"，不再算免审（红线：人可覆盖规则）。"""
+        items = rs.apply_decisions(rs.build_items(sample_case()), [])
+        target = next(i for i in items if i.state == rs.AUTO_PROCESSED)
+        decision = {"target_type": target.target_type, "target_id": target.target_id,
+                    "action": "accept", "reason": "医生主动接管",
+                    "reviewer": {"role": "医学生"}, "created_at": "9",
+                    "decision_id": "d-1"}
+        rs.apply_decisions(items, [decision])
+        self.assertEqual(target.state, rs.CONFIRMED)
+        summary = rs.summarize(items)
+        self.assertEqual(target.item_id in [i.item_id for i in items
+                                            if i.state == rs.AUTO_PROCESSED], False)
+        self.assertEqual(summary["doctor_reviewed"], 1)
+        self.assertEqual(summary["auto_processed"], 0)
+
 
 class TestReviewFlowEndToEnd(unittest.TestCase):
     def setUp(self):
@@ -225,15 +283,22 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
     def test_review_items_generated(self):
         ids, review = self._item_ids()
         self.assertTrue(ids, "应产生可审核条目")
-        self.assertEqual(review["summary"]["pending"], len(ids))
+        # 待审只算"必审"条目：未要求医生决定的路径步骤是免审（auto_processed）
+        exempt = [i for i in review["items"] if not i["needs_doctor_review"]]
+        self.assertTrue(exempt, "本例应有免审的路径步骤")
+        self.assertEqual(review["summary"]["pending"], len(ids) - len(exempt))
+        self.assertEqual(review["summary"]["auto_processed"], len(exempt))
         self.assertTrue(review["items"][0]["item_id"].startswith("department_selection:"))
 
     def test_accept_decision_recorded(self):
-        ids, _ = self._item_ids()
-        result = self.flow.submit_decision(self.case_id, ids[0], "accept",
+        ids, review = self._item_ids()
+        first_required = next(i["item_id"] for i in review["items"] if i["needs_doctor_review"])
+        before = review["summary"]["pending"]
+        result = self.flow.submit_decision(self.case_id, first_required, "accept",
                                            reviewer_name="医学生")
         self.assertTrue(result["ok"], result.get("error"))
-        self.assertEqual(result["summary"]["pending"], len(ids) - 1)
+        self.assertEqual(result["summary"]["pending"], before - 1)
+        self.assertEqual(result["summary"]["doctor_reviewed"], 1)
         events = [a["event"] for a in self.flow.store.list_audit(self.case_id)]
         self.assertIn("decision_recorded", events)
 

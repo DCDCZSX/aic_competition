@@ -1339,41 +1339,49 @@ class CaseFlow:
         """发布审核版报告（屏 F 底部）：状态 → doctor_confirmed、版本 +1、角标转绿。
 
         规则（写死）：
-        - 仍有"待审"条目时**不得发布**；`accept_all=True` 时把剩余条目**逐条**批量接受并留痕
-          （不是静默通过：每条都落一条 reviewer=批量接受 的决策记录）；
+        - 仍有"**必审**条目未处理"时不得发布；`accept_all=True` 时把这些条目**逐条**批量接受并留痕
+          （不是静默通过：每条都落一条决策记录）；
+        - **规则判定免审的条目不计入待审、也不阻塞发布**（修复前它们会，实测占条目 21.9%），
+          且**不得**被批量记成"医生接受"；
         - 发布后病例状态 `doctor_confirmed`、`report_version + 1`、审计留痕。
         """
         case = self.store.load_case(case_id) if self.store else None
         if not case:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
 
-        symbols = self.get_review(case_id) or {}
         items = review_service.apply_decisions(
             review_service.build_items(case),
             self.store.list_decisions(case_id) if self.store else [])
-        pending = [i for i in items if i.state == review_service.AWAITING]
+        # 待审 = 必审且未处理（auto_processed 既不计入待审，也不能被批量接受写成医生确认）
+        pending = [i for i in items
+                   if i.needs_doctor_review and i.state == review_service.AWAITING]
 
         accepted_ids: List[str] = []
         if pending and accept_all:
             for item in pending:
                 result = self.submit_decision(
                     case_id, item.item_id, "accept",
-                    reason="批量接受（发布时统一确认）", reviewer_name=reviewer_name)
+                    reason="批量接受必审条目（发布时统一确认）", reviewer_name=reviewer_name)
                 if result.get("ok"):
                     accepted_ids.append(item.item_id)
             items = review_service.apply_decisions(
                 review_service.build_items(case),
                 self.store.list_decisions(case_id) if self.store else [])
-            pending = [i for i in items if i.state == review_service.AWAITING]
+            pending = [i for i in items
+                       if i.needs_doctor_review and i.state == review_service.AWAITING]
 
         if pending:
             return {"ok": False,
-                    "error": f"仍有 {len(pending)} 条未审核，不能发布审核版",
+                    "error": f"仍有 {len(pending)} 条必审条目未处理，不能发布审核版",
                     "pending_items": [i.item_id for i in pending]}
 
         summary = review_service.summarize(items)
         if not summary["total"]:
             return {"ok": False, "error": "该病例没有可审核条目，无法发布审核版"}
+        if not summary["can_publish"]:
+            return {"ok": False,
+                    "error": "；".join(summary.get("blocking_reasons") or ["暂不能发布审核版"]),
+                    "summary": summary}
 
         payload = dict(case.get("payload") or {})
         new_version = int(case.get("report_version") or 1) + 1
@@ -1384,6 +1392,9 @@ class CaseFlow:
             "version": new_version,
             "counts": summary["by_state"],
             "human_touched": summary["human_touched"],
+            "doctor_reviewed": summary["doctor_reviewed"],
+            # 免审条目如实记进报告与审计，且**不写成医生确认**
+            "auto_processed": summary["auto_processed"],
             "batch_accepted": accepted_ids,
         }
         # "暂不确定"条目进入报告的待医生确认问题清单
@@ -1395,8 +1406,9 @@ class CaseFlow:
                 report_version=new_version, payload=payload)
             self.store.add_audit(
                 case_id, "report_published",
-                f"审核人={reviewer_name} 版本={new_version} 人工操作={summary['human_touched']}/"
-                f"{summary['total']} 批量接受={len(accepted_ids)}")
+                f"审核人={reviewer_name} 版本={new_version} 医生处理={summary['doctor_reviewed']}/"
+                f"{summary['total']} 免审自动处理={summary['auto_processed']} "
+                f"批量接受={len(accepted_ids)}")
         return {"ok": True, "case_state": "doctor_confirmed", "report_version": new_version,
                 "summary": summary, "batch_accepted": accepted_ids,
                 "review": payload["review"]}

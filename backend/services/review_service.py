@@ -39,15 +39,20 @@ CONFIRMED = "confirmed"
 MODIFIED = "modified"
 REJECTED = "rejected"
 UNCERTAIN = "uncertain"
+# 派生态（**不落库**）：规则判定"不需要医生确认"的条目（如未要求医生决定的路径步骤）。
+# 与"医生已接受"必须严格区分 —— 报告、审计都不能把它写成医生确认过（红线）。
+AUTO_PROCESSED = "auto_processed"
 
-ITEM_STATES = (AWAITING, CONFIRMED, MODIFIED, REJECTED, UNCERTAIN)
+ITEM_STATES = (AWAITING, CONFIRMED, MODIFIED, REJECTED, UNCERTAIN, AUTO_PROCESSED)
 ITEM_STATE_LABELS: Dict[str, str] = {
     AWAITING: "待审",
     CONFIRMED: "已接受",
     MODIFIED: "已修改",
     REJECTED: "已驳回",
     UNCERTAIN: "暂不确定",
+    AUTO_PROCESSED: "免审（自动）",
 }
+AUTO_PROCESSED_REASON = "规则判定免审：该路径步骤未要求医生决定（医生可随时接管）"
 TERMINAL_STATES = (CONFIRMED, MODIFIED, REJECTED, UNCERTAIN)
 
 # 医生动作中文标签（审计与审核记录展示用）
@@ -124,6 +129,7 @@ class ReviewItem:
     decided_at: str = ""
     decision_id: str = ""
     needs_doctor_review: bool = True
+    auto_reason: str = ""                            # 规则判定免审时的原因（仅派生态有值）
 
     @property
     def final_content(self) -> str:
@@ -160,6 +166,7 @@ class ReviewItem:
             "decision_id": self.decision_id,
             "changed_by_doctor": self.changed_by_doctor,
             "needs_doctor_review": self.needs_doctor_review,
+            "auto_reason": _clean(self.auto_reason),
         }
 
 
@@ -312,7 +319,14 @@ def latest_decisions(decisions: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str,
 
 def apply_decisions(items: Sequence[ReviewItem],
                     decisions: Sequence[Dict[str, Any]]) -> List[ReviewItem]:
-    """把医生决策覆盖到条目上（就地更新并返回）。"""
+    """把医生决策覆盖到条目上（就地更新并返回），并派生"免审"状态。
+
+    两条规则（2026-09-17 修正，此前有缺陷）：
+    1. `needs_doctor_review` 由**条目自身的业务语义**决定（如路径步骤是否要求医生决定），
+       不能被"是否还没审"覆盖 —— 旧实现用 `state in (AWAITING, UNCERTAIN)` 覆盖了它，
+       导致"理论上免审"的条目照样计入待审、照样阻塞发布；
+    2. 医生没干预过、且规则判定免审的条目 → 派生为 `auto_processed`（**不落库、不计入医生处理**）。
+    """
     by_id = latest_decisions(decisions)
     for item in items:
         decision = by_id.get(item.item_id)
@@ -326,26 +340,45 @@ def apply_decisions(items: Sequence[ReviewItem],
         item.reviewer = str(reviewer.get("role") or "") or str(decision.get("reviewer_name") or "")
         item.decided_at = str(decision.get("created_at") or "")
         item.decision_id = str(decision.get("decision_id") or "")
-        item.needs_doctor_review = item.state in (AWAITING, UNCERTAIN)
+    for item in items:
+        if not item.needs_doctor_review and not item.decision_id:
+            item.state = AUTO_PROCESSED
+            item.auto_reason = AUTO_PROCESSED_REASON
     return list(items)
 
 
 def summarize(items: Sequence[ReviewItem]) -> Dict[str, Any]:
-    """审核进度概览（屏 A 待审红点 / 屏 F 底部发布条件）。"""
+    """审核进度概览（待审红点 / 底部发布条件）。
+
+    `pending` 只统计**必审且未处理**的条目：规则判定免审的条目不该计入待审，
+    更不该阻塞发布（修复前它们会，实测占条目 21.9%）。
+    """
     counts = {state: 0 for state in ITEM_STATES}
     for item in items or []:
         counts[item.state] = counts.get(item.state, 0) + 1
     total = len(items or [])
-    pending = counts[AWAITING]
-    human_touched = total - pending
+    pending = sum(1 for i in items or [] if i.needs_doctor_review and i.state == AWAITING)
+    # "医生已处理" = 医生这次决定**仍然生效**（终态）；被撤销回到待审的条目不能既算待审又算已处理
+    doctor_reviewed = sum(1 for i in items or []
+                          if i.decision_id and i.state in TERMINAL_STATES)
+    auto_processed = counts.get(AUTO_PROCESSED, 0)
+    blocking: List[str] = []
+    if total == 0:
+        blocking.append("该病例暂无决策条目")
+    if pending:
+        blocking.append(f"仍有 {pending} 条必审条目未处理")
     return {
         "total": total,
         "by_state": counts,
         "pending": pending,
-        "human_touched": human_touched,
-        "all_resolved": pending == 0,
+        "doctor_reviewed": doctor_reviewed,
+        "auto_processed": auto_processed,
+        # 兼容字段：语义收紧为"医生真正处理过"（此前把免审放行也算进去，分不清人和规则）
+        "human_touched": doctor_reviewed,
+        "all_resolved": total > 0 and pending == 0,
         "can_publish": total > 0 and pending == 0,
-        "progress": round(human_touched / total, 2) if total else 0.0,
+        "blocking_reasons": blocking,
+        "progress": round((total - pending) / total, 2) if total else 0.0,
     }
 
 

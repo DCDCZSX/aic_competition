@@ -97,7 +97,13 @@ def main():
     check("含科室入选条目", "department_selection" in types, json.dumps(sorted(types), ensure_ascii=False))
     check("含路径步骤条目", "path_step" in types)
     check("含患者建议条目", "patient_advice" in types)
-    check("初始全部待审", review["summary"]["pending"] == len(items), str(review["summary"]))
+    # 待审只算"必审"条目：未要求医生决定的路径步骤是免审（auto_processed），不计入待审
+    exempt = [i for i in items if not i["needs_doctor_review"]]
+    check("免审条目不计入待审（修过的真缺陷）",
+          review["summary"]["pending"] == len(items) - len(exempt)
+          and review["summary"]["auto_processed"] == len(exempt)
+          and len(exempt) > 0,
+          f"待审 {review['summary']['pending']} / 总 {len(items)} / 免审 {review['summary']['auto_processed']}")
     check("未发布时不能直接发布标记", review["published"] is False)
     text = json.dumps(review, ensure_ascii=False)
     check("无概率/置信度泄露", not any(t in text for t in ("概率", "置信度", "confidence")))
@@ -136,8 +142,12 @@ def main():
                     json={"item_id": ids[3], "action": "uncertain", "reason": "证据不足，待线下确认"}, timeout=30)
     check("暂不确定成功", r.status_code == 200 and r.json().get("ok"))
     review_after = r.json()
-    check("待审数下降", review_after["summary"]["pending"] == len(items) - 4,
+    check("待审数下降（只对必审条目计数）",
+          review_after["summary"]["pending"] == review["summary"]["pending"] - 4,
           json.dumps(review_after["summary"], ensure_ascii=False))
+    check("医生处理数=4（免审不算医生处理）",
+          review_after["summary"].get("doctor_reviewed") == 4,
+          json.dumps(review_after["summary"], ensure_ascii=False)[:160])
     check("暂不确定进入待确认问题清单",
           bool(review_after.get("pending_questions"))
           and any("证据不足" in q for q in review_after["pending_questions"]),
@@ -147,21 +157,32 @@ def main():
                     json={"item_id": "department_selection:不存在的科", "action": "accept"}, timeout=30)
     check("未知条目被拒", r.status_code == 400, str(r.json().get("error"))[:60])
 
-    print("\n[6] 发布审核版")
+    print("\n[6] 发布审核版（免审条目不阻塞发布，且不得被写成医生接受）")
     r = doctor.post(f"{BASE}/api/v2/case/{case_id}/publish", json={"reviewer": "审核医生"}, timeout=60)
-    check("仍有待审时发布被拒", r.status_code == 400, str(r.json().get("error"))[:70])
+    check("仍有必审条目时发布被拒", r.status_code == 400, str(r.json().get("error"))[:70])
     r = doctor.post(f"{BASE}/api/v2/case/{case_id}/publish",
                     json={"reviewer": "审核医生", "accept_all": True}, timeout=120)
-    check("全部接受并发布成功", r.status_code == 200 and r.json().get("ok"),
+    check("全部接受必审条目并发布成功", r.status_code == 200 and r.json().get("ok"),
           json.dumps(r.json(), ensure_ascii=False)[:140])
     pub = r.json()
     check("状态→doctor_confirmed", pub.get("case_state") == "doctor_confirmed", str(pub.get("case_state")))
     check("版本 +1", pub.get("report_version") == 2, str(pub.get("report_version")))
     check("批量接受逐条留痕", bool(pub.get("batch_accepted")), f"{len(pub.get('batch_accepted') or [])} 条")
+    check("批量接受只覆盖必审条目（免审不被写成医生接受）",
+          all(i in {x["item_id"] for x in items if x["needs_doctor_review"]}
+              for i in pub.get("batch_accepted") or []),
+          f"{len(pub.get('batch_accepted') or [])} 条")
 
     r = doctor.get(f"{BASE}/api/v2/case/{case_id}/review", timeout=30)
     check("发布后无待审条目", r.json()["summary"]["pending"] == 0)
     check("published=True", r.json()["published"] is True)
+    check("发布后免审条目仍标为自动处理（没被写成医生接受）",
+          all(i["state"] == "auto_processed" for i in r.json()["items"] if not i["needs_doctor_review"]),
+          json.dumps(r.json()["summary"], ensure_ascii=False)[:140])
+    audit_text = json.dumps(doctor.get(f"{BASE}/api/v2/case/{case_id}/audit", timeout=30).json(),
+                            ensure_ascii=False)
+    check("审计区分医生处理与免审自动处理",
+          "医生处理=" in audit_text and "免审自动处理=" in audit_text, "")
 
     print("\n[7] 报告角标转绿")
     r = doctor.get(f"{BASE}/api/v2/case/{case_id}/report", timeout=60)

@@ -425,6 +425,8 @@ def build_full_report(case: Dict[str, Any]) -> Report:
             "报告版本": case.get("report_version", 1),
             "病例状态": CASE_STATE_LABELS.get(str(case.get("case_state")), "（未记录）"),
             "审核条目数": len(decisions),
+            # 免审条目如实单列：规则判定免审 ≠ 医生确认（红线），不能让读者以为医生看过
+            "免审条目": _exempt_note(payload),
             "最近操作": recent_decisions_for_report(decisions),
         },
     }
@@ -445,6 +447,15 @@ def build_full_report(case: Dict[str, Any]) -> Report:
         if value in (None, [], {}):
             sections[name] = "（本版本未生成：模型未配置或无可用意见卡/审核记录）"
     return report
+
+
+def _exempt_note(payload: Dict[str, Any]) -> str:
+    """免审条目的报告口径：**不计入医生审核**（红线：规则放行 ≠ 医生确认）。"""
+    review = (payload or {}).get("review") or {}
+    auto = int(review.get("auto_processed") or 0)
+    if not auto:
+        return "0 条"
+    return f"{auto} 条（路径步骤未要求医生决定，未计入医生审核）"
 
 
 def _doctor_opinions(decisions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
