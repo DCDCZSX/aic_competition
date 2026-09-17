@@ -67,7 +67,7 @@
       </a>
 
       <h1>进入医生工作台</h1>
-      <p class="muted">先核对依据，再逐条把 AI 的结论过一遍：接受、修改、驳回、暂不确定，全部留痕可回溯。</p>
+      <p class="muted">先从风险优先队列开始，只处理需要医生决定的条目；接受、修改、驳回、暂不确定，全部留痕可回溯。</p>
 
       <div class="role-cards">
         <div class="role-card" onclick="showAccountLogin()">
@@ -99,7 +99,7 @@
       <ul class="auth-points">
         <li><span class="n">01</span><span><strong>看依据，不看黑箱</strong>：分诊依据按"规则命中 → 模型受限发言 → 编排校验"三段展开，每个入选科室都有信号来源。</span></li>
         <li><span class="n">02</span><span><strong>审多学科过程</strong>：各科先独立研判，共识与分歧分列；有争议的进"待医生确认"，不替医生裁决。</span></li>
-        <li><span class="n">03</span><span><strong>逐条把关</strong>：对科室入选、路径步骤、共识分歧、患者建议四类条目做接受 / 修改 / 驳回 / 暂不确定，修改与驳回必须填原因。</span></li>
+        <li><span class="n">03</span><span><strong>按责任分层</strong>：高风险、冲突和关键证据缺口进入医生必审；规则判定免审的条目单独标记，医生可随时接管，修改与驳回必须填原因。</span></li>
         <li><span class="n">04</span><span><strong>发布审核版并闭环</strong>：全部条目终态后发布，报告角标转为"已审核"；就诊后录入线下实际意见，生成「AI 建议 vs 医生意见」对照。</span></li>
       </ul>
 
