@@ -559,15 +559,34 @@ def get_changes(case_id):
 
 @app.route('/api/v2/cases', methods=['GET'])
 def list_review_cases():
-    """屏 A 病例列表（待审优先）。"""
+    """屏 A 病例队列（服务端筛选、排序与分页）。"""
     session, error = _guard_doctor()
     if error:
         return error
     state_filter = request.args.get('state') or ''
+    try:
+        limit = max(1, min(int(request.args.get('limit') or 20), 100))
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        offset = max(0, int(request.args.get('offset') or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    page = case_flow.list_review_cases(
+        limit=limit,
+        offset=offset,
+        state_filter=state_filter,
+        filter_kind=request.args.get('filter') or '',
+        sort=request.args.get('sort') or 'risk',
+        department=request.args.get('department') or '',
+        reviewer_id=session.username,
+    )
     return jsonify({
-        'cases': case_flow.list_review_cases(limit=int(request.args.get('limit') or 100),
-                                             state_filter=state_filter,
-                                             reviewer_id=session.username),
+        'cases': page['rows'],
+        'total': page['total'],
+        'has_more': page['has_more'],
+        'filters': page['filters'],
+        'sorts': page['sorts'],
         'reviewer': session.to_dict(include_token=False),
     })
 

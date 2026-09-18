@@ -367,7 +367,8 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertTrue(review["doctor_opinions"][0]["is_verified"])
 
     def test_list_cases_pending_priority(self):
-        rows = self.flow.list_review_cases()
+        result = self.flow.list_review_cases()
+        rows = result["rows"]
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertEqual(row["case_id"], self.case_id)
@@ -376,8 +377,8 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertIn(row["case_state"], ("awaiting_doctor", "analyzing"))
 
     def test_list_cases_filter(self):
-        self.assertEqual(self.flow.list_review_cases(state_filter="doctor_confirmed"), [])
-        self.assertEqual(len(self.flow.list_review_cases(state_filter="awaiting_doctor")), 1)
+        self.assertEqual(self.flow.list_review_cases(state_filter="doctor_confirmed")["rows"], [])
+        self.assertEqual(len(self.flow.list_review_cases(state_filter="awaiting_doctor")["rows"]), 1)
 
     def test_history_has_timeline_and_decisions(self):
         ids, _ = self._item_ids()
@@ -403,6 +404,43 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         text = json.dumps(self.flow.get_review(self.case_id), ensure_ascii=False)
         for token in ("概率", "置信度", "confidence"):
             self.assertNotIn(token, text)
+
+
+class TestReviewQueuePagination(unittest.TestCase):
+    def setUp(self):
+        self.flow = CaseFlow(store=Store(":memory:"))
+        for i in range(3):
+            self.flow.store.save_case(
+                f"Q{i}",
+                case_state="awaiting_doctor",
+                main_issue=f"队列病例 {i}",
+                payload={"profile": {"chief_complaint": f"主诉 {i}"}},
+            )
+
+    def tearDown(self):
+        self.flow.store.close()
+
+    def test_review_queue_returns_page_metadata(self):
+        result = self.flow.list_review_cases(limit=2, offset=1)
+        self.assertEqual(result["total"], 3)
+        self.assertEqual(len(result["rows"]), 2)
+        self.assertFalse(result["has_more"])
+
+    def test_review_queue_applies_state_filter_before_paging(self):
+        self.flow.store.update_case("Q1", case_state="doctor_confirmed")
+        result = self.flow.list_review_cases(
+            limit=1, offset=0, state_filter="awaiting_doctor"
+        )
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(len(result["rows"]), 1)
+        self.assertEqual(result["rows"][0]["case_state"], "awaiting_doctor")
+
+    def test_review_queue_returns_filter_counts_for_current_scope(self):
+        result = self.flow.list_review_cases(limit=20)
+        self.assertIsInstance(result["filters"], dict)
+        self.assertEqual(result["filters"]["all"], 3)
+        self.assertEqual(result["filters"]["doctor_pending"], 0)
+        self.assertEqual(result["filters"]["exempt"], 0)
 
 
 if __name__ == "__main__":

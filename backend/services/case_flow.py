@@ -1219,14 +1219,56 @@ class CaseFlow:
         }
 
     # ------------------------------------------------------------------ 医生端审核台（4.1-4.5）
-    def list_review_cases(self, limit: int = 100, state_filter: str = "",
-                          reviewer_id: str = "") -> List[Dict[str, Any]]:
-        """屏 A 病例列表：按"待审优先"排序，带待审条数与关键摘要。"""
+    QUEUE_FILTERS = (
+        ("doctor_pending", "待我处理"),
+        ("conflict", "有冲突"),
+        ("gaps", "缺关键证据"),
+        ("analysis_failed", "分析失败/部分"),
+        ("low_reliability", "可靠性低"),
+        ("recheck", "待复核"),
+        ("exempt", "含免审条目"),
+    )
+    QUEUE_SORTS = (
+        ("risk", "风险优先"),
+        ("pending", "待审最多"),
+        ("updated", "最近更新"),
+    )
+
+    @staticmethod
+    def _queue_risk(*, pending: int, conflict_count: int, gap_count: int,
+                    reliability: str, analysis_state: str) -> Tuple[str, int]:
+        """按可解释信号计算病例队列风险，不使用模型置信度作唯一依据。"""
+        if (conflict_count or gap_count or reliability == "低"
+                or analysis_state in ("failed", "partial_failed")):
+            return "高", 3
+        if pending or reliability == "中":
+            return "中", 2
+        return "低", 1
+
+    def list_review_cases(
+        self,
+        limit: Optional[int] = 20,
+        state_filter: str = "",
+        *,
+        offset: int = 0,
+        filter_kind: str = "",
+        sort: str = "risk",
+        department: str = "",
+        reviewer_id: str = "",
+    ) -> Dict[str, Any]:
+        """屏 A 病例队列：先过滤/排序，再返回服务端分页窗口。
+
+        审核摘要是动态计算的，因此先从 SQLite 读取病例并计算队列字段，
+        随后在完整候选集上应用筛选与排序，最后才切出当前页，避免把前 100
+        条病例误当成完整队列。
+        """
         if not self.store:
-            return []
+            return {"rows": [], "total": 0, "has_more": False,
+                    "filters": {}, "sorts": list(self.QUEUE_SORTS)}
+
         rows: List[Dict[str, Any]] = []
         allowed = set(self.store.list_authorized_case_ids(reviewer_id)) if reviewer_id else set()
-        for case in self.store.list_cases(limit=limit):
+        for case in self.store.list_cases(limit=None):
             if reviewer_id and case.get("case_id") not in allowed:
                 continue
             payload = case.get("payload") or {}
@@ -1237,34 +1279,107 @@ class CaseFlow:
             )
             summary = review_service.summarize(items)
             primary = triage.get("primary") or {}
+            profile = payload.get("profile") or {}
+            analysis_state = ((payload.get("analysis") or {}).get("state")
+                              or ("done" if payload.get("mdt") else "none"))
+            aggregation = (payload.get("mdt") or {}).get("aggregation") or {}
+            conflict_count = len(aggregation.get("disagreements") or [])
+            conflict_count += len(triage.get("conflicts") or [])
+            gap_count = len(payload.get("gaps") or [])
+            reliability = str((triage.get("reliability") or {}).get("level") or "")
+            risk_level, risk_rank = self._queue_risk(
+                pending=int(summary.get("pending") or 0),
+                conflict_count=conflict_count,
+                gap_count=gap_count,
+                reliability=reliability,
+                analysis_state=analysis_state,
+            )
             rows.append({
                 "case_id": case.get("case_id"),
                 "case_state": case.get("case_state"),
                 "case_state_label": CASE_STATE_LABELS.get(str(case.get("case_state")), case.get("case_state")),
                 "patient_name": case.get("patient_name") or "（脱敏病例）",
-                "age": (payload.get("profile") or {}).get("age"),
-                "sex": (payload.get("profile") or {}).get("sex"),
+                "age": profile.get("age"),
+                "sex": profile.get("sex"),
                 "behavior_type": triage.get("behavior_type"),
-                "reliability": (triage.get("reliability") or {}).get("level"),
+                "reliability": reliability,
                 "primary_department": primary.get("department"),
-                "chief_complaint": (payload.get("profile") or {}).get("chief_complaint")
-                                   or case.get("main_issue") or "",
-                "pending_items": summary["pending"],
+                "chief_complaint": profile.get("chief_complaint") or case.get("main_issue") or "",
+                "pending_items": int(summary.get("pending") or 0),
+                "exempt_items": int(summary.get("auto_processed") or 0),
+                "conflict_count": conflict_count,
+                "gap_count": gap_count,
+                "risk_level": risk_level,
+                "risk_rank": risk_rank,
                 "review": summary,
                 "reviewed_by": (payload.get("review") or {}).get("published_by") or "",
                 "report_version": int(case.get("report_version") or 1),
-                "analysis_state": (payload.get("analysis") or {}).get("state") or ("done" if payload.get("mdt") else "none"),
+                "analysis_state": analysis_state,
                 "analysis_phases": {k: (v or {}).get("state")
                                     for k, v in ((payload.get("analysis") or {}).get("phases") or {}).items()},
                 "created_at": case.get("created_at"),
                 "updated_at": case.get("updated_at"),
             })
+
         if state_filter:
             rows = [r for r in rows if r["case_state"] == state_filter]
-        # 待审优先 → 新病例优先
-        rows.sort(key=lambda r: (-int(r["pending_items"] or 0), str(r["created_at"] or "")), reverse=False)
-        rows.sort(key=lambda r: (-int(r["pending_items"] or 0),))
-        return rows
+        if department:
+            rows = [r for r in rows if r.get("primary_department") == department]
+        # 筛选计数使用当前状态/科室范围，但不受当前 filter_kind 影响，
+        # 这样左轨可以告诉医生切换筛选后预计有多少病例，而不会把计数显示成误导性的 0。
+        filter_counts = {
+            "all": len(rows),
+            "doctor_pending": sum(1 for r in rows if r["pending_items"] > 0),
+            "conflict": sum(1 for r in rows if r["conflict_count"] > 0),
+            "gaps": sum(1 for r in rows if r["gap_count"] > 0),
+            "analysis_failed": sum(1 for r in rows if r["analysis_state"] in ("failed", "partial_failed")),
+            "low_reliability": sum(1 for r in rows if r["reliability"] == "低"),
+            "recheck": sum(1 for r in rows if r["case_state"] == "awaiting_recheck"),
+            "exempt": sum(1 for r in rows if r["exempt_items"] > 0),
+        }
+        if filter_kind == "doctor_pending":
+            rows = [r for r in rows if r["pending_items"] > 0]
+        elif filter_kind == "conflict":
+            rows = [r for r in rows if r["conflict_count"] > 0]
+        elif filter_kind == "gaps":
+            rows = [r for r in rows if r["gap_count"] > 0]
+        elif filter_kind == "analysis_failed":
+            rows = [r for r in rows if r["analysis_state"] in ("failed", "partial_failed")]
+        elif filter_kind == "low_reliability":
+            rows = [r for r in rows if r["reliability"] == "低"]
+        elif filter_kind == "recheck":
+            rows = [r for r in rows if r["case_state"] == "awaiting_recheck"]
+        elif filter_kind == "exempt":
+            rows = [r for r in rows if r["exempt_items"] > 0]
+
+        if sort == "pending":
+            rows.sort(key=lambda r: (
+                -int(r["pending_items"] or 0), -int(r["risk_rank"] or 0),
+                str(r.get("updated_at") or r.get("created_at") or ""), str(r.get("case_id") or ""),
+            ))
+        elif sort == "updated":
+            rows.sort(key=lambda r: (
+                str(r.get("updated_at") or r.get("created_at") or ""),
+                str(r.get("case_id") or ""),
+            ), reverse=True)
+        else:
+            rows.sort(key=lambda r: (
+                -int(r["risk_rank"] or 0), -int(r["pending_items"] or 0),
+                -int(r["conflict_count"] or 0),
+                str(r.get("updated_at") or r.get("created_at") or ""), str(r.get("case_id") or ""),
+            ))
+
+        safe_offset = max(0, int(offset))
+        safe_limit = None if limit is None else max(1, min(int(limit), 100))
+        total = len(rows)
+        page = rows[safe_offset:] if safe_limit is None else rows[safe_offset:safe_offset + safe_limit]
+        return {
+            "rows": page,
+            "total": total,
+            "has_more": bool(safe_limit is not None and safe_offset + safe_limit < total),
+            "filters": filter_counts,
+            "sorts": list(self.QUEUE_SORTS),
+        }
 
     def get_review(self, case_id: str) -> Optional[Dict[str, Any]]:
         """屏 B-F 数据：决策条目 + 审核进度 + 是否可发布 + 线下意见。"""

@@ -76,6 +76,13 @@ class TestCasePersistence(StoreTestBase):
         cases = self.store.list_cases()
         self.assertEqual(len(cases), 3)
 
+    def test_list_cases_honors_offset(self):
+        for i in range(5):
+            self.store.save_case(f"C20{i}", main_issue=f"问题{i}")
+        all_cases = self.store.list_cases(limit=10)
+        page = self.store.list_cases(limit=2, offset=2)
+        self.assertEqual(page, all_cases[2:4])
+
     def test_upsert_same_case_id(self):
         self.store.save_case("C004", status="running")
         self.store.save_case("C004", status="completed")

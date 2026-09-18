@@ -67,10 +67,14 @@ def main():
           json.dumps(r.json().get("scopes"), ensure_ascii=False))
 
     print("\n[3] 屏 A 病例列表")
-    r = doctor.get(f"{BASE}/api/v2/cases", timeout=60)
+    r = doctor.get(f"{BASE}/api/v2/cases?limit=100", timeout=60)
     check("列表 200", r.status_code == 200, str(r.status_code))
-    cases = r.json().get("cases") or []
+    queue = r.json()
+    cases = queue.get("cases") or []
     check("列表非空", bool(cases), f"{len(cases)} 例")
+    check("列表带服务端分页元数据",
+          isinstance(queue.get("total"), int) and isinstance(queue.get("has_more"), bool),
+          json.dumps({"total": queue.get("total"), "has_more": queue.get("has_more")}, ensure_ascii=False))
     row = next((c for c in cases if c["case_id"] == case_id), None)
     check("能找到刚建的病例", row is not None)
     if row:
@@ -80,9 +84,14 @@ def main():
         check("带牵头方向", bool(row["primary_department"]), str(row["primary_department"]))
     r = doctor.get(f"{BASE}/api/v2/cases?state=doctor_confirmed", timeout=30)
     check("状态筛选可用", r.status_code == 200 and isinstance(r.json().get("cases"), list))
-    check("待审优先排序", all(
-        cases[i]["pending_items"] >= cases[i + 1]["pending_items"] for i in range(len(cases) - 1))
-        if len(cases) > 1 else True)
+    check("风险优先排序", all(
+        int(cases[i].get("risk_rank", 0)) >= int(cases[i + 1].get("risk_rank", 0))
+        for i in range(len(cases) - 1)) if len(cases) > 1 else True)
+    r = doctor.get(f"{BASE}/api/v2/cases?limit=1&offset=1", timeout=30)
+    page = r.json()
+    check("offset 分页返回单页",
+          r.status_code == 200 and len(page.get("cases") or []) <= 1
+          and isinstance(page.get("total"), int), json.dumps(page, ensure_ascii=False)[:120])
 
     print("\n[4] 屏 F 审核条目")
     r = doctor.get(f"{BASE}/api/v2/case/{case_id}/review", timeout=60)
