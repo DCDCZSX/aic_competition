@@ -15,8 +15,11 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import List, Tuple
+
+from services.rule_engine import is_negated
 
 # 触发后统一话术（规格书 §4.4 G1）
 CRISIS_ADVICE = (
@@ -29,6 +32,24 @@ NON_MEDICAL_REPLY = (
     "抱歉，本系统只用于整理就医信息与多学科分析辅助，"
     "不处理闲聊、广告或试题类内容。请提供病历或就医相关问题。"
 )
+
+# 危象描述常带有修饰词，如“无明显意识障碍”“否认曾有昏迷”。
+# 通用分诊规则处理紧邻否定词；这里只额外补充危象筛查中常见的中间修饰语。
+_CRISIS_NEGATION_PATTERN = re.compile(
+    r"(无|没有|否认|不伴|未见|未出现|未发生|未)"
+    r"(?:明显|任何|相关|持续|突发|再次|上述|此类|曾有|过)?\s*$"
+)
+
+
+def _present(text: str, keyword: str) -> bool:
+    """关键词至少有一处不在否定语境中时才算命中。"""
+    start = text.find(keyword)
+    while start >= 0:
+        prefix = text[max(0, start - 8):start]
+        if not is_negated(text, start) and not _CRISIS_NEGATION_PATTERN.search(prefix):
+            return True
+        start = text.find(keyword, start + 1)
+    return False
 
 
 @dataclass(frozen=True)
@@ -43,8 +64,8 @@ class CrisisRule:
 
     def match(self, text: str) -> bool:
         if self.all_of:
-            return all(k in text for k in self.all_of)
-        return any(k in text for k in self.keywords)
+            return all(_present(text, k) for k in self.all_of)
+        return any(_present(text, k) for k in self.keywords)
 
 
 # ---------------------------------------------------------------------------

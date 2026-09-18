@@ -139,12 +139,23 @@ class TestEvidenceCards(unittest.TestCase):
         self.assertTrue(cards)
         self.assertTrue(all("evidence_state" in c for c in cards))
 
-    def test_direct_when_source_refs_present(self):
-        """同一来源直引 → direct（"相关"不等于"支持"）。"""
+    def test_text_similarity_does_not_become_direct_evidence(self):
+        """Text overlap is only a candidate; it cannot prove support."""
         cards = build_evidence_cards(sample_profile(), sample_case()["payload"]["triage"])
         primary_card = cards[0]
-        self.assertEqual(primary_card["evidence_state"], STATE_DIRECT)
-        self.assertTrue(any(s["source_refs"] for s in primary_card["supports"]))
+        self.assertNotEqual(primary_card["evidence_state"], STATE_DIRECT)
+
+    def test_exact_source_reference_is_direct_evidence(self):
+        case = sample_case()
+        case["payload"]["triage"]["primary"]["evidence_refs"] = ["S-1:32"]
+        cards = build_evidence_cards(sample_profile(), case["payload"]["triage"])
+        self.assertEqual(cards[0]["evidence_state"], STATE_DIRECT)
+        self.assertEqual(cards[0]["supports"][0]["source_refs"], ["S-1:32"])
+
+    def test_evidence_dimensions_are_independent(self):
+        card = build_evidence_cards(sample_profile(), sample_case()["payload"]["triage"])[0]
+        self.assertIn(card["evidence_sufficiency"], {"partial", "insufficient"})
+        self.assertEqual(card["review_status"], "ai_unreviewed")
 
     def test_opposes_is_explicit_even_when_empty(self):
         """反对证据为空也要显式呈现该字段（不能只展示有利一面）。"""

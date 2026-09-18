@@ -19,11 +19,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 修改为绝对导入
 from services.ai_service import AIService
-from services.auth import (AuthService, AuthError, ROLE_DOCTOR, ROLE_PATIENT,
+from services.auth import (AuthService, AuthError, ROLE_DOCTOR, ROLE_GUEST, ROLE_PATIENT,
                            auth_required, extract_token)
 from services.case_flow import CaseFlow
+from services.intake import sanitized_payload
+from services.preview_tokens import PreviewTokenService
 from services.store import Store
 import time
+from collections import defaultdict, deque
 
 app = Flask(__name__)
 _cors_origins = [x.strip() for x in os.getenv(
@@ -35,6 +38,9 @@ CORS(app, resources={r"/api/*": {"origins": _cors_origins}}, supports_credential
 app.json.sort_keys = False
 
 auth_service = AuthService()
+preview_tokens = PreviewTokenService(int(os.getenv('APP_PREVIEW_TTL_MINUTES', '10')))
+_guest_issue_lock = threading.Lock()
+_guest_issues = defaultdict(deque)
 
 # 患者端链路（接线层）。旧 MDTService 不再挂载到 HTTP，避免绕过脱敏与安全约束。
 # use_llm=True 时启用 S2 受限发言与多专科分析；未配置 Key 会自动降级为纯规则分诊。
@@ -53,10 +59,8 @@ def _current_session():
 
 
 def _guard(required_scope=None):
-    """接口守卫：APP_AUTH_REQUIRED=true 时强制登录；返回 (session, error_response)。"""
+    """Guard full APIs. Anonymous users must use the explicitly limited guest API."""
     session = _current_session()
-    if not auth_required():
-        return session, None
     if session is None:
         return None, (jsonify({'error': '未登录或会话已过期，请先登录'}), 401)
     if required_scope and not auth_service.has_scope(session, required_scope):
@@ -76,10 +80,10 @@ def _guard_case(case_id, required_scope=None):
     case = _shared_store.load_case(case_id)
     if not case:
         return session, None, (jsonify({'error': f'病例不存在：{case_id}'}), 404)
-    if session is None and not auth_required():
-        return session, case, None
     if session and session.role == ROLE_DOCTOR and auth_service.has_scope(session, 'case:authorized'):
-        return session, case, None
+        if _shared_store.has_case_access(case_id, session.username):
+            return session, case, None
+        return session, None, (jsonify({'error': '病例不存在或未授权给当前审核账号'}), 404)
     if not session or session.role != ROLE_PATIENT or case.get('owner_id') != session.username:
         return session, None, (jsonify({'error': '病例不存在或无权访问'}), 404)
     return session, case, None
@@ -98,6 +102,24 @@ def _guard_doctor(required_scope='review'):
         return session, (jsonify({'error': f'当前角色（{session.role}）无权访问医生工作台'}), 403)
     if not auth_service.has_scope(session, required_scope):
         return session, (jsonify({'error': f'医生角色缺少权限：{required_scope}'}), 403)
+    return session, None
+
+
+def _guard_doctor_case(case_id, required_scope='review'):
+    session, error = _guard_doctor(required_scope)
+    if error:
+        return session, error
+    if not _shared_store.has_case_access(case_id, session.username):
+        return session, (jsonify({'error': '病例不存在或未授权给当前审核账号'}), 404)
+    return session, None
+
+
+def _guard_guest(required_scope):
+    session = _current_session()
+    if session is None:
+        return None, (jsonify({'error': '游客会话不存在或已过期'}), 401)
+    if session.role != ROLE_GUEST or not auth_service.has_scope(session, required_scope):
+        return session, (jsonify({'error': '当前会话无权使用游客功能'}), 403)
     return session, None
 
 
@@ -129,7 +151,7 @@ def doctor_home():
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    """登录：默认只允许账号密码；免密角色入口需显式开启。"""
+    """登录：只允许账号密码；免密体验走独立游客接口。"""
     data = request.get_json(silent=True) or {}
     try:
         session = auth_service.login(
@@ -140,6 +162,33 @@ def login():
     except AuthError as exc:
         return jsonify({'error': str(exc)}), 400
     return jsonify({'status': 'ok', 'session': session.to_dict(), 'scopes': session.scopes})
+
+
+@app.route('/api/guest/session', methods=['POST'])
+def create_guest_session():
+    """Issue a short-lived anonymous token; it cannot access persistent case APIs."""
+    remote = request.remote_addr or 'unknown'
+    now = time.time()
+    per_hour = max(1, int(os.getenv('APP_GUEST_SESSIONS_PER_HOUR', '5')))
+    with _guest_issue_lock:
+        recent = _guest_issues[remote]
+        while recent and recent[0] <= now - 3600:
+            recent.popleft()
+        if len(recent) >= per_hour:
+            return jsonify({'error': '游客会话创建过于频繁，请稍后再试或登录'}), 429
+        recent.append(now)
+    session = auth_service.create_guest_session()
+    return jsonify({
+        'status': 'ok',
+        'session': session.to_dict(),
+        'scopes': session.scopes,
+        'limits': {
+            'preview': int(os.getenv('APP_GUEST_PREVIEW_LIMIT', '5')),
+            'triage': int(os.getenv('APP_GUEST_TRIAGE_LIMIT', '2')),
+            'max_chars': int(os.getenv('APP_GUEST_MAX_CHARS', '2000')),
+        },
+        'data_policy': '仅用于本次内存分析，不创建病例档案',
+    }), 201
 
 
 @app.route('/api/logout', methods=['POST'])
@@ -172,7 +221,82 @@ def preview_intake():
     preview = case_flow.build_preview(
         data.get('medical_history', ''), data.get('main_issue', '')
     )
+    if not preview.get('blocked') and not preview.get('blocking_hit_count'):
+        masked = sanitized_payload(data.get('medical_history', ''), data.get('main_issue', ''))
+        preview['preview_token'] = preview_tokens.issue(
+            session.username, masked['medical_history'], masked['main_issue']
+        )
+        preview['preview_expires_in_seconds'] = preview_tokens.ttl.seconds
     return jsonify(preview)
+
+
+@app.route('/api/guest/preview', methods=['POST'])
+def guest_preview():
+    session, error = _guard_guest('guest:preview')
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    history = str(data.get('medical_history') or '')
+    issue = str(data.get('main_issue') or '')
+    max_chars = int(os.getenv('APP_GUEST_MAX_CHARS', '2000'))
+    if len(history) + len(issue) > max_chars:
+        return jsonify({'error': f'游客输入最多 {max_chars} 个字符'}), 413
+    if not history.strip() and not issue.strip():
+        return jsonify({'error': '请至少填写一项就医资料'}), 400
+    limit = int(os.getenv('APP_GUEST_PREVIEW_LIMIT', '5'))
+    if not auth_service.consume(session, 'preview', limit):
+        return jsonify({'error': '游客脱敏预览次数已用完，请登录继续'}), 429
+    preview = case_flow.build_preview(history, issue)
+    preview['guest_mode'] = True
+    preview['persistent'] = False
+    return jsonify(preview)
+
+
+@app.route('/api/guest/triage', methods=['POST'])
+def guest_triage():
+    """Run a bounded rule-only analysis in memory; no case, MDT or report is persisted."""
+    session, error = _guard_guest('guest:triage')
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    history = str(data.get('medical_history') or '')
+    issue = str(data.get('main_issue') or '')
+    max_chars = int(os.getenv('APP_GUEST_MAX_CHARS', '2000'))
+    if len(history) + len(issue) > max_chars:
+        return jsonify({'error': f'游客输入最多 {max_chars} 个字符'}), 413
+    # Do not spend a quota unit on malformed or oversized input.
+    if not history.strip() and not issue.strip():
+        return jsonify({'error': '请至少填写一项就医资料'}), 400
+    limit = int(os.getenv('APP_GUEST_TRIAGE_LIMIT', '2'))
+    if not auth_service.consume(session, 'triage', limit):
+        return jsonify({'error': '游客分析次数已用完，请登录使用完整功能'}), 429
+    guest_store = Store(':memory:')
+    try:
+        guest_flow = CaseFlow(store=guest_store, use_llm=False)
+        result = guest_flow.create_case(
+            medical_history=history,
+            main_issue=issue,
+            goals=data.get('goals') or [],
+            age=data.get('age'),
+            sex=data.get('gender') or data.get('sex') or '',
+        )
+        payload = result.to_dict()
+    finally:
+        guest_store.close()
+    response = {
+        key: payload.get(key) for key in (
+            'ok', 'blocked', 'blocked_by', 'advice', 'errors', 'warnings',
+            'masked_preview', 'profile', 'gaps', 'questions', 'triage', 'path',
+            'completeness', 'direct_quote_coverage', 'passes_gate',
+        )
+    }
+    response.update({
+        'guest_mode': True,
+        'persistent': False,
+        'limitations': ['不保存病例', '不调用多学科模型', '不生成审核版报告'],
+        'disclaimer': '仅供体验，不构成诊断或治疗建议',
+    })
+    return jsonify(response), (200 if payload.get('ok') else 400)
 
 
 @app.route('/api/v2/case', methods=['POST'])
@@ -187,6 +311,9 @@ def create_case():
     if error:
         return error
     data = request.get_json(silent=True) or {}
+    preview_payload = preview_tokens.consume(str(data.get('preview_token') or ''), session.username)
+    if preview_payload is None:
+        return jsonify({'error': '请先完成脱敏预览；预览凭证已过期、已使用或不属于当前账号'}), 409
     wants_stream = (request.args.get('stream') in ('1', 'true', 'yes')) or bool(data.get('stream'))
     # 两段式：画像/追问/分诊/路径先返回（约 3 秒），多学科分析放后台继续（实测约 26 秒）
     defer_mdt = (request.args.get('defer_mdt') in ('1', 'true', 'yes')) or bool(data.get('defer_mdt'))
@@ -194,9 +321,9 @@ def create_case():
     progressive = (request.args.get('progressive') in ('1', 'true', 'yes')) or bool(data.get('progressive'))
 
     def _create(on_progress=None):
-        return case_flow.create_case(
-            medical_history=data.get('medical_history', ''),
-            main_issue=data.get('main_issue', ''),
+        result = case_flow.create_case(
+            medical_history=preview_payload.medical_history,
+            main_issue=preview_payload.main_issue,
             goals=data.get('goals') or [],
             age=data.get('age'),
             sex=data.get('gender') or data.get('sex') or '',
@@ -206,6 +333,14 @@ def create_case():
             defer_mdt=defer_mdt,
             progressive=progressive,
         )
+        if result.ok and result.case_id and os.getenv(
+                'APP_AUTO_ASSIGN_REVIEWER', 'true').lower() in ('1', 'true', 'yes'):
+            reviewer_id = os.getenv('APP_DOCTOR_USERNAME', 'doctor').strip()
+            if auth_service.is_reviewer_account(reviewer_id):
+                _shared_store.grant_case_access(
+                    result.case_id, reviewer_id, granted_by=session.username
+                )
+        return result
 
     if not wants_stream:
         result = _create()
@@ -273,6 +408,27 @@ def get_case(case_id):
     return jsonify({'case': case, 'audit': _shared_store.list_audit(case_id, limit=50)})
 
 
+@app.route('/api/v2/case/<case_id>/access', methods=['POST', 'DELETE'])
+def manage_case_access(case_id):
+    """The case owner explicitly grants or revokes access for a reviewer account."""
+    session, case, error = _guard_case(case_id, 'case:own')
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    reviewer_id = str(data.get('reviewer_id') or '').strip()
+    if not auth_service.is_reviewer_account(reviewer_id):
+        return jsonify({'error': '目标账号不存在或不是审核角色'}), 400
+    if request.method == 'DELETE':
+        changed = _shared_store.revoke_case_access(
+            case_id, reviewer_id, revoked_by=session.username
+        )
+    else:
+        changed = _shared_store.grant_case_access(
+            case_id, reviewer_id, granted_by=session.username
+        )
+    return jsonify({'ok': True, 'changed': changed, 'reviewer_id': reviewer_id})
+
+
 @app.route('/api/v2/case/<case_id>/analysis', methods=['GET'])
 def get_analysis(case_id):
     """后台分析任务状态（渐进式/两段式的统一下拉口）。
@@ -309,7 +465,9 @@ def analyze_pending_cases():
         return error
     data = request.get_json(silent=True) or {}
     limit = int(data.get('limit') or 3)
-    result = case_flow.analyze_pending_cases(limit=max(1, min(limit, 10)))
+    result = case_flow.analyze_pending_cases(
+        limit=max(1, min(limit, 10)), reviewer_id=session.username
+    )
     return jsonify(result), (200 if result.get('ok') else 400)
 
 
@@ -367,7 +525,7 @@ def add_case_update(case_id):
     source = str(data.get('source') or '患者上传')
     doctor_sources = {'医生上传', '医院文档', '已确认资料'}
     if source in doctor_sources:
-        session, error = _guard_doctor('decision')
+        session, error = _guard_doctor_case(case_id, 'decision')
     else:
         session, case, error = _guard_case(case_id, 'update:own')
     if error:
@@ -421,6 +579,7 @@ def list_review_cases():
         filter_kind=request.args.get('filter') or '',
         sort=request.args.get('sort') or 'risk',
         department=request.args.get('department') or '',
+        reviewer_id=session.username,
     )
     return jsonify({
         'cases': page['rows'],
@@ -435,7 +594,7 @@ def list_review_cases():
 @app.route('/api/v2/case/<case_id>/review', methods=['GET'])
 def get_review(case_id):
     """屏 B-F 数据：决策条目 + 审核进度 + 待确认问题 + 线下意见。"""
-    session, error = _guard_doctor()
+    session, error = _guard_doctor_case(case_id)
     if error:
         return error
     data = case_flow.get_review(case_id)
@@ -447,7 +606,7 @@ def get_review(case_id):
 @app.route('/api/v2/case/<case_id>/decisions', methods=['POST'])
 def submit_decision(case_id):
     """屏 F 逐条审核：accept / modify / reject / uncertain / request_more_info。"""
-    session, error = _guard_doctor('decision')
+    session, error = _guard_doctor_case(case_id, 'decision')
     if error:
         return error
     data = request.get_json(silent=True) or {}
@@ -457,7 +616,7 @@ def submit_decision(case_id):
         action=str(data.get('action') or ''),
         after=str(data.get('after') or ''),
         reason=str(data.get('reason') or ''),
-        reviewer_name=str(data.get('reviewer') or (session.label if session else '审核医生')),
+        reviewer_name=str(data.get('reviewer') or (session.label if session else '模拟审核员')),
         reviewer_dept=str(data.get('reviewer_dept') or ''),
     )
     return jsonify(result), (200 if result.get('ok') else 400)
@@ -466,13 +625,13 @@ def submit_decision(case_id):
 @app.route('/api/v2/case/<case_id>/publish', methods=['POST'])
 def publish_review(case_id):
     """屏 F 底部：发布审核版报告（状态→doctor_confirmed、版本+1、角标转绿）。"""
-    session, error = _guard_doctor('report:confirm')
+    session, error = _guard_doctor_case(case_id, 'report:confirm')
     if error:
         return error
     data = request.get_json(silent=True) or {}
     result = case_flow.publish_review(
         case_id,
-        reviewer_name=str(data.get('reviewer') or (session.label if session else '审核医生')),
+        reviewer_name=str(data.get('reviewer') or (session.label if session else '模拟审核员')),
         accept_all=bool(data.get('accept_all')),
     )
     return jsonify(result), (200 if result.get('ok') else 400)
@@ -481,7 +640,7 @@ def publish_review(case_id):
 @app.route('/api/v2/case/<case_id>/audit', methods=['GET'])
 def get_case_audit(case_id):
     """屏 G 审核记录与版本：审计时间线 + 决策记录 + 条目状态。"""
-    session, error = _guard_doctor()
+    session, error = _guard_doctor_case(case_id)
     if error:
         return error
     data = case_flow.get_review_history(case_id)
@@ -513,5 +672,3 @@ if __name__ == '__main__':
     print("[停止] 按 Ctrl+C")
     print("=" * 60)
     app.run(debug=debug, host=host, port=port)
-
-

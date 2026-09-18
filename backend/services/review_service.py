@@ -383,7 +383,7 @@ def summarize(items: Sequence[ReviewItem]) -> Dict[str, Any]:
 
 
 def make_decision(*, case_id: str, item: ReviewItem, action: str, after: str = "",
-                  reason: str = "", reviewer_name: str = "审核医生",
+                  reason: str = "", reviewer_name: str = "模拟审核员",
                   reviewer_dept: str = "", version: int = 1,
                   decision_id: str = "") -> DoctorDecision:
     """构造并校验一条医生决策（原因必填等红线由 `DoctorDecision.validate` 强制）。"""
@@ -403,7 +403,7 @@ def make_decision(*, case_id: str, item: ReviewItem, action: str, after: str = "
         before=item.ai_content,
         after=(after if action == "modify" else (after or item.final_content)),
         reason=reason,
-        reviewer=Reviewer(role=reviewer_name or "审核医生", dept=reviewer_dept),
+        reviewer=Reviewer(role=reviewer_name or "模拟审核员", dept=reviewer_dept),
         evidence_refs=list(item.evidence_refs),
         version=int(version),
         created_at=_now(),

@@ -274,9 +274,9 @@ class TestDoctorDecision(unittest.TestCase):
 class TestReliabilityRule(unittest.TestCase):
     """主文档 §6.5 / 规格书 §5.7：等级必须带原因，模型自报置信度不参与。"""
 
-    def test_doctor_confirmed_is_high(self):
+    def test_doctor_confirmation_does_not_upgrade_incomplete_evidence(self):
         r = reliability_level(completeness=0.5, doctor_confirmed=True)
-        self.assertEqual(r.level, "高")
+        self.assertEqual(r.level, "中")
         self.assertTrue(r.reasons)
 
     def test_model_inference_only_is_low(self):

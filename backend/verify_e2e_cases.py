@@ -23,6 +23,7 @@ import sys
 import time
 
 import requests
+from verify_http_helpers import login, preview_token
 
 BASE = "http://127.0.0.1:5000"
 
@@ -145,22 +146,21 @@ def ai_texts(payload: dict, report: dict) -> list:
 
 def run_case(session, case, fast: bool, timeout_s: float):
     print(f"\n[{case['id']}] {case['title']}")
+    if case["id"] == "E":
+        preview = session.post(f"{BASE}/api/v2/preview", json={
+            "medical_history": case["history"], "main_issue": "该看哪个科",
+        }, timeout=30)
+        body = preview.json() or {}
+        check("[E] 急症在预览阶段被 G1 拒绝并给出处置建议",
+              preview.status_code == 200 and body.get("blocked") is True
+              and bool(body.get("advice")) and not body.get("preview_token"),
+              json.dumps(body, ensure_ascii=False)[:160])
+        return None
     r = session.post(f"{BASE}/api/v2/case", json={
-        "medical_history": case["history"], "main_issue": "该看哪个科", "age": 45, "sex": "女",
+        "preview_token": preview_token(session, BASE, case["history"], "该看哪个科"),
+        "age": 45, "sex": "女",
         "progressive": True}, timeout=180)
     body = r.json() or {}
-    if case["id"] == "E":
-        # G1 急症拦截：接口按 400 返回（带 blocked/advice），这是刻意设计，不是错误
-        check("[E] 建立病例被 G1 拒绝（400）并给出处置建议",
-              r.status_code == 400 and body.get("blocked") is True and bool(body.get("advice")),
-              json.dumps(body, ensure_ascii=False)[:160])
-        case_id = body.get("case_id")
-        if case_id:
-            rep = session.get(f"{BASE}/api/v2/case/{case_id}/report", timeout=60)
-            check("[E] 拦截病例不生成报告",
-                  rep.status_code != 200 or not ((rep.json() or {}).get("full")),
-                  str(rep.status_code))
-        return None
     check(f"[{case['id']}] 建立病例", r.status_code == 200 and bool(body.get("case_id")),
           str(r.status_code))
 
@@ -282,12 +282,11 @@ def main() -> int:
     args = parser.parse_args()
 
     session = requests.Session()
-    r = session.post(f"{BASE}/api/login", json={"username": "patient", "password": "patient"},
-                     timeout=30)
-    if r.status_code != 200:
-        print("登录失败，服务是否已启动？")
+    try:
+        login(session, BASE, "patient")
+    except RuntimeError as exc:
+        print(str(exc))
         return 2
-    session.headers["Authorization"] = f"Bearer {r.json()['session']['token']}"
 
     print("=" * 74)
     print(f"跨病种验收集 E2E（规格书 §12）| 模式：{'快速（只验规则首屏）' if args.fast else '完整（含模型相位与报告）'}")

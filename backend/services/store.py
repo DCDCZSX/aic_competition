@@ -109,8 +109,18 @@ class Store:
                     at         TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS case_access (
+                    case_id    TEXT NOT NULL,
+                    reviewer_id TEXT NOT NULL,
+                    granted_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (case_id, reviewer_id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_audit_case ON audit_log(case_id, at);
                 CREATE INDEX IF NOT EXISTS idx_decisions_case ON decisions(case_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_case_access_reviewer
+                    ON case_access(reviewer_id, case_id);
                 """
             )
             columns = {row[1] for row in self._conn.execute("PRAGMA table_info(cases)")}
@@ -205,6 +215,51 @@ class Store:
                     (safe_limit, safe_offset),
                 ).fetchall()
         return [self._row_to_case(r) for r in rows]
+
+    def grant_case_access(self, case_id: str, reviewer_id: str, *, granted_by: str) -> bool:
+        if not case_id or not reviewer_id or not self.load_case(case_id):
+            return False
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO case_access (case_id, reviewer_id, granted_by, created_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(case_id, reviewer_id) DO UPDATE SET
+                     granted_by=excluded.granted_by, created_at=excluded.created_at""",
+                (case_id, reviewer_id, granted_by, _now()),
+            )
+            self._conn.commit()
+        self.add_audit(case_id, "case_access_granted",
+                       f"reviewer={reviewer_id}; granted_by={granted_by}")
+        return True
+
+    def revoke_case_access(self, case_id: str, reviewer_id: str, *, revoked_by: str) -> bool:
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM case_access WHERE case_id=? AND reviewer_id=?",
+                (case_id, reviewer_id),
+            )
+            self._conn.commit()
+        removed = cursor.rowcount > 0
+        if removed:
+            self.add_audit(case_id, "case_access_revoked",
+                           f"reviewer={reviewer_id}; revoked_by={revoked_by}")
+        return removed
+
+    def has_case_access(self, case_id: str, reviewer_id: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM case_access WHERE case_id=? AND reviewer_id=?",
+                (case_id, reviewer_id),
+            ).fetchone()
+        return row is not None
+
+    def list_authorized_case_ids(self, reviewer_id: str) -> List[str]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT case_id FROM case_access WHERE reviewer_id=? ORDER BY created_at DESC",
+                (reviewer_id,),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
 
     def mutate_case(self, case_id: str,
                     mutator: Callable[[Dict[str, Any]], None]) -> Optional[Dict[str, Any]]:

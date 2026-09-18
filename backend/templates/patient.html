@@ -464,7 +464,7 @@
 
 <script>
 /* ===================== 状态 ===================== */
-const S = { token:null, role:null, label:null, goals:[], caseId:null, questions:[], answers:{}, gaps:[],
+const S = { token:null, role:null, label:null, previewToken:null, goals:[], caseId:null, questions:[], answers:{}, gaps:[],
             profile:null, mode:'paste', triage:null, path:null, mdt:null, report:null,
             mdtPending:false, mdtStatus:null, reportView:'summary' };
 const STEPS = [['goal','就医目标'],['intake','录入资料'],['mask','脱敏预览'],
@@ -669,6 +669,7 @@ async function doPreview(){
     body:JSON.stringify({medical_history:history, main_issue:issue})});
   if(r.status!==200){ msg('intake-msg','预览失败，请重试'); return; }
   const d=r.data;
+  S.previewToken = d.preview_token || null;
 
   if(d.blocked){
     const crisis = d.is_crisis;
@@ -737,17 +738,20 @@ function hideCreateProgress(){
 
 async function doCreateCase(){
   if(createTimer) return;                          // 防重复提交（连点会建出两个病例）
-  const history=document.getElementById('history').value.trim();
-  const issue=document.getElementById('main-issue').value.trim();
+  if(!S.previewToken){
+    msg('mask-msg','预览凭证不存在或内容需要修改，请返回上一步重新预览','warn');
+    return;
+  }
   showCreateProgress();
   try{
     const r = await api('/api/v2/case', {method:'POST', body:JSON.stringify({
-      medical_history:history, main_issue:issue, goals:S.goals,
+      preview_token:S.previewToken, goals:S.goals,
       age:document.getElementById('f-age').value||null,
       gender:document.getElementById('f-sex').value||'',
       progressive:true      // 渐进式：0.2 秒级先给规则结果，模型三相后台自动替换
     })});
     const d=r.data||{};
+    S.previewToken = null; // 一次性凭证无论成功与否都必须重新预览
     hideCreateProgress();
     if(d.blocked){
       msg('mask-msg', `<strong>已拦截</strong><br>${esc(d.advice||(d.errors||[]).join('；'))}`,'danger');
