@@ -52,6 +52,7 @@ logs/
 
 # Database
 *.db
+*.db-*
 *.sqlite3
 
 # Configuration

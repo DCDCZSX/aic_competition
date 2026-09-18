@@ -53,6 +53,12 @@ class Store:
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # 多线程后台分析与 HTTP 请求会并发访问 SQLite；显式设置忙等待，
+        # 文件库启用 WAL 降低读写互相阻塞。内存库不设置 WAL，保持测试兼容。
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        if self.db_path != ":memory:":
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
 
     # ------------------------------------------------------------------ 建表
@@ -121,11 +127,16 @@ class Store:
                 CREATE INDEX IF NOT EXISTS idx_decisions_case ON decisions(case_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_case_access_reviewer
                     ON case_access(reviewer_id, case_id);
+                CREATE INDEX IF NOT EXISTS idx_cases_created
+                    ON cases(created_at DESC);
                 """
             )
             columns = {row[1] for row in self._conn.execute("PRAGMA table_info(cases)")}
             if "owner_id" not in columns:
                 self._conn.execute("ALTER TABLE cases ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''")
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cases_owner ON cases(owner_id, created_at DESC)"
+            )
             self._conn.commit()
 
     # ------------------------------------------------------------------ 病例
@@ -213,6 +224,31 @@ class Store:
                 rows = self._conn.execute(
                     "SELECT * FROM cases ORDER BY created_at DESC LIMIT ? OFFSET ?",
                     (safe_limit, safe_offset),
+                ).fetchall()
+        return [self._row_to_case(r) for r in rows]
+
+    def list_cases_for_reviewer(self, reviewer_id: str, *, limit: Optional[int] = None,
+                                offset: int = 0) -> List[Dict[str, Any]]:
+        """只读取已明确授权给审核员的病例。"""
+        if not reviewer_id:
+            return self.list_cases(limit=limit, offset=offset)
+        safe_offset = max(0, int(offset))
+        with self._lock:
+            if limit is None:
+                rows = self._conn.execute(
+                    """SELECT c.* FROM cases c
+                       INNER JOIN case_access a ON a.case_id = c.case_id
+                       WHERE a.reviewer_id = ? ORDER BY c.created_at DESC""",
+                    (reviewer_id,),
+                ).fetchall()
+            else:
+                safe_limit = max(0, int(limit))
+                rows = self._conn.execute(
+                    """SELECT c.* FROM cases c
+                       INNER JOIN case_access a ON a.case_id = c.case_id
+                       WHERE a.reviewer_id = ? ORDER BY c.created_at DESC
+                       LIMIT ? OFFSET ?""",
+                    (reviewer_id, safe_limit, safe_offset),
                 ).fetchall()
         return [self._row_to_case(r) for r in rows]
 
@@ -416,6 +452,29 @@ class Store:
                 out.append(json.loads(r["payload"]))
             except json.JSONDecodeError:
                 continue
+        return out
+
+    def list_decisions_for_cases(self, case_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        """批量读取审核决策，避免医生队列的 N+1 查询。"""
+        ids = [str(case_id) for case_id in case_ids if str(case_id)]
+        if not ids:
+            return {}
+        out: Dict[str, List[Dict[str, Any]]] = {case_id: [] for case_id in ids}
+        # SQLite 默认变量上限常见为 999；分块避免大队列一次查询越界。
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT case_id, payload FROM decisions WHERE case_id IN ({placeholders}) "
+                    "ORDER BY created_at ASC",
+                    chunk,
+                ).fetchall()
+            for row in rows:
+                try:
+                    out.setdefault(str(row["case_id"]), []).append(json.loads(row["payload"]))
+                except json.JSONDecodeError:
+                    continue
         return out
 
     # ------------------------------------------------------------------ 状态流转
