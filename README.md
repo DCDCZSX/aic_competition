@@ -127,13 +127,13 @@ Set-Location backend
 
 ```bash
 cd backend
-python -m unittest discover -s tests -t .        # 531 项单元/回归测试
+python -m unittest discover -s tests -t .        # 当前基线：541 项单元/回归测试
 python verify_update_http.py                     # 患者端全流程 HTTP 断言
 python verify_doctor_http.py                     # 医生工作台全流程 HTTP 断言
 python eval_triage_v1.py                         # 分诊评测（规则 / 模型 / 完整链路三方法对比）
 ```
 
-- 531 项测试覆盖：护栏、脱敏、鉴权与病例所有权、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、并发更新、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新；
+- 当前基线 **541 项测试**覆盖：护栏、脱敏、鉴权与病例所有权、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、并发更新、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新与医生队列分页；
 - 分诊评测（自建小样本集，n=9）：完整链路 Macro 召回 **0.900**、纯规则 **0.872**，早期基线 0.447–0.513；
 - 完整报告结构完整性 13 / 13，无空段与占位。
 

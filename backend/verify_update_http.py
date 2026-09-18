@@ -101,7 +101,7 @@ def main():
           json.dumps(gaps_after, ensure_ascii=False)[:200])
     check("未相关缺口仍保留", any("血常规" in str(g) for g in gaps_after),
           json.dumps(gaps_after, ensure_ascii=False)[:200])
-    # 病例状态机口径（PR #9 修正，见 main-3更新说明.md §五）：
+    # 病例状态机口径（PR #9 修正，当前口径见开发进度与交接.md §9）：
     #   仅"已由医生确认"的病例补充资料后进入 awaiting_recheck（待复核）；
     #   尚未医生确认的病例保持 awaiting_doctor —— 避免"尚未确认却等待重新审核"的矛盾。
     # 本例走的是患者自己补充资料、尚未经医生确认，所以期望 awaiting_doctor；
