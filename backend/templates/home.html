@@ -436,7 +436,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
           </div>
           <p class="msg" id="loginMsg"></p>
           <p class="legal">
-            病例数据仅保存在本机部署的数据库中，不上传云端；姓名、电话等敏感信息在进入分析前自动打码。使用前请知悉：
+            病例与审核记录保存在本机部署的数据库中；未配置模型密钥时不调用外部模型，启用外部模型时发送到模型服务的是已脱敏的病例文本，不含姓名、电话等直接身份信息。使用前请知悉：
             本系统提供就医信息整理与决策辅助，<strong>不提供诊断或处方，也不替代医生判断</strong>；急症请立即就医。
           </p>
         </div>
@@ -736,8 +736,8 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
         </div>
         <div class="card">
           <div class="kicker" style="color:var(--gray-500);">架构</div>
-          <h3>数据不出本机</h3>
-          <p>病例与审核记录落在本地 SQLite；模型调用仅发送脱敏后的文本。</p>
+          <h3>本地保存，脱敏外发可控</h3>
+          <p>病例与审核记录落在本地 SQLite；未配置模型密钥时不调用外部模型，启用外部模型时只发送脱敏文本。</p>
         </div>
       </div>
     </div>
@@ -914,7 +914,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 
     <p class="legal-line">
       免责声明：本系统提供就医信息整理与决策辅助，不提供诊断或处方，不能替代医生面诊与专业判断；若出现胸痛、呼吸困难、意识障碍、大出血等急症表现，请立即拨打急救电话或前往急诊。
-      病例数据仅保存在本机，敏感信息在分析前自动脱敏。
+      病例与审核记录保存在本机；未配置模型密钥时不调用外部模型，配置外部模型后发送的是已脱敏病例文本。
     </p>
 
     <div class="bottom">

@@ -8,6 +8,7 @@
 """
 
 import json
+import os
 import sys
 
 import requests
@@ -33,6 +34,8 @@ def check(name, cond, detail=""):
 
 
 def main():
+    doctor_username = os.getenv("APP_DOCTOR_USERNAME", "doctor").strip()
+
     print("[0] 患者端建病例（用于审核）")
     patient = requests.Session()
     login(patient, BASE, "patient")
@@ -42,6 +45,24 @@ def main():
     check("建病例", r.status_code == 200, str(r.status_code))
     case_id = r.json().get("case_id")
     print(f"       case_id={case_id}")
+    if r.status_code != 200 or not case_id:
+        print("无法继续：病例创建失败或未返回 case_id")
+        return 1
+
+    access = patient.post(
+        f"{BASE}/api/v2/case/{case_id}/access",
+        json={"reviewer_id": doctor_username},
+        timeout=30,
+    )
+    try:
+        access_body = access.json()
+    except ValueError:
+        access_body = {"error": access.text[:160]}
+    check("患者显式授权医生", access.status_code == 200 and access_body.get("ok") is True,
+          json.dumps(access_body, ensure_ascii=False))
+    if access.status_code != 200 or access_body.get("ok") is not True:
+        print("无法继续：病例未授权给审核医生")
+        return 1
 
     print("\n[1] 未登录访问医生端接口必须被拒（后台鉴权，不是前端跳转）")
     anon = requests.Session()

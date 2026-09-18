@@ -142,6 +142,50 @@ class HttpInputHardeningTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json().get("code"), "invalid_json")
 
+    def test_oversized_json_is_json_413_before_business_processing(self):
+        headers = self._headers()
+        limit = app_module.app.config.get("MAX_CONTENT_LENGTH")
+        self.assertIsNotNone(limit, "应用必须配置全局请求体上限")
+        limit = int(limit)
+        self.assertGreater(limit, 0)
+        with mock.patch.object(app_module.case_flow, "build_preview") as build_preview:
+            response = self.client.post(
+                "/api/v2/preview", headers=headers,
+                data=b"{" + (b"x" * (limit + 1)) + b"}",
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.content_type, "application/json")
+        self.assertEqual(response.get_json().get("code"), "request_entity_too_large")
+        build_preview.assert_not_called()
+
+    def test_sse_error_hides_internal_exception_details(self):
+        headers = self._headers()
+        preview = self.client.post(
+            "/api/v2/preview", headers=headers,
+            json={"medical_history": "2型糖尿病5年，视物模糊3个月。", "main_issue": "该看哪个科"},
+        )
+        self.assertEqual(preview.status_code, 200, preview.get_json())
+        preview_token = preview.get_json()["preview_token"]
+
+        with mock.patch.object(
+            app_module.case_flow,
+            "create_case",
+            side_effect=RuntimeError("SECRET_INTERNAL_PATH"),
+        ), self.assertLogs(app_module.app.logger, level="ERROR") as logs:
+            response = self.client.post(
+                "/api/v2/case?stream=1", headers=headers,
+                json={"preview_token": preview_token},
+            )
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any("病例流式创建失败" in line for line in logs.output))
+        self.assertIn('"code": "case_creation_failed"', body)
+        self.assertIn("病例处理失败，请稍后重试", body)
+        self.assertNotIn("RuntimeError", body)
+        self.assertNotIn("SECRET_INTERNAL_PATH", body)
+
     def test_limit_and_phases_errors_are_json_400(self):
         # 医生端批处理参数不能让 ValueError 泄漏成 HTML 500。
         doctor_login = self.client.post("/api/login", json={

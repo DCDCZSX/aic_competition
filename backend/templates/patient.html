@@ -129,7 +129,7 @@
 
   <footer class="auth-foot">
     <p>⚠️ 本系统提供就医信息整理与决策辅助，<strong>不提供诊断或处方，也不替代医生判断</strong>；出现胸痛、呼吸困难、意识障碍、大出血等急症表现请立即就医。</p>
-    <p>病例数据仅保存在本机，姓名、电话等敏感信息在进入分析前自动脱敏。　<span style="white-space:nowrap;">医务人员请前往 <a href="/doctor">医生工作台 →</a></span></p>
+    <p>病例与审核记录保存在本机数据库；未配置模型密钥时不调用外部模型，配置外部模型后发送的是已脱敏文本，不含姓名、电话等直接身份信息。　<span style="white-space:nowrap;">医务人员请前往 <a href="/doctor">医生工作台 →</a></span></p>
   </footer>
 </div>
 
@@ -448,8 +448,8 @@
       <div id="ctx-panel"></div>
       <div class="panel">
         <div class="panel-title">隐私与合规</div>
-        <div class="tiny" style="margin-bottom:6px;">· 病例与审核记录保存在本机数据库，不上传云端。</div>
-        <div class="tiny" style="margin-bottom:6px;">· 发送给模型的是脱敏文本，不含姓名、电话等身份信息。</div>
+        <div class="tiny" style="margin-bottom:6px;">· 病例与审核记录保存在本机数据库；未配置模型密钥时不调用外部模型。</div>
+        <div class="tiny" style="margin-bottom:6px;">· 配置外部模型时发送给模型的是脱敏文本，不含姓名、电话等直接身份信息。</div>
         <div class="tiny" style="margin-bottom:6px;">· 所有 AI 结论在医生审核前带"尚未经医生审核"角标。</div>
         <div class="tiny">· 不提供诊断或处方，急症请立即就医。</div>
       </div>
