@@ -20,6 +20,9 @@ from typing import Any, Dict, List, Optional, Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from services.privacy import desensitize  # noqa: E402
+from services.dependency_matrix import departments_for_field  # noqa: E402
+
 # 来源分级（主文档 §14）
 SOURCE_PATIENT = "患者上传"
 SOURCE_DOCTOR = "医生上传"
@@ -29,6 +32,11 @@ SOURCE_CONFIRMED = "已确认资料"
 
 VALID_SOURCES = (SOURCE_PATIENT, SOURCE_DOCTOR, SOURCE_HOSPITAL,
                  SOURCE_UNVERIFIED, SOURCE_CONFIRMED)
+
+# 单条更新与首次病历录入保持同一数量级限制；拒绝超长内容而不是在合并病史时
+# 静默截断，避免把关键检查结果截掉后仍当成完整资料分析。
+MAX_UPDATE_CONTENT_LENGTH = 8000
+MAX_MERGED_HISTORY_LENGTH = 16000
 
 # 更新内容类别 → 依赖矩阵字段（用于确定受影响模块）
 UPDATE_KIND_FIELDS: Dict[str, tuple] = {
@@ -136,8 +144,6 @@ class ChangeSummary:
 def determine_affected(kind: str, content: str,
                        current_departments: Sequence[str]) -> Dict[str, List[str]]:
     """用依赖矩阵判断：这次更新影响哪些字段与专科模块。"""
-    from services.dependency_matrix import departments_for_field
-
     fields: List[str] = list(UPDATE_KIND_FIELDS.get(kind, ()))
     if not fields:
         return {"fields": [], "departments": [], "modules": []}
@@ -273,11 +279,51 @@ def build_doctor_opinion(department: str, opinion: str,
             "is_verified": source in (SOURCE_CONFIRMED, SOURCE_DOCTOR)}
 
 
+def sanitize_update_content(content: str, *, field_name: str = "更新内容") -> str:
+    """校验并返回只含脱敏文本的更新内容。
+
+    更新资料会进入病例 JSON、变化摘要、医生意见列表以及后续分析文本，不能
+    复用“预览时提示即可”的策略：可直接定位个人的 PII 必须拒绝，姓名/住址等
+    非阻断型 PII 则自动打码后再继续。错误信息只返回类型，不回显命中的原文。
+    """
+    if not isinstance(content, str):
+        raise ValueError(f"{field_name}必须是字符串")
+    text = content.strip()
+    if not text:
+        raise ValueError(f"{field_name}不能为空")
+    if len(text) > MAX_UPDATE_CONTENT_LENGTH:
+        raise ValueError(
+            f"{field_name}过长（最多 {MAX_UPDATE_CONTENT_LENGTH} 个字符），请分批录入"
+        )
+    pii = desensitize(text)
+    if pii.blocked:
+        kinds = "、".join(sorted({hit.label for hit in pii.blocking_hits}))
+        raise ValueError(
+            f"{field_name}包含需先清除的敏感信息（{kinds}），请清除后再提交"
+        )
+    return pii.masked_text
+
+
+def sanitize_optional_content(content: Optional[str], *, field_name: str) -> str:
+    """允许空白的可选文本字段，但非字符串仍然拒绝。"""
+    if content is None:
+        return ""
+    if not isinstance(content, str):
+        raise ValueError(f"{field_name}必须是字符串")
+    if not content.strip():
+        return ""
+    return sanitize_update_content(content, field_name=field_name)
+
+
 def validate_update(kind: str, content: str, source: str) -> None:
     """校验一条更新（空内容、非法来源直接拒绝）。"""
+    if not isinstance(kind, str):
+        raise ValueError("更新类别必须是字符串")
     if kind not in UPDATE_KIND_FIELDS:
-        raise ValueError(f"未知更新类别：{kind}（可选：{'、'.join(UPDATE_KIND_FIELDS)}）")
-    if not str(content or "").strip():
-        raise ValueError("更新内容不能为空")
+        raise ValueError(f"未知更新类别（可选：{'、'.join(UPDATE_KIND_FIELDS)}）")
+    # 只做一次完整校验；调用方如需打码文本应使用 sanitize_update_content。
+    sanitize_update_content(content)
+    if not isinstance(source, str):
+        raise ValueError("更新来源必须是字符串")
     if source not in VALID_SOURCES:
-        raise ValueError(f"未知来源：{source}（可选：{'、'.join(VALID_SOURCES)}）")
+        raise ValueError(f"未知更新来源（可选：{'、'.join(VALID_SOURCES)}）")

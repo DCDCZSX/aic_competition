@@ -21,6 +21,8 @@ import hmac
 import hashlib
 import secrets
 import threading
+import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -129,6 +131,18 @@ class AuthService:
         self._lock = threading.Lock()
         self.ttl = timedelta(hours=ttl_hours)
         self.accounts = dict(accounts if accounts is not None else _configured_accounts())
+        self._login_failures: Dict[str, deque] = {}
+        self._max_login_failures = max(1, int(os.getenv("APP_LOGIN_MAX_FAILURES", "5")))
+        self._login_window_seconds = max(
+            30, int(os.getenv("APP_LOGIN_FAILURE_WINDOW_SECONDS", "300"))
+        )
+        self._login_cooldown_seconds = max(
+            5, int(os.getenv("APP_LOGIN_COOLDOWN_SECONDS", "60"))
+        )
+        self._max_sessions_per_account = max(
+            1, int(os.getenv("APP_MAX_SESSIONS_PER_ACCOUNT", "5"))
+        )
+        self._max_total_sessions = max(100, int(os.getenv("APP_MAX_TOTAL_SESSIONS", "10000")))
 
     def create_guest_session(self, ttl_minutes: Optional[int] = None) -> Session:
         """Create a short-lived anonymous session with no persistent-case privileges."""
@@ -146,29 +160,45 @@ class AuthService:
         username: Optional[str] = None,
         password: Optional[str] = None,
         role: Optional[str] = None,
+        client_key: Optional[str] = None,
     ) -> Session:
         """登录。
 
         - 传 `username` + `password`：按内置账号校验；
         - 只传 `role`：始终拒绝；免登录体验必须使用受限游客会话。
         """
-        if username:
-            account = self.accounts.get(username.strip())
+        # 账号名/密码类型错误也走同一模糊错误，避免异常输入触发 500 或暴露账号信息。
+        normalized_username = username.strip() if isinstance(username, str) else ""
+        identity_keys = self._login_keys(normalized_username, client_key)
+        if self._login_blocked(identity_keys):
+            raise AuthError("账号或密码不正确，请稍后重试")
+
+        if normalized_username:
+            account = self.accounts.get(normalized_username)
             if not account:
-                raise AuthError("账号不存在，请核对账号后重试")
+                self._record_login_failure(identity_keys)
+                raise AuthError("账号或密码不正确，请稍后重试")
             configured_hash = account.get("password_hash") or ""
             configured_password = account.get("password") or ""
             if not configured_hash and not configured_password:
-                raise AuthError("该账号尚未配置密码，请联系管理员")
+                self._record_login_failure(identity_keys)
+                raise AuthError("账号或密码不正确，请稍后重试")
+            if password is not None and not isinstance(password, str):
+                self._record_login_failure(identity_keys)
+                raise AuthError("账号或密码不正确，请稍后重试")
             valid = (verify_password(password or "", configured_hash) if configured_hash
                      else hmac.compare_digest(configured_password, password or ""))
             if not valid:
-                raise AuthError("账号或密码不正确")
-            return self._create_session(username.strip(), account["role"], account["label"])
+                self._record_login_failure(identity_keys)
+                raise AuthError("账号或密码不正确，请稍后重试")
+            self._clear_login_failures(identity_keys)
+            return self._create_session(normalized_username, account["role"], account["label"])
 
         if role:
+            self._record_login_failure(identity_keys)
             raise AuthError("免密角色登录已下线；请使用账号密码或受限游客体验")
 
+        self._record_login_failure(identity_keys)
         raise AuthError("请提供账号密码，或选择进入患者端 / 医生工作台")
 
     def _create_session(self, username: str, role: str, label: str,
@@ -184,6 +214,16 @@ class AuthService:
             expires_at=(now + session_ttl).isoformat(timespec="seconds"),
         )
         with self._lock:
+            self._prune_sessions_locked()
+            if role != ROLE_GUEST:
+                active_for_account = sum(
+                    1 for item in self._sessions.values()
+                    if item.username == username and item.role == role
+                )
+                if active_for_account >= self._max_sessions_per_account:
+                    raise AuthError("当前账号活跃会话过多，请先退出其他会话")
+            elif len(self._sessions) >= self._max_total_sessions:
+                raise AuthError("当前游客服务繁忙，请稍后重试")
             self._sessions[session.token] = session
         return session
 
@@ -193,6 +233,7 @@ class AuthService:
         if not token:
             return None
         with self._lock:
+            self._prune_sessions_locked()
             session = self._sessions.get(token)
             if not session:
                 return None
@@ -231,7 +272,57 @@ class AuthService:
 
     def active_count(self) -> int:
         with self._lock:
+            self._prune_sessions_locked()
             return len(self._sessions)
+
+    @staticmethod
+    def _login_keys(username: str, client_key: Optional[str]) -> List[str]:
+        """按账号和来源地址分别限流；账号名使用不可逆摘要，避免保留明文。"""
+        keys = []
+        if username:
+            keys.append("user:" + hashlib.sha256(username.lower().encode()).hexdigest())
+        if client_key:
+            raw = str(client_key).strip()[:128]
+            if raw:
+                keys.append("ip:" + hashlib.sha256(raw.encode()).hexdigest())
+        return keys or ["unknown"]
+
+    def _login_blocked(self, keys: List[str]) -> bool:
+        now = time.time()
+        with self._lock:
+            for key in keys:
+                attempts = self._login_failures.get(key)
+                if not attempts:
+                    continue
+                while attempts and attempts[0] <= now - self._login_window_seconds:
+                    attempts.popleft()
+                if attempts and (
+                    len(attempts) >= self._max_login_failures
+                    and now - attempts[-1] < self._login_cooldown_seconds
+                ):
+                    return True
+                if not attempts:
+                    self._login_failures.pop(key, None)
+        return False
+
+    def _record_login_failure(self, keys: List[str]) -> None:
+        now = time.time()
+        with self._lock:
+            for key in keys:
+                attempts = self._login_failures.setdefault(key, deque())
+                while attempts and attempts[0] <= now - self._login_window_seconds:
+                    attempts.popleft()
+                attempts.append(now)
+
+    def _clear_login_failures(self, keys: List[str]) -> None:
+        with self._lock:
+            for key in keys:
+                self._login_failures.pop(key, None)
+
+    def _prune_sessions_locked(self) -> None:
+        expired = [token for token, session in self._sessions.items() if self._expired(session)]
+        for token in expired:
+            self._sessions.pop(token, None)
 
     def _expired(self, session: Session) -> bool:
         try:

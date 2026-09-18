@@ -3,6 +3,7 @@ import queue as queue_module
 import threading
 from flask import Flask, request, jsonify, render_template, Response
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
 import sys
 import os
 
@@ -22,9 +23,18 @@ from services.ai_service import AIService
 from services.auth import (AuthService, AuthError, ROLE_DOCTOR, ROLE_GUEST, ROLE_PATIENT,
                            auth_required, extract_token)
 from services.case_flow import CaseFlow
-from services.intake import sanitized_payload
+from services.intake import MAX_TEXT_LENGTH, sanitized_payload
 from services.preview_tokens import PreviewTokenService
 from services.store import Store
+from schemas import CASE_STATE_LABELS
+from services.request_validation import (
+    InputValidationError,
+    object_field,
+    optional_int,
+    phases_field,
+    string_field,
+    string_list,
+)
 import time
 from collections import defaultdict, deque
 
@@ -36,6 +46,42 @@ CORS(app, resources={r"/api/*": {"origins": _cors_origins}}, supports_credential
 # 不按字母排序 JSON 键：报告段落内部的字段顺序（判断 → 依据 → 证据状态 → 支持证据 …）
 # 是给人读的，排序后会被打乱（例如"证据卡片"跑到"证据状态统计"前面）。
 app.json.sort_keys = False
+
+
+def _json_object():
+    """解析 API JSON 对象，并把非法 JSON/数组统一转换为 JSON 400。"""
+    if not request.data:
+        return {}, None
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return None, (jsonify({
+            'error': '请求体必须是合法 JSON 对象',
+            'code': 'invalid_json',
+        }), 400)
+    return data, None
+
+
+def _invalid_input(exc):
+    return jsonify({'error': str(exc), 'code': 'invalid_request'}), 400
+
+
+@app.errorhandler(HTTPException)
+def _api_http_error(exc):
+    """API 错误始终返回 JSON，避免客户端收到 Flask HTML 错误页。"""
+    if request.path.startswith('/api/'):
+        return jsonify({'error': exc.description or '请求失败',
+                        'code': exc.name.lower().replace(' ', '_')}), exc.code
+    return exc
+
+
+@app.errorhandler(Exception)
+def _api_unhandled_error(exc):
+    """最后一道 API 兜底；不把堆栈/内部数据回显给客户端。"""
+    if request.path.startswith('/api/'):
+        app.logger.exception('未处理的 API 异常')
+        return jsonify({'error': '服务器内部错误，请稍后重试',
+                        'code': 'internal_error'}), 500
+    raise exc
 
 auth_service = AuthService()
 preview_tokens = PreviewTokenService(int(os.getenv('APP_PREVIEW_TTL_MINUTES', '10')))
@@ -152,15 +198,21 @@ def doctor_home():
 @app.route('/api/login', methods=['POST'])
 def login():
     """登录：只允许账号密码；免密体验走独立游客接口。"""
-    data = request.get_json(silent=True) or {}
+    data, error = _json_object()
+    if error:
+        return error
     try:
         session = auth_service.login(
-            username=data.get('username'),
-            password=data.get('password'),
-            role=data.get('role'),
+            username=string_field(data, 'username', default='', max_length=128),
+            password=string_field(data, 'password', default='', max_length=256),
+            role=string_field(data, 'role', default='', max_length=32),
+            client_key=request.remote_addr or 'unknown',
         )
+    except InputValidationError as exc:
+        return _invalid_input(exc)
     except AuthError as exc:
-        return jsonify({'error': str(exc)}), 400
+        # 登录失败统一 401 且不区分“账号不存在/密码错误”，避免账号枚举。
+        return jsonify({'error': str(exc), 'code': 'invalid_credentials'}), 401
     return jsonify({'status': 'ok', 'session': session.to_dict(), 'scopes': session.scopes})
 
 
@@ -174,10 +226,26 @@ def create_guest_session():
         recent = _guest_issues[remote]
         while recent and recent[0] <= now - 3600:
             recent.popleft()
+        if not recent:
+            _guest_issues.pop(remote, None)
+            recent = _guest_issues[remote]
+        max_tracked = max(100, int(os.getenv('APP_GUEST_TRACKED_IPS', '10000')))
+        if len(_guest_issues) > max_tracked:
+            # 只保留近期有记录的来源，防止伪造大量来源地址使内存字典无限增长。
+            stale = sorted(
+                ((key, values[-1] if values else 0) for key, values in _guest_issues.items()),
+                key=lambda item: item[1],
+            )
+            for key, _ in stale[:max(1, len(_guest_issues) - max_tracked)]:
+                if key != remote:
+                    _guest_issues.pop(key, None)
         if len(recent) >= per_hour:
             return jsonify({'error': '游客会话创建过于频繁，请稍后再试或登录'}), 429
         recent.append(now)
-    session = auth_service.create_guest_session()
+    try:
+        session = auth_service.create_guest_session()
+    except AuthError as exc:
+        return jsonify({'error': str(exc), 'code': 'guest_unavailable'}), 429
     return jsonify({
         'status': 'ok',
         'session': session.to_dict(),
@@ -217,12 +285,22 @@ def preview_intake():
     session, error = _guard('intake')
     if error:
         return error
-    data = request.get_json(silent=True) or {}
-    preview = case_flow.build_preview(
-        data.get('medical_history', ''), data.get('main_issue', '')
-    )
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        history = string_field(data, 'medical_history', default='')
+        issue = string_field(data, 'main_issue', default='')
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    if len(history) > MAX_TEXT_LENGTH:
+        return jsonify({
+            'error': f'病历正文过长（最多 {MAX_TEXT_LENGTH} 个字符），请分批录入',
+            'code': 'invalid_request',
+        }), 400
+    preview = case_flow.build_preview(history, issue)
     if not preview.get('blocked') and not preview.get('blocking_hit_count'):
-        masked = sanitized_payload(data.get('medical_history', ''), data.get('main_issue', ''))
+        masked = sanitized_payload(history, issue)
         preview['preview_token'] = preview_tokens.issue(
             session.username, masked['medical_history'], masked['main_issue']
         )
@@ -235,9 +313,14 @@ def guest_preview():
     session, error = _guard_guest('guest:preview')
     if error:
         return error
-    data = request.get_json(silent=True) or {}
-    history = str(data.get('medical_history') or '')
-    issue = str(data.get('main_issue') or '')
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        history = string_field(data, 'medical_history', default='')
+        issue = string_field(data, 'main_issue', default='')
+    except InputValidationError as exc:
+        return _invalid_input(exc)
     max_chars = int(os.getenv('APP_GUEST_MAX_CHARS', '2000'))
     if len(history) + len(issue) > max_chars:
         return jsonify({'error': f'游客输入最多 {max_chars} 个字符'}), 413
@@ -258,9 +341,18 @@ def guest_triage():
     session, error = _guard_guest('guest:triage')
     if error:
         return error
-    data = request.get_json(silent=True) or {}
-    history = str(data.get('medical_history') or '')
-    issue = str(data.get('main_issue') or '')
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        history = string_field(data, 'medical_history', default='')
+        issue = string_field(data, 'main_issue', default='')
+        goals = string_list(data, 'goals', default=())
+        age = optional_int(data, 'age')
+        gender = string_field(data, 'gender', default='')
+        sex = string_field(data, 'sex', default='')
+    except InputValidationError as exc:
+        return _invalid_input(exc)
     max_chars = int(os.getenv('APP_GUEST_MAX_CHARS', '2000'))
     if len(history) + len(issue) > max_chars:
         return jsonify({'error': f'游客输入最多 {max_chars} 个字符'}), 413
@@ -276,9 +368,9 @@ def guest_triage():
         result = guest_flow.create_case(
             medical_history=history,
             main_issue=issue,
-            goals=data.get('goals') or [],
-            age=data.get('age'),
-            sex=data.get('gender') or data.get('sex') or '',
+            goals=goals,
+            age=age,
+            sex=gender or sex,
         )
         payload = result.to_dict()
     finally:
@@ -310,8 +402,19 @@ def create_case():
     session, error = _guard('intake')
     if error:
         return error
-    data = request.get_json(silent=True) or {}
-    preview_payload = preview_tokens.consume(str(data.get('preview_token') or ''), session.username)
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        preview_token = string_field(data, 'preview_token', default='')
+        goals = string_list(data, 'goals', default=(), max_items=8)
+        age = optional_int(data, 'age')
+        gender = string_field(data, 'gender', default='')
+        sex = string_field(data, 'sex', default='')
+        name = string_field(data, 'name', default='', max_length=120)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    preview_payload = preview_tokens.consume(preview_token, session.username)
     if preview_payload is None:
         return jsonify({'error': '请先完成脱敏预览；预览凭证已过期、已使用或不属于当前账号'}), 409
     wants_stream = (request.args.get('stream') in ('1', 'true', 'yes')) or bool(data.get('stream'))
@@ -324,17 +427,17 @@ def create_case():
         result = case_flow.create_case(
             medical_history=preview_payload.medical_history,
             main_issue=preview_payload.main_issue,
-            goals=data.get('goals') or [],
-            age=data.get('age'),
-            sex=data.get('gender') or data.get('sex') or '',
-            name=data.get('name') or '',
+            goals=goals,
+            age=age,
+            sex=gender or sex,
+            name=name,
             owner_id=session.username if session else '',
             on_progress=on_progress,
             defer_mdt=defer_mdt,
             progressive=progressive,
         )
         if result.ok and result.case_id and os.getenv(
-                'APP_AUTO_ASSIGN_REVIEWER', 'true').lower() in ('1', 'true', 'yes'):
+                'APP_AUTO_ASSIGN_REVIEWER', 'false').lower() in ('1', 'true', 'yes'):
             reviewer_id = os.getenv('APP_DOCTOR_USERNAME', 'doctor').strip()
             if auth_service.is_reviewer_account(reviewer_id):
                 _shared_store.grant_case_access(
@@ -392,11 +495,17 @@ def submit_answers(case_id):
     session, case, error = _guard_case(case_id, 'case:own')
     if error:
         return error
-    data = request.get_json(silent=True) or {}
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        answers = object_field(data, 'answers', default={})
+    except InputValidationError as exc:
+        return _invalid_input(exc)
     # 科室集合变化时会重跑多学科分析（15-30 秒）：同样支持两段式，先返回分诊结果
     defer_mdt = (request.args.get('defer_mdt') in ('1', 'true', 'yes')) or bool(data.get('defer_mdt'))
-    outcome = case_flow.submit_answers(case_id, data.get('answers') or {}, defer_mdt=defer_mdt)
-    return jsonify(outcome), (200 if outcome.get('ok') else 404)
+    outcome = case_flow.submit_answers(case_id, answers, defer_mdt=defer_mdt)
+    return jsonify(outcome), (200 if outcome.get('ok') else 400)
 
 
 @app.route('/api/v2/case/<case_id>', methods=['GET'])
@@ -414,8 +523,13 @@ def manage_case_access(case_id):
     session, case, error = _guard_case(case_id, 'case:own')
     if error:
         return error
-    data = request.get_json(silent=True) or {}
-    reviewer_id = str(data.get('reviewer_id') or '').strip()
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        reviewer_id = string_field(data, 'reviewer_id', default='', max_length=128).strip()
+    except InputValidationError as exc:
+        return _invalid_input(exc)
     if not auth_service.is_reviewer_account(reviewer_id):
         return jsonify({'error': '目标账号不存在或不是审核角色'}), 400
     if request.method == 'DELETE':
@@ -451,8 +565,13 @@ def retry_analysis(case_id):
     session, case, error = _guard_case(case_id, 'case:own')
     if error:
         return error
-    data = request.get_json(silent=True) or {}
-    phases = data.get('phases') or None
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        phases = phases_field(data, case_flow.ANALYSIS_PHASES)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
     result = case_flow.retry_analysis(case_id, phases=phases)
     return jsonify(result), (200 if result.get('ok') else 400)
 
@@ -463,8 +582,17 @@ def analyze_pending_cases():
     session, error = _guard_doctor()
     if error:
         return error
-    data = request.get_json(silent=True) or {}
-    limit = int(data.get('limit') or 3)
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        requested_limit = optional_int(data, 'limit')
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    limit = 3 if requested_limit is None else requested_limit
+    if not 1 <= limit <= 10:
+        return jsonify({'error': 'limit 必须是 1 到 10 之间的整数',
+                        'code': 'invalid_request'}), 400
     result = case_flow.analyze_pending_cases(
         limit=max(1, min(limit, 10)), reviewer_id=session.username
     )
@@ -505,11 +633,19 @@ def update_task(case_id, task_id):
     session, case, error = _guard_case(case_id, 'case:own')
     if error:
         return error
-    data = request.get_json(silent=True) or {}
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        task_state = string_field(data, 'state', default='')
+        reason = string_field(data, 'reason', default='', max_length=1000)
+        actor = string_field(data, 'actor', default='patient', max_length=128)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
     result = case_flow.update_task_state(
-        case_id, task_id, str(data.get('state') or ''),
-        actor=(session.username if session else (data.get('actor') or 'patient')),
-        reason=str(data.get('reason') or ''),
+        case_id, task_id, task_state,
+        actor=(session.username if session else actor),
+        reason=reason,
     )
     return jsonify(result), (200 if result.get('ok') else 400)
 
@@ -521,8 +657,16 @@ def add_case_update(case_id):
     来源为"医生上传/医院文档/已确认资料"时必须由**医生角色**发起——
     患者端不承担"替医生写意见"（UI 设计说明 §6 第 7 条）。
     """
-    data = request.get_json(silent=True) or {}
-    source = str(data.get('source') or '患者上传')
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        kind = string_field(data, 'kind', default='')
+        content = string_field(data, 'content', default='')
+        source = string_field(data, 'source', default='患者上传')
+        department = string_field(data, 'department', default='', max_length=120)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
     doctor_sources = {'医生上传', '医院文档', '已确认资料'}
     if source in doctor_sources:
         session, error = _guard_doctor_case(case_id, 'decision')
@@ -532,10 +676,10 @@ def add_case_update(case_id):
         return error
     result = case_flow.add_update(
         case_id,
-        kind=str(data.get('kind') or ''),
-        content=str(data.get('content') or ''),
+        kind=kind,
+        content=content,
         source=source,
-        department=str(data.get('department') or ''),
+        department=department,
     )
     return jsonify(result), (200 if result.get('ok') else 400)
 
@@ -564,20 +708,41 @@ def list_review_cases():
     if error:
         return error
     state_filter = request.args.get('state') or ''
+    allowed_states = set(CASE_STATE_LABELS)
+    if state_filter and state_filter not in allowed_states:
+        return jsonify({'error': f'不支持的病例状态：{state_filter}',
+                        'code': 'invalid_request'}), 400
+    filter_kind = request.args.get('filter') or ''
+    allowed_filters = {key for key, _ in case_flow.QUEUE_FILTERS}
+    if filter_kind and filter_kind not in allowed_filters:
+        return jsonify({'error': f'不支持的队列筛选：{filter_kind}',
+                        'code': 'invalid_request'}), 400
+    sort = request.args.get('sort') or 'risk'
+    allowed_sorts = {key for key, _ in case_flow.QUEUE_SORTS}
+    if sort not in allowed_sorts:
+        return jsonify({'error': f'不支持的排序方式：{sort}',
+                        'code': 'invalid_request'}), 400
     try:
-        limit = max(1, min(int(request.args.get('limit') or 20), 100))
+        raw_limit = request.args.get('limit')
+        limit = 20 if raw_limit in (None, '') else int(raw_limit)
     except (TypeError, ValueError):
-        limit = 20
+        return jsonify({'error': 'limit 必须是整数', 'code': 'invalid_request'}), 400
+    if not 1 <= limit <= 100:
+        return jsonify({'error': 'limit 必须是 1 到 100 之间的整数',
+                        'code': 'invalid_request'}), 400
     try:
-        offset = max(0, int(request.args.get('offset') or 0))
+        raw_offset = request.args.get('offset')
+        offset = 0 if raw_offset in (None, '') else int(raw_offset)
     except (TypeError, ValueError):
-        offset = 0
+        return jsonify({'error': 'offset 必须是整数', 'code': 'invalid_request'}), 400
+    if offset < 0:
+        return jsonify({'error': 'offset 不能小于 0', 'code': 'invalid_request'}), 400
     page = case_flow.list_review_cases(
         limit=limit,
         offset=offset,
         state_filter=state_filter,
-        filter_kind=request.args.get('filter') or '',
-        sort=request.args.get('sort') or 'risk',
+        filter_kind=filter_kind,
+        sort=sort,
         department=request.args.get('department') or '',
         reviewer_id=session.username,
     )
@@ -609,15 +774,26 @@ def submit_decision(case_id):
     session, error = _guard_doctor_case(case_id, 'decision')
     if error:
         return error
-    data = request.get_json(silent=True) or {}
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        item_id = string_field(data, 'item_id', default='', max_length=200)
+        action = string_field(data, 'action', default='', max_length=80)
+        after = string_field(data, 'after', default='', max_length=4000)
+        reason = string_field(data, 'reason', default='', max_length=2000)
+        reviewer = string_field(data, 'reviewer', default='', max_length=128)
+        reviewer_dept = string_field(data, 'reviewer_dept', default='', max_length=120)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
     result = case_flow.submit_decision(
         case_id,
-        item_id=str(data.get('item_id') or ''),
-        action=str(data.get('action') or ''),
-        after=str(data.get('after') or ''),
-        reason=str(data.get('reason') or ''),
-        reviewer_name=str(data.get('reviewer') or (session.label if session else '模拟审核员')),
-        reviewer_dept=str(data.get('reviewer_dept') or ''),
+        item_id=item_id,
+        action=action,
+        after=after,
+        reason=reason,
+        reviewer_name=reviewer or (session.label if session else '模拟审核员'),
+        reviewer_dept=reviewer_dept,
     )
     return jsonify(result), (200 if result.get('ok') else 400)
 
@@ -628,11 +804,17 @@ def publish_review(case_id):
     session, error = _guard_doctor_case(case_id, 'report:confirm')
     if error:
         return error
-    data = request.get_json(silent=True) or {}
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        reviewer = string_field(data, 'reviewer', default='', max_length=128)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
     result = case_flow.publish_review(
         case_id,
-        reviewer_name=str(data.get('reviewer') or (session.label if session else '模拟审核员')),
-        accept_all=bool(data.get('accept_all')),
+        reviewer_name=reviewer or (session.label if session else '模拟审核员'),
+        accept_all=data.get('accept_all') is True,
     )
     return jsonify(result), (200 if result.get('ok') else 400)
 
