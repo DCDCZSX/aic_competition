@@ -255,5 +255,42 @@ class HttpInputHardeningTest(unittest.TestCase):
             self.assertIn("账号或密码", response.get_json().get("error", ""))
 
 
+class HttpResponseHeaderHardeningTest(unittest.TestCase):
+    def setUp(self):
+        app_module.app.config.update(TESTING=True)
+        self.client = app_module.app.test_client()
+
+    def _assert_security_headers(self, response):
+        self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(response.headers.get("X-Frame-Options"), "DENY")
+        self.assertEqual(
+            response.headers.get("Referrer-Policy"),
+            "strict-origin-when-cross-origin",
+        )
+        csp = response.headers.get("Content-Security-Policy", "")
+        self.assertTrue(csp)
+        for directive in (
+            "frame-ancestors 'none'",
+            "object-src 'none'",
+            "base-uri 'self'",
+        ):
+            self.assertIn(directive, csp)
+        self.assertNotIn("Strict-Transport-Security", response.headers)
+
+    def test_html_response_has_baseline_security_headers(self):
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self._assert_security_headers(response)
+
+    def test_api_response_has_baseline_security_headers_and_stays_json(self):
+        response = self.client.get("/api/me")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        self.assertIsInstance(response.get_json(), dict)
+        self._assert_security_headers(response)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

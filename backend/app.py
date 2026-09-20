@@ -51,6 +51,17 @@ CORS(app, resources={r"/api/*": {"origins": _cors_origins}}, supports_credential
 app.json.sort_keys = False
 
 
+@app.after_request
+def _security_response_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+    )
+    return response
+
+
 def _json_object():
     """解析 API JSON 对象，并把非法 JSON/数组统一转换为 JSON 400。"""
     if not request.data:
