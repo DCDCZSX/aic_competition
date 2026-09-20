@@ -39,6 +39,9 @@ import time
 from collections import defaultdict, deque
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = max(
+    1, int(os.getenv('APP_MAX_CONTENT_LENGTH', str(1 * 1024 * 1024)))
+)
 _cors_origins = [x.strip() for x in os.getenv(
     'APP_CORS_ORIGINS', 'http://127.0.0.1:5000,http://localhost:5000'
 ).split(',') if x.strip()]
@@ -461,8 +464,13 @@ def create_case():
                 result = _create(on_progress=on_progress)
                 queue.put({"type": "done", "status": 200 if result.ok else 400,
                            "result": result.to_dict()})
-            except Exception as exc:                       # noqa: BLE001 - 兜底，不让流悬挂
-                queue.put({"type": "error", "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:                               # noqa: BLE001 - 兜底，不让流悬挂
+                app.logger.exception("病例流式创建失败")
+                queue.put({
+                    "type": "error",
+                    "code": "case_creation_failed",
+                    "error": "病例处理失败，请稍后重试",
+                })
             finally:
                 queue.put(None)
 

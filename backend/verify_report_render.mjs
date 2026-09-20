@@ -8,7 +8,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const BASE = 'http://127.0.0.1:5000';
+const BASE = process.env.APP_BASE_URL || 'http://127.0.0.1:5000';
+const PATIENT_USERNAME = process.env.APP_PATIENT_USERNAME || 'patient';
+const PATIENT_PASSWORD = process.env.APP_PATIENT_PASSWORD;
+if (!PATIENT_PASSWORD) {
+  throw new Error('未配置 APP_PATIENT_PASSWORD，无法运行报告渲染校验');
+}
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const js = fs.readFileSync(path.join(HERE, 'templates', 'patient.html'), 'utf8');
 const inline = [...js.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n;\n');
@@ -33,32 +38,51 @@ globalThis.alert = () => { };
 eval(inline + '\n;globalThis.__R = { renderSectionValue, switchReport, S };');
 const { renderSectionValue, switchReport, S } = globalThis.__R;
 
-// 取真实病例
-const patient = await (await fetch(BASE + '/api/login', {
-  method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ username: 'patient', password: 'patient' }),
-})).json();
-const token = patient.session.token;
-const casesResp = await (await fetch(BASE + '/api/v2/cases', {
-  headers: { Authorization: 'Bearer ' + token },
-})).json();
-const caseId = (casesResp.cases || [])[0]?.case_id || (casesResp.error ? null : null);
+const readJson = async (response, label) => {
+  const raw = await response.text();
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${label} 返回非 JSON（HTTP ${response.status}）`);
+  }
+  if (!response.ok) {
+    throw new Error(`${label} 失败（HTTP ${response.status}）：${body.error || raw.slice(0, 200)}`);
+  }
+  return body;
+};
 
-let target = caseId;
-if (!target) {
-  // 没有病例就现建一个
-  const created = await (await fetch(BASE + '/api/v2/case', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-    body: JSON.stringify({ medical_history: '患者：李*，男，61岁。主诉：视物模糊3月，双下肢浮肿1周。既往2型糖尿病5年，尿蛋白++。',
-                           main_issue: '该看哪个科', age: 61, sex: '男' }),
-  })).json();
-  target = created.case_id;
-}
+// 用环境变量中的测试凭据登录，再通过脱敏预览凭证创建一个新病例。
+// 患者账号不能访问医生端的 /api/v2/cases，因此这里不读取医生队列。
+const patient = await readJson(await fetch(BASE + '/api/login', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ username: PATIENT_USERNAME, password: PATIENT_PASSWORD }),
+}), '患者登录');
+const token = patient.session?.token;
+if (!token) throw new Error('患者登录成功但未返回会话凭证');
+const authHeaders = {
+  'Content-Type': 'application/json',
+  Authorization: 'Bearer ' + token,
+};
+const caseInput = {
+  medical_history: '男，61岁。主诉：视物模糊3个月，双下肢浮肿1周。既往2型糖尿病5年，尿蛋白++。',
+  main_issue: '该看哪个科',
+};
+const preview = await readJson(await fetch(BASE + '/api/v2/preview', {
+  method: 'POST', headers: authHeaders, body: JSON.stringify(caseInput),
+}), '脱敏预览');
+if (!preview.preview_token) throw new Error('脱敏预览成功但未返回 preview_token');
+const created = await readJson(await fetch(BASE + '/api/v2/case', {
+  method: 'POST', headers: authHeaders,
+  body: JSON.stringify({ preview_token: preview.preview_token, age: 61, sex: '男' }),
+}), '创建病例');
+const target = created.case_id;
+if (!target) throw new Error('创建病例成功但未返回 case_id');
 console.log('核验病例：', target);
 
-const report = await (await fetch(`${BASE}/api/v2/case/${target}/report`, {
+const report = await readJson(await fetch(`${BASE}/api/v2/case/${target}/report`, {
   headers: { Authorization: 'Bearer ' + token },
-})).json();
+}), '读取报告');
 const sections = (report.full || {}).sections || {};
 console.log('段落数：', Object.keys(sections).length);
 
