@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 修改为绝对导入
 from services.ai_service import AIService
-from services.auth import (AuthService, AuthError, ROLE_DOCTOR, ROLE_GUEST, ROLE_PATIENT,
+from services.auth import (AuthService, AuthError, AuthRateLimitError, ROLE_DOCTOR, ROLE_GUEST, ROLE_PATIENT,
                            auth_required, extract_token)
 from services.case_flow import CaseFlow
 from services.intake import MAX_TEXT_LENGTH, sanitized_payload
@@ -217,6 +217,10 @@ def login():
         )
     except InputValidationError as exc:
         return _invalid_input(exc)
+    except AuthRateLimitError as exc:
+        return jsonify({'error': str(exc), 'code': 'rate_limited'}), 429, {
+            'Retry-After': str(exc.retry_after),
+        }
     except AuthError as exc:
         # 登录失败统一 401 且不区分“账号不存在/密码错误”，避免账号枚举。
         return jsonify({'error': str(exc), 'code': 'invalid_credentials'}), 401

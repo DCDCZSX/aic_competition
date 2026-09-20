@@ -223,6 +223,37 @@ class HttpInputHardeningTest(unittest.TestCase):
                 auth.login(username="alice", password="alice-password", client_key="ip")
             self.assertIn("账号或密码", str(ctx.exception))
 
+    def test_login_throttle_returns_http_429_with_retry_after(self):
+        with mock.patch.dict(os.environ, {
+            "APP_LOGIN_MAX_FAILURES": "2",
+            "APP_LOGIN_COOLDOWN_SECONDS": "60",
+        }):
+            app_module.auth_service = AuthService(accounts=ACCOUNTS)
+            for _ in range(2):
+                response = self.client.post("/api/login", json={
+                    "username": "alice", "password": "wrong-password",
+                })
+                self.assertEqual(response.status_code, 401, response.get_json())
+                self.assertEqual(response.get_json().get("code"), "invalid_credentials")
+                self.assertIn("账号或密码", response.get_json().get("error", ""))
+
+            response = self.client.post("/api/login", json={
+                "username": "alice", "password": "alice-password",
+            })
+            self.assertEqual(response.status_code, 429, response.get_json())
+            self.assertEqual(response.get_json().get("code"), "rate_limited")
+            self.assertIn("账号或密码", response.get_json().get("error", ""))
+            retry_after = response.headers.get("Retry-After", "")
+            self.assertRegex(retry_after, r"^[1-9][0-9]*$")
+
+            app_module.auth_service = AuthService(accounts=ACCOUNTS)
+            response = self.client.post("/api/login", json={
+                "username": "alice", "password": "wrong-password",
+            })
+            self.assertEqual(response.status_code, 401, response.get_json())
+            self.assertEqual(response.get_json().get("code"), "invalid_credentials")
+            self.assertIn("账号或密码", response.get_json().get("error", ""))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
