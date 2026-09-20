@@ -9,12 +9,15 @@
 """
 
 import json
+import logging
 import os
 import re
 import time
 from typing import Any, Dict, Optional, Tuple
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 # 默认值：可被环境变量覆盖
 DEFAULT_API_URL = "https://openai.uniin.cn/openapi/v2/chat/completions"
@@ -65,7 +68,7 @@ class AIService:
         self.max_retries = int(os.getenv("AI_MAX_RETRIES", "3"))
 
         if not self.api_key:
-            print(
+            logger.warning(
                 "[AIService] 警告：未检测到环境变量 AI_API_KEY，LLM 调用将被跳过。\n"
                 "           请在 CHAIS/.env 或 backend/.env 中配置（参考 .env.example）。\n"
                 "           注意：不要把密钥写回代码或提交到 git。"
@@ -92,7 +95,7 @@ class AIService:
         血液科意见卡 3780 字符被截断成非法 JSON）只能表现成"解析失败"，看不出真因。
         """
         if not self.api_key:
-            print("[AIService] 错误：缺少 AI_API_KEY，已跳过本次调用。")
+            logger.error("[AIService] 错误：缺少 AI_API_KEY，已跳过本次调用。")
             return {"ok": False, "content": "", "finish_reason": "", "truncated": False,
                     "error": "未配置 AI_API_KEY"}
         headers = {
@@ -130,23 +133,37 @@ class AIService:
                     finish = str(choice.get("finish_reason") or "")
                     truncated = finish == "length"
                     if truncated:
-                        print(f"[AIService] 警告：输出被 max_tokens={data['max_tokens']} "
-                              f"截断（finish_reason=length，{len(content)} 字符），"
-                              f"调用方需按截断处理")
+                        logger.warning(
+                            "[AIService] 警告：输出被 max_tokens=%s 截断 "
+                            "（finish_reason=length，%d 字符），调用方需按截断处理",
+                            data["max_tokens"], len(content))
                     return {"ok": True, "content": content, "finish_reason": finish,
                             "truncated": truncated, "error": ""}
-                print(f"API响应格式异常: {result}")
+                if isinstance(result, dict):
+                    top_level_keys = sorted(str(key) for key in result)
+                    choices = result.get("choices")
+                    choices_count = len(choices) if isinstance(choices, list) else 0
+                else:
+                    top_level_keys = []
+                    choices_count = 0
+                logger.warning(
+                    "API response shape invalid: top_level_keys=%s "
+                    "top_level_key_count=%d choices_count=%d content_length=0",
+                    top_level_keys, len(top_level_keys), choices_count)
                 return {"ok": False, "content": "", "finish_reason": "", "truncated": False,
                         "error": "API 响应格式异常"}
 
             except requests.exceptions.RequestException as e:
                 last_error = str(e)
-                print(f"API调用失败 (尝试 {attempt+1}/{self.max_retries}): {last_error}")
+                status_code = getattr(getattr(e, "response", None), "status_code", None)
+                logger.warning(
+                    "API request failed: exception_type=%s attempt=%d/%d status_code=%s",
+                    type(e).__name__, attempt + 1, self.max_retries, status_code)
                 if attempt < self.max_retries - 1:
                     time.sleep(2 ** attempt)  # 指数退避
                     continue
             except Exception as e:
-                print(f"API处理错误: {str(e)}")
+                logger.error("API processing failed: exception_type=%s", type(e).__name__)
                 return {"ok": False, "content": "", "finish_reason": "", "truncated": False,
                         "error": str(e)}
         return {"ok": False, "content": "", "finish_reason": "", "truncated": False,

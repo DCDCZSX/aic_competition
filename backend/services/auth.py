@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import hmac
 import hashlib
+import math
 import secrets
 import threading
 import time
@@ -99,6 +100,14 @@ class AuthError(ValueError):
     """登录失败。"""
 
 
+class AuthRateLimitError(AuthError):
+    """登录冷却中的限流失败。"""
+
+    def __init__(self, retry_after: int) -> None:
+        self.retry_after = max(1, int(retry_after))
+        super().__init__("账号或密码不正确，请稍后重试")
+
+
 def hash_password(password: str, *, iterations: int = 310_000) -> str:
     """Return a portable PBKDF2-SHA256 value suitable for environment configuration."""
     if not password:
@@ -170,8 +179,9 @@ class AuthService:
         # 账号名/密码类型错误也走同一模糊错误，避免异常输入触发 500 或暴露账号信息。
         normalized_username = username.strip() if isinstance(username, str) else ""
         identity_keys = self._login_keys(normalized_username, client_key)
-        if self._login_blocked(identity_keys):
-            raise AuthError("账号或密码不正确，请稍后重试")
+        retry_after = self._login_retry_after(identity_keys)
+        if retry_after is not None:
+            raise AuthRateLimitError(retry_after)
 
         if normalized_username:
             account = self.accounts.get(normalized_username)
@@ -287,9 +297,10 @@ class AuthService:
                 keys.append("ip:" + hashlib.sha256(raw.encode()).hexdigest())
         return keys or ["unknown"]
 
-    def _login_blocked(self, keys: List[str]) -> bool:
+    def _login_retry_after(self, keys: List[str]) -> Optional[int]:
         now = time.time()
         with self._lock:
+            retry_after = None
             for key in keys:
                 attempts = self._login_failures.get(key)
                 if not attempts:
@@ -300,10 +311,11 @@ class AuthService:
                     len(attempts) >= self._max_login_failures
                     and now - attempts[-1] < self._login_cooldown_seconds
                 ):
-                    return True
+                    remaining = math.ceil(self._login_cooldown_seconds - (now - attempts[-1]))
+                    retry_after = max(retry_after or 0, remaining)
                 if not attempts:
                     self._login_failures.pop(key, None)
-        return False
+        return retry_after
 
     def _record_login_failure(self, keys: List[str]) -> None:
         now = time.time()

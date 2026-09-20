@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 修改为绝对导入
 from services.ai_service import AIService
-from services.auth import (AuthService, AuthError, ROLE_DOCTOR, ROLE_GUEST, ROLE_PATIENT,
+from services.auth import (AuthService, AuthError, AuthRateLimitError, ROLE_DOCTOR, ROLE_GUEST, ROLE_PATIENT,
                            auth_required, extract_token)
 from services.case_flow import CaseFlow
 from services.intake import MAX_TEXT_LENGTH, sanitized_payload
@@ -49,6 +49,17 @@ CORS(app, resources={r"/api/*": {"origins": _cors_origins}}, supports_credential
 # 不按字母排序 JSON 键：报告段落内部的字段顺序（判断 → 依据 → 证据状态 → 支持证据 …）
 # 是给人读的，排序后会被打乱（例如"证据卡片"跑到"证据状态统计"前面）。
 app.json.sort_keys = False
+
+
+@app.after_request
+def _security_response_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+    )
+    return response
 
 
 def _json_object():
@@ -87,7 +98,11 @@ def _api_unhandled_error(exc):
     raise exc
 
 auth_service = AuthService()
-preview_tokens = PreviewTokenService(int(os.getenv('APP_PREVIEW_TTL_MINUTES', '10')))
+preview_tokens = PreviewTokenService(
+    int(os.getenv('APP_PREVIEW_TTL_MINUTES', '10')),
+    per_owner_limit=os.getenv('APP_PREVIEW_MAX_PER_USER', '5'),
+    global_limit=os.getenv('APP_PREVIEW_MAX_TOTAL', '5000'),
+)
 _guest_issue_lock = threading.Lock()
 _guest_issues = defaultdict(deque)
 
@@ -213,6 +228,10 @@ def login():
         )
     except InputValidationError as exc:
         return _invalid_input(exc)
+    except AuthRateLimitError as exc:
+        return jsonify({'error': str(exc), 'code': 'rate_limited'}), 429, {
+            'Retry-After': str(exc.retry_after),
+        }
     except AuthError as exc:
         # 登录失败统一 401 且不区分“账号不存在/密码错误”，避免账号枚举。
         return jsonify({'error': str(exc), 'code': 'invalid_credentials'}), 401

@@ -72,15 +72,35 @@ Set-Location backend
 - `AI_CONNECT_TIMEOUT=10` / `AI_READ_TIMEOUT=60`：分别限制连接和读取等待时间；
 - 访问令牌只接受 `Authorization: Bearer ...`，不接受 URL 查询参数；
 - 患者只能访问自己创建的病例；无主旧病例不归属任意患者，审核账号也需显式授权。
-- 脱敏预览返回短期一次性凭证，创建病例只能消费服务端保存的脱敏文本。
+- 脱敏预览返回短期一次性凭证，创建病例只能消费服务端保存的脱敏文本；每个用户最多保留
+  `APP_PREVIEW_MAX_PER_USER=5` 个未消费凭证，全局最多保留 `APP_PREVIEW_MAX_TOTAL=5000` 个。
+  达到上限时先清理过期项，再按创建顺序淘汰最早的未消费项；凭证仍绑定用户且只能消费一次。
 - 审核账号还必须获得逐病例授权；`APP_AUTO_ASSIGN_REVIEWER=false` 是默认安全配置，
   仅在单审核员演示时显式设为 `true` 自动分配。
-- 登录失败按账号与来源地址限流，并限制同一账号活跃会话数；游客会话创建也有来源地址配额。
+- 登录失败按账号与来源地址限流，并限制同一账号活跃会话数；普通凭据失败返回 JSON HTTP 401，
+  使用统一的“账号或密码不正确，请稍后重试”提示；进入冷却期时返回 JSON HTTP 429、`code=rate_limited`
+  和正整数 `Retry-After`。游客会话创建也有来源地址配额。
 - 就诊后更新、追问回答、医生审核修改/理由都会再次经过 PII 校验：手机号、邮箱等阻断型信息拒绝写入，
   姓名/住址等非阻断型信息自动脱敏。
 
 旧版 `/api/start_consultation`、`/api/get_discussion_status/*` 和
 `/api/get_all_discussions` 已下线，避免绕过新版鉴权、脱敏和病例状态机。
+
+### Phase 2 单机边界与 HTTP 安全基线
+
+- 模型请求日志只记录元数据（例如异常类型、重试次数、HTTP 状态、响应形状和内容长度），不记录完整
+  prompt、模型输出、上游响应 body、API Key 或原始请求异常消息。此约束针对服务端日志；不宣称所有调用方可见的
+  错误字符串都已全局改写。
+- 每个响应都带 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、
+  `Referrer-Policy: strict-origin-when-cross-origin`，以及
+  `Content-Security-Policy: base-uri 'self'; object-src 'none'; frame-ancestors 'none'`。
+  默认服务是本机 HTTP demo，因此有意不发送 HSTS；这不是 HTTPS 生产部署承诺。
+- 会话、预览 token、登录失败计数器和后台工作均为进程内状态。Phase 2 支持的边界是受控机器上的单个进程；
+  重启或多进程/多机器部署不能依赖这些状态自动共享。
+- 应用只使用 Flask 的 `request.remote_addr` 作为来源地址，不读取或信任 `X-Forwarded-For`、`Forwarded` 等转发头。
+  将来接入反向代理时，必须另行定义并审查可信代理、TLS 终止和生产 WSGI 边界。
+- Redis、集中式身份与会话、数据生命周期（保留/删除/加密等）、SQL 队列扩展和生产 WSGI 均为延期的生产架构工作，
+  不属于本 Phase 2 demo 的已完成能力。
 
 ## 4. 一次完整流程
 
@@ -125,22 +145,26 @@ Set-Location backend
 - 病例、审计、审核记录保存于本地 SQLite（已在 `.gitignore` 中）；文件库启用 WAL 与 busy timeout，
   降低后台分析和 HTTP 请求并发写入时的锁冲突；
 - 进入分析前先做 PII 打码；未配置模型密钥时不调用外部模型，启用外部模型时发送的是脱敏病例文本，不含姓名、电话等直接身份信息；
+- 模型请求日志仅保留元数据，不包含完整 prompt、模型输出、上游响应 body、API Key 或原始请求异常消息；
 - 病例前端预览最多展示 2000 字，但数据库保存完整脱敏正文（初次病历最多 8000 字，合并正文最多 16000 字），
   不会因展示截断而丢失末尾检查结果；
 - 审计表记录每次流程事件与状态流转，异常流转单独标记。
 - SQLite JSON 更新在同一锁内原子执行；同一病例的后台分析任务串行化并阻止重复启动。
 
+> Phase 2 的进程内会话、预览 token、登录失败计数器和后台任务只适用于单进程/单机 demo。
+> Redis、集中身份与会话、数据生命周期、SQL 队列扩展和生产 WSGI 仍需后续生产架构设计；默认 HTTP 服务不启用 HSTS。
+
 ## 6. 质量与评测
 
 ```bash
 cd backend
-python -m unittest discover -s tests -t .        # 553 项单元/回归测试
+python -m unittest discover -s tests -t .        # 当前 565 项单元/回归测试
 python verify_update_http.py                     # 患者端全流程 HTTP 断言
 python verify_doctor_http.py                     # 医生工作台全流程 HTTP 断言
 python eval_triage_v1.py                         # 分诊评测（规则 / 模型 / 完整链路三方法对比）
 ```
 
-- 553 项测试覆盖：护栏、脱敏、鉴权与病例所有权、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、并发更新、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新、输入契约、HTTP 请求体限制、流式错误脱敏、验收脚本契约与旧病例分析恢复；
+- 当前 565 项测试覆盖：护栏、脱敏、鉴权与病例所有权、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、并发更新、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新、输入契约、HTTP 请求体限制、流式错误脱敏、验收脚本契约与旧病例分析恢复，以及 Phase 2 的日志、预览 token、登录限流和响应头回归；
 - 分诊评测（自建小样本集，n=9）：完整链路 Macro 召回 **0.900**、纯规则 **0.872**，早期基线 0.447–0.513；
 - 完整报告结构完整性 13 / 13，无空段与占位。
 
