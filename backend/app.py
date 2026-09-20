@@ -89,8 +89,8 @@ def _api_unhandled_error(exc):
 auth_service = AuthService()
 preview_tokens = PreviewTokenService(
     int(os.getenv('APP_PREVIEW_TTL_MINUTES', '10')),
-    per_owner_limit=int(os.getenv('APP_PREVIEW_MAX_PER_USER', '5')),
-    global_limit=int(os.getenv('APP_PREVIEW_MAX_TOTAL', '5000')),
+    per_owner_limit=os.getenv('APP_PREVIEW_MAX_PER_USER', '5'),
+    global_limit=os.getenv('APP_PREVIEW_MAX_TOTAL', '5000'),
 )
 _guest_issue_lock = threading.Lock()
 _guest_issues = defaultdict(deque)

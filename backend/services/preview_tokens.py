@@ -17,12 +17,20 @@ class PreviewPayload:
     expires_at: datetime
 
 
+def _safe_positive_limit(value, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed > 0 else fallback
+
+
 class PreviewTokenService:
     def __init__(self, ttl_minutes: int = 10, per_owner_limit: int = 5,
                  global_limit: int = 5000) -> None:
         self.ttl = timedelta(minutes=max(1, min(ttl_minutes, 30)))
-        self.per_owner_limit = max(1, int(per_owner_limit))
-        self.global_limit = max(1, int(global_limit))
+        self.per_owner_limit = _safe_positive_limit(per_owner_limit, 5)
+        self.global_limit = _safe_positive_limit(global_limit, 5000)
         self._items: Dict[str, PreviewPayload] = {}
         self._lock = threading.Lock()
 
