@@ -15,6 +15,8 @@ import sys
 import unittest
 from unittest import mock
 
+import requests
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.ai_service import (  # noqa: E402
@@ -109,6 +111,34 @@ class TestRawCall(unittest.TestCase):
             result = self.service.call_ai_api_raw("提示词")
         self.assertFalse(result["ok"])
         self.assertEqual(result["content"], "")
+
+    def test_invalid_payload_log_redacts_response_body(self):
+        secret = "invalid-payload-secret-7f3c"
+        payload = {"choices": [], "error": secret}
+
+        with self.assertLogs("services.ai_service", level="WARNING") as captured:
+            self._call(payload)
+
+        logs = "\n".join(captured.output)
+        self.assertNotIn(secret, logs)
+        self.assertNotIn(json.dumps(payload), logs)
+        self.assertIn("top_level_keys", logs)
+
+    def test_request_failure_log_redacts_exception_message(self):
+        secret = "request-failure-secret-9a2b"
+
+        def boom(*args, **kwargs):
+            raise requests.RequestException(secret)
+
+        with mock.patch("services.ai_service.requests.post", boom), \
+                mock.patch("services.ai_service.time.sleep"):
+            with self.assertLogs("services.ai_service", level="WARNING") as captured:
+                self.service.call_ai_api_raw("提示词")
+
+        logs = "\n".join(captured.output)
+        self.assertNotIn(secret, logs)
+        self.assertIn("RequestException", logs)
+        self.assertIn("attempt=1/3", logs)
 
 
 class TestCallStructured(unittest.TestCase):
