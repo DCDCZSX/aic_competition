@@ -149,4 +149,4 @@ console.log(`  · 重渲染后保留展开状态：${reopened.includes(' open>')
 if (!reopened.includes(' open>')) problems.push('展开状态在重渲染后丢失');
 
 console.log('\n结论：' + (problems.length ? '❌ 仍有问题\n - ' + problems.join('\n - ') : '✅ 全部段落渲染正常，折叠结构正确、无 [object Object]、无英文键泄漏'));
-process.exit(problems.length ? 1 : 0);
+process.exitCode = problems.length ? 1 : 0;
