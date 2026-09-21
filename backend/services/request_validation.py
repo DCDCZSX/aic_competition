@@ -76,7 +76,14 @@ def string_list(
     return list(value)
 
 
-def object_field(data: Dict[str, Any], name: str, *, default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def object_field(
+    data: Dict[str, Any],
+    name: str,
+    *,
+    default: Optional[Dict[str, Any]] = None,
+    max_items: Optional[int] = None,
+    max_key_length: Optional[int] = None,
+) -> Dict[str, Any]:
     """读取 JSON 对象字段。"""
 
     if name not in data or data[name] is None:
@@ -84,6 +91,14 @@ def object_field(data: Dict[str, Any], name: str, *, default: Optional[Dict[str,
     value = data[name]
     if not isinstance(value, dict):
         raise InputValidationError(f"字段 {name} 必须是 JSON 对象")
+    if max_items is not None and len(value) > max_items:
+        raise InputValidationError(f"字段 {name} 最多包含 {max_items} 项")
+    if max_key_length is not None:
+        for key in value:
+            if not isinstance(key, str) or len(key) > max_key_length:
+                raise InputValidationError(
+                    f"字段 {name} 的键长度不能超过 {max_key_length} 个字符"
+                )
     return value
 
 

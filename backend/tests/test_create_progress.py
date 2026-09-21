@@ -284,7 +284,7 @@ class TestProgressiveAnalysis(unittest.TestCase):
         """
         class BrokenAI(FakeAI):
             def call_ai_api(self, prompt, role_description=None):
-                raise RuntimeError("网关不可用")
+                raise RuntimeError("analysis-provider-secret")
 
         flow = CaseFlow(store=Store(":memory:"), ai_service=BrokenAI(), use_llm=True)
         try:
@@ -331,7 +331,7 @@ class TestProgressiveAnalysis(unittest.TestCase):
 
         def boom(*args, **kwargs):
             if kwargs.get("use_llm"):            # 只让"模型增强"相位失败，规则抽取照常
-                raise RuntimeError("抽取崩了")
+                raise RuntimeError("profile-phase-secret")
             return original_extract(*args, **kwargs)
 
         case_flow_module.extract = boom
@@ -347,7 +347,8 @@ class TestProgressiveAnalysis(unittest.TestCase):
             self.assertIn(status["state"], ("failed", "partial_failed"), status)
             profile_phase = status["phases"]["profile"]
             self.assertEqual(profile_phase["state"], "failed")
-            self.assertIn("抽取崩了", profile_phase.get("note", ""))
+            self.assertIn("阶段执行失败", profile_phase.get("note", ""))
+            self.assertNotIn("profile-phase-secret", profile_phase.get("note", ""))
             self.assertTrue(any("结构化病例画像" in w for w in status["warnings"]), status["warnings"])
             # 其他相位仍应有结果（单相位失败不连坐）
             self.assertTrue(self.flow.get_case(result.case_id)["payload"].get("triage"))

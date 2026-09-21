@@ -25,6 +25,8 @@ from services.guardrail import screen  # noqa: E402
 
 # 病历正文长度上限（规格书 §4.4 G2 相关：超长引导分批）
 MAX_TEXT_LENGTH = 8000
+# 主要问题通常是短描述；单独限制，避免绕过病历正文上限后把大段文本送入分析链路。
+MAX_MAIN_ISSUE_LENGTH = 2000
 
 # 年龄合理区间
 MIN_AGE, MAX_AGE = 1, 129
@@ -144,6 +146,10 @@ def validate_intake(
     if len(history) > MAX_TEXT_LENGTH:
         result.errors.append(
             f"病历正文过长（{len(history)} 字 > {MAX_TEXT_LENGTH} 字）：请精简，或分批录入资料"
+        )
+    if len(issue) > MAX_MAIN_ISSUE_LENGTH:
+        result.errors.append(
+            f"主要问题过长（{len(issue)} 字 > {MAX_MAIN_ISSUE_LENGTH} 字）：请精简后再提交"
         )
 
     # ---- 数值域 ----

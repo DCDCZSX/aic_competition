@@ -242,7 +242,7 @@ def run(
                     parsed = {"stance": "维持原判断", "reason": "模型未返回内容",
                               "follow_up_evidence": []}
             except Exception as exc:  # pragma: no cover
-                parsed = {"stance": "维持原判断", "reason": f"回应失败：{exc}",
+                parsed = {"stance": "维持原判断", "reason": "回应失败：模型输出无法解析",
                           "follow_up_evidence": []}
             responses.append({"specialty": dept, "stance": parsed["stance"],
                               "reason": parsed["reason"]})
