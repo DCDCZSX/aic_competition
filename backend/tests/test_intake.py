@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services.intake import (  # noqa: E402
     ADVANCED_GOALS,
     ALL_GOAL_IDS,
+    MAX_MAIN_ISSUE_LENGTH,
     MAX_TEXT_LENGTH,
     PRIMARY_GOAL,
     goal_options,
@@ -55,6 +56,15 @@ class TestLengthAndRange(unittest.TestCase):
 
     def test_length_at_limit_ok(self):
         r = validate_intake(medical_history="病" * MAX_TEXT_LENGTH)
+        self.assertTrue(r.ok, r.errors)
+
+    def test_main_issue_over_limit_is_blocked(self):
+        r = validate_intake(main_issue="问题" * (MAX_MAIN_ISSUE_LENGTH + 1))
+        self.assertFalse(r.ok)
+        self.assertTrue(any("主要问题" in e and "过长" in e for e in r.errors), r.errors)
+
+    def test_main_issue_at_limit_is_allowed(self):
+        r = validate_intake(main_issue="问" * MAX_MAIN_ISSUE_LENGTH)
         self.assertTrue(r.ok, r.errors)
 
     def test_age_out_of_range(self):

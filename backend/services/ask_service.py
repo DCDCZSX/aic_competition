@@ -24,6 +24,9 @@ from services import dependency_matrix as dm  # noqa: E402
 
 # 比赛版限制：≤1 轮、≤3 问
 MAX_QUESTIONS = 3
+# 回答接口只接受当前这一轮问题的字段，防止附带任意键值进入后续提示词。
+MAX_ANSWER_ITEMS = MAX_QUESTIONS
+MAX_ANSWER_KEY_LENGTH = 128
 
 # 患者可以回答"不知道"/跳过
 ALWAYS_SKIPPABLE = True

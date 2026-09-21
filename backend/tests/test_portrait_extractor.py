@@ -12,6 +12,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -153,6 +154,15 @@ class TestLLMFallback(unittest.TestCase):
                          ai_service=self._BadJSONService())
         self.assertEqual(result.method, "rule")
         self.assertIn("2型糖尿病", [d.name for d in result.profile.diseases])
+
+    def test_unexpected_llm_exception_detail_is_not_returned(self):
+        secret = "portrait-secret-detail"
+        with mock.patch("services.portrait_extractor._extract_with_llm",
+                        side_effect=RuntimeError(secret)):
+            result = extract(SAMPLE, case_id="C001", use_llm=True,
+                             ai_service=object())
+        self.assertEqual(result.method, "rule")
+        self.assertNotIn(secret, " ".join(result.warnings))
 
     def test_llm_missing_service_is_safe(self):
         result = extract(SAMPLE, case_id="C001", use_llm=True, ai_service=None)

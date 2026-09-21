@@ -194,7 +194,7 @@ def analyze(
     except Exception as exc:
         hint = "（模型输出被长度截断）" if truncated else ""
         return S2Result(method=METHOD_FAILED,
-                        error=f"模型输出解析失败{hint}：{exc}", raw=content[:500])
+                        error=f"模型输出解析失败{hint}：模型输出无法解析", raw=content[:500])
 
     # 域外科室过滤（不静默丢弃：记在 error 里说明）
     known, unknown = [], []

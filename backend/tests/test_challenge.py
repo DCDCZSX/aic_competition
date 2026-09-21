@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -128,6 +129,16 @@ class TestRunWithModel(unittest.TestCase):
     def test_bad_json_degrades_to_maintain(self):
         result = cs.run(ai_service=FakeAI("不是 JSON"), aggregation=DISAGREEMENT, cards=[])
         self.assertEqual(result.rounds[0].responses[0]["stance"], "维持原判断")
+
+    def test_response_exception_detail_is_not_returned(self):
+        secret = "challenge-secret-detail"
+        with mock.patch("services.challenge_service._parse_response",
+                        side_effect=ValueError(secret)):
+            result = cs.run(ai_service=FakeAI(self.REPLY),
+                            aggregation=DISAGREEMENT, cards=[])
+        reasons = [response["reason"] for round_ in result.rounds
+                   for response in round_.responses]
+        self.assertNotIn(secret, " ".join(reasons))
 
     def test_prompt_forbids_probability(self):
         ai = FakeAI(self.REPLY)

@@ -310,7 +310,7 @@ def analyze_specialty(
     if card is None:
         hint = "（输出被长度截断）" if truncated else ""
         return SpecialtyAnalysis(department=department, method=METHOD_FAILED,
-                                 error=f"意见卡解析失败{hint}：{last_error}")
+                                 error=f"意见卡解析失败{hint}：模型输出无法解析")
 
     card.case_id = case_id
     try:
@@ -328,7 +328,7 @@ def analyze_specialty(
             card.validate()
     except Exception as exc:
         return SpecialtyAnalysis(department=department, method=METHOD_FAILED,
-                                 error=f"意见卡校验失败：{exc}")
+                                 error="意见卡校验失败：模型输出未通过校验")
     method = METHOD_LLM_REPAIRED if notice else METHOD_LLM
     return SpecialtyAnalysis(department=department, card=card, method=method, error=notice)
 
