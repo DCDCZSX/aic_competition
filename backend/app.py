@@ -25,10 +25,7 @@ from services.auth import (AuthService, AuthError, AuthRateLimitError, ROLE_DOCT
 from services.case_flow import CaseFlow
 from services.ask_service import MAX_ANSWER_ITEMS, MAX_ANSWER_KEY_LENGTH
 from services.config import read_int_env
-from services.intake import (
-    MAX_GOALS, MAX_GOAL_LENGTH, MAX_MAIN_ISSUE_LENGTH, MAX_TEXT_LENGTH,
-    sanitized_payload,
-)
+from services.intake import MAX_MAIN_ISSUE_LENGTH, MAX_TEXT_LENGTH, sanitized_payload
 from services.preview_tokens import PreviewTokenService
 from services.store import Store
 from schemas import CASE_STATE_LABELS
@@ -394,10 +391,7 @@ def guest_triage():
     try:
         history = string_field(data, 'medical_history', default='')
         issue = string_field(data, 'main_issue', default='')
-        goals = string_list(
-            data, 'goals', default=(), max_items=MAX_GOALS,
-            max_item_length=MAX_GOAL_LENGTH,
-        )
+        goals = string_list(data, 'goals', default=())
         age = optional_int(data, 'age')
         gender = string_field(data, 'gender', default='')
         sex = string_field(data, 'sex', default='')
@@ -457,10 +451,7 @@ def create_case():
         return error
     try:
         preview_token = string_field(data, 'preview_token', default='')
-        goals = string_list(
-            data, 'goals', default=(), max_items=MAX_GOALS,
-            max_item_length=MAX_GOAL_LENGTH,
-        )
+        goals = string_list(data, 'goals', default=(), max_items=8)
         age = optional_int(data, 'age')
         gender = string_field(data, 'gender', default='')
         sex = string_field(data, 'sex', default='')
@@ -665,7 +656,7 @@ def get_mdt(case_id):
     """多学科分析进度与结果（P8 轮询用）。
 
     两段式下多学科分析在后台跑，前端进 P8 时轮询这里：
-    `status.state` ∈ running / done / failed / skipped / none，`ready=true` 时 `mdt` 可用。
+    `status.state` ∈ running / done / failed / none，`ready=true` 时 `mdt` 可用。
     """
     session, case, error = _guard_case(case_id)
     if error:
@@ -741,8 +732,6 @@ def add_case_update(case_id):
         content=content,
         source=source,
         department=department,
-        defer_mdt=(request.args.get('defer_mdt') in ('1', 'true', 'yes'))
-        or data.get('defer_mdt') is True,
     )
     return jsonify(result), (200 if result.get('ok') else 400)
 
@@ -845,6 +834,7 @@ def submit_decision(case_id):
         action = string_field(data, 'action', default='', max_length=80)
         after = string_field(data, 'after', default='', max_length=4000)
         reason = string_field(data, 'reason', default='', max_length=2000)
+        reviewer = string_field(data, 'reviewer', default='', max_length=128)
         reviewer_dept = string_field(data, 'reviewer_dept', default='', max_length=120)
     except InputValidationError as exc:
         return _invalid_input(exc)
@@ -854,9 +844,8 @@ def submit_decision(case_id):
         action=action,
         after=after,
         reason=reason,
-        reviewer_name=session.label,
+        reviewer_name=reviewer or (session.label if session else '模拟审核员'),
         reviewer_dept=reviewer_dept,
-        reviewer_id=session.username,
     )
     return jsonify(result), (200 if result.get('ok') else 400)
 
@@ -871,13 +860,12 @@ def publish_review(case_id):
     if error:
         return error
     try:
-        string_field(data, 'reviewer', default='', max_length=128)  # 兼容旧客户端，身份不采信
+        reviewer = string_field(data, 'reviewer', default='', max_length=128)
     except InputValidationError as exc:
         return _invalid_input(exc)
     result = case_flow.publish_review(
         case_id,
-        reviewer_name=session.label,
-        reviewer_id=session.username,
+        reviewer_name=reviewer or (session.label if session else '模拟审核员'),
         accept_all=data.get('accept_all') is True,
     )
     return jsonify(result), (200 if result.get('ok') else 400)

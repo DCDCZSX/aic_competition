@@ -146,9 +146,6 @@ class AuthService:
         self._max_login_failures = read_int_env(
             "APP_LOGIN_MAX_FAILURES", 5, minimum=1, maximum=100
         )
-        self._max_login_failure_keys = read_int_env(
-            "APP_MAX_LOGIN_FAILURE_KEYS", 10000, minimum=100, maximum=100000
-        )
         self._login_window_seconds = read_int_env(
             "APP_LOGIN_FAILURE_WINDOW_SECONDS", 300,
             minimum=30, maximum=86400
@@ -335,20 +332,7 @@ class AuthService:
     def _record_login_failure(self, keys: List[str]) -> None:
         now = time.time()
         with self._lock:
-            # 先清理过期桶，再限制不同账号/IP 键的总量，避免随机用户名长期撑大内存。
-            for stored_key, attempts in list(self._login_failures.items()):
-                while attempts and attempts[0] <= now - self._login_window_seconds:
-                    attempts.popleft()
-                if not attempts:
-                    self._login_failures.pop(stored_key, None)
             for key in keys:
-                if (key not in self._login_failures
-                        and len(self._login_failures) >= self._max_login_failure_keys):
-                    oldest_key = min(
-                        self._login_failures,
-                        key=lambda item: self._login_failures[item][-1],
-                    )
-                    self._login_failures.pop(oldest_key, None)
                 attempts = self._login_failures.setdefault(key, deque())
                 while attempts and attempts[0] <= now - self._login_window_seconds:
                     attempts.popleft()

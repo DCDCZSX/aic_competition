@@ -205,38 +205,32 @@ def main():
         "defer_mdt": True}, timeout=120)
     fast = _time.time() - t0
     two = r.json() or {}
-    two_has_model = two.get("analysis_mode") == "model"
     check("建病例返回 200", r.status_code == 200 and two.get("ok"), str(r.status_code))
-    check("MDT 状态符合模型配置",
-          two.get("mdt_pending") is two_has_model, str(two.get("mdt_pending")))
+    check("标记 MDT 仍在后台", two.get("mdt_pending") is True, str(two.get("mdt_pending")))
     check("主请求不带 MDT 结果", two.get("mdt") is None, str(two.get("mdt"))[:60])
     check("画像/分诊/路径已就绪",
           bool(two.get("profile")) and bool(two.get("triage")) and bool(two.get("path")), "")
     check("交付够快（<10 秒）", fast < 10, f"{fast:.2f}s")
 
     case2 = two.get("case_id")
-    if two_has_model:
-        seen = []
-        ready = False
-        t1 = _time.time()
-        while _time.time() - t1 < 150:
-            d = s.get(f"{BASE}/api/v2/case/{case2}/mdt", timeout=60).json()
-            st = d.get("status") or {}
-            seen.append(st.get("state"))
-            if d.get("ready"):
-                ready = True
-                break
-            if st.get("state") == "failed":
-                break
-            _time.sleep(2)
-        check("轮询能看到 running 状态", "running" in seen,
-              json.dumps(seen[:6], ensure_ascii=False))
-        check("结束后 ready=true", ready)
-    else:
+    seen = []
+    ready = False
+    t1 = _time.time()
+    while _time.time() - t1 < 150:
         d = s.get(f"{BASE}/api/v2/case/{case2}/mdt", timeout=60).json()
-        check("无 Key 时 MDT 明确跳过",
-              (d.get("status") or {}).get("state") == "skipped" and not d.get("ready"),
-              json.dumps(d.get("status"), ensure_ascii=False))
+        st = d.get("status") or {}
+        seen.append(st.get("state"))
+        if d.get("ready"):
+            ready = True
+            check("后台 MDT 完成", True, f"用时 {_time.time()-t1:.1f}s，"
+                  f"卡片 {len((d.get('mdt') or {}).get('analyses') or [])} 张")
+            break
+        if st.get("state") == "failed":
+            check("后台 MDT 完成", False, str(st.get("error"))[:120])
+            break
+        _time.sleep(2)
+    check("轮询能看到 running 状态", "running" in seen, json.dumps(seen[:6], ensure_ascii=False))
+    check("结束后 ready=true", ready)
 
     print("\n[12] 渐进式：规则秒开 + 模型三相后台 + 可重试")
     t0 = _time.time()
@@ -245,14 +239,12 @@ def main():
         "progressive": True}, timeout=60)
     first = _time.time() - t0
     prog = r.json() or {}
-    prog_has_model = prog.get("analysis_mode") == "model"
     check("渐进式建病例 200", r.status_code == 200 and prog.get("ok"), str(r.status_code))
     check("首屏为规则画像", prog.get("profile_is_rules_only") is True, str(prog.get("profile_is_rules_only")))
-    check("后台任务状态符合模型配置",
-          prog.get("analysis_pending") is prog_has_model, str(prog.get("analysis_pending")))
+    check("后台任务已排入", prog.get("analysis_pending") is True, str(prog.get("analysis_pending")))
     check("规则分诊/路径/追问已就绪",
           bool(prog.get("triage")) and bool(prog.get("path")) and bool(prog.get("questions")), "")
-    check("首屏足够快", first < (2 if prog_has_model else 10), f"{first*1000:.0f} ms")
+    check("首屏足够快（<2 秒）", first < 2, f"{first*1000:.0f} ms")
 
     case3 = prog.get("case_id")
     a = s.get(f"{BASE}/api/v2/case/{case3}/analysis", timeout=30).json()
@@ -271,10 +263,7 @@ def main():
     check("相位全部完成", st.get("state") in ("done", "partial_failed"), str(st.get("state")))
     check("画像模型增强完成", st["phases"]["profile"]["state"] == "done", st["phases"]["profile"])
     check("就医方向相位完成", st["phases"]["triage"]["state"] == "done", st["phases"]["triage"])
-    check("多学科状态符合模型配置",
-          (a.get("mdt_ready") is True and st["mdt"]["state"] == "done")
-          if prog_has_model else
-          (a.get("mdt_ready") is False and st["mdt"]["state"] == "skipped"),
+    check("多学科已就绪", a.get("mdt_ready") is True and st["mdt"]["state"] == "done",
           json.dumps(st.get("mdt"), ensure_ascii=False))
     check("完成后病例状态推进",
           a.get("case_state") in ("awaiting_doctor", "analyzing"), str(a.get("case_state")))
@@ -288,22 +277,21 @@ def main():
           st["phases"]["mdt"]["state"] in ("done", "partial", "failed", "skipped"),
           st["phases"]["mdt"]["state"])
     failed_departments = (st.get("mdt") or {}).get("failed") or []
-    if prog_has_model:
+    if os.getenv("AI_API_KEY", "").strip():
         check("配置模型时全部科室成功",
               failed_departments == [], json.dumps(st.get("mdt"), ensure_ascii=False))
     else:
-        check("无 Key 时无伪失败科室",
-              failed_departments == [] and st["mdt"]["state"] == "skipped",
-              json.dumps(st.get("mdt"), ensure_ascii=False))
+        check("无 Key 时如实记录未完成科室",
+              bool(failed_departments), json.dumps(st.get("mdt"), ensure_ascii=False))
     r = s.post(f"{BASE}/api/v2/case/{case3}/analysis/retry", json={}, timeout=30)
     retry_body = r.json()
-    if prog_has_model:
+    if os.getenv("AI_API_KEY", "").strip():
         check("全部完成后重试被拒（400 且有说明）",
               r.status_code == 400 and "无需重试" in (retry_body.get("error") or ""),
               json.dumps(retry_body, ensure_ascii=False)[:120])
     else:
-        check("无 Key 时明确拒绝无意义重试",
-              r.status_code == 400 and "模型服务未配置" in (retry_body.get("error") or ""),
+        check("无 Key 时未完成 MDT 可重试",
+              r.status_code == 200 and "mdt" in (retry_body.get("retried") or []),
               json.dumps(retry_body, ensure_ascii=False)[:120])
 
     print("\n[9] 非法输入被拒")

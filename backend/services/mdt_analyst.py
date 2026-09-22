@@ -24,12 +24,6 @@ from services.json_recovery import (  # noqa: E402
     loads_lenient,
     result_is_repaired,
 )
-from services.model_output_guard import (  # noqa: E402
-    UnsafeModelOutput,
-    assert_safe_generated_fact,
-    assert_safe_generated_list,
-    assert_safe_generated_text,
-)
 
 SPECIALTY_SYSTEM_PROMPT = (
     "你是一位{dept}的 AI 分析视角（不是真实医生，也不构成会诊意见）。"
@@ -237,21 +231,13 @@ def _parse_card(dept: str, raw: str) -> Tuple[SpecialistOpinionCard, str]:
 
     card = SpecialistOpinionCard(
         case_id="", specialty_code=dept, specialty_name=dept,
-        focus=assert_safe_generated_text(data.get("focus") or "", field_name="专科关注点"),
-        # facts 可复述既往诊疗事实，但不得借事实字段夹带新的治疗建议。
-        facts=[assert_safe_generated_fact(x) for x in (data.get("facts") or [])][:8],
+        focus=str(data.get("focus") or "").strip(),
+        facts=[str(x) for x in (data.get("facts") or [])][:8],
         inferences=inferences,
         checks=checks,
-        information_gaps=assert_safe_generated_list(
-            (data.get("information_gaps") or [])[:8], field_name="信息缺口"),
+        information_gaps=[str(x) for x in (data.get("information_gaps") or [])][:8],
         referral=referral,
     )
-    for inference in card.inferences:
-        inference.text = assert_safe_generated_text(
-            inference.text, field_name="专科分析判断")
-    for check in card.checks:
-        check.content = assert_safe_generated_text(
-            check.content, field_name="待确认事项")
     if strategy == STRATEGY_SALVAGE and not (card.focus or card.facts or card.inferences
                                              or card.checks or card.information_gaps):
         # 抢救出来的东西一个字段都没有（例如只剩 "facts": []）→ 视为失败，不塞空卡
@@ -323,11 +309,8 @@ def analyze_specialty(
 
     if card is None:
         hint = "（输出被长度截断）" if truncated else ""
-        reason = ("模型输出触发医疗安全限制"
-                  if isinstance(last_error, UnsafeModelOutput)
-                  else "模型输出无法解析")
         return SpecialtyAnalysis(department=department, method=METHOD_FAILED,
-                                 error=f"意见卡解析失败{hint}：{reason}")
+                                 error=f"意见卡解析失败{hint}：模型输出无法解析")
 
     card.case_id = case_id
     try:
