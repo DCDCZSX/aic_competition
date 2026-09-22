@@ -41,7 +41,7 @@ python -m venv .venv
 
 # 2) 从模板创建本机配置；修改两个账号密码，不要提交 .env
 Copy-Item .env.example .env
-# AI_API_KEY 可留空：未配置时自动降级为纯规则分诊
+# AI_API_KEY 可留空：未配置时直接完成纯规则链路，MDT 状态为 skipped，不启动后台模型任务
 
 # 3) 启动
 Set-Location backend
@@ -65,11 +65,13 @@ Set-Location backend
 
 ### 必要安全配置
 
-- `APP_AUTH_REQUIRED` 已保留为兼容配置，但完整病例接口始终强制认证；游客使用独立接口；
+- 完整病例接口始终强制认证；游客使用独立接口，不能用环境变量重新开启免密访问；
 - 免密角色登录已从后端下线，不能用配置重新开启；
 - `APP_REVIEWER_MODE=simulation`：比赛版显示“模拟审核员”；真实机构认证接入后才切换为 `clinical`；
 - `APP_CORS_ORIGINS`：只填写实际前端来源，不要使用 `*`；
 - `AI_CONNECT_TIMEOUT=10` / `AI_READ_TIMEOUT=60`：分别限制连接和读取等待时间；
+- `AI_MAX_RETRIES=3` / `AI_MAX_CONCURRENT_REQUESTS=3`：限制模型重试次数与进程内并发请求数；
+- 整数配置项填入非数字或超出文档范围时，服务会在启动阶段报出对应变量名并拒绝启动；
 - 访问令牌只接受 `Authorization: Bearer ...`，不接受 URL 查询参数；
 - 患者只能访问自己创建的病例；无主旧病例不归属任意患者，审核账号也需显式授权。
 - 脱敏预览返回短期一次性凭证，创建病例只能消费服务端保存的脱敏文本；每个用户最多保留
@@ -158,13 +160,13 @@ Set-Location backend
 
 ```bash
 cd backend
-python -m unittest discover -s tests -t .        # 当前 565 项单元/回归测试
+python -m unittest discover -s tests -t .        # 冻结前运行完整单元/回归测试
 python verify_update_http.py                     # 患者端全流程 HTTP 断言
 python verify_doctor_http.py                     # 医生工作台全流程 HTTP 断言
 python eval_triage_v1.py                         # 分诊评测（规则 / 模型 / 完整链路三方法对比）
 ```
 
-- 当前 565 项测试覆盖：护栏、脱敏、鉴权与病例所有权、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、并发更新、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新、输入契约、HTTP 请求体限制、流式错误脱敏、验收脚本契约与旧病例分析恢复，以及 Phase 2 的日志、预览 token、登录限流和响应头回归；
+- 回归测试覆盖：护栏、脱敏、鉴权与病例所有权、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、并发更新、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新、输入契约、HTTP 请求体限制、流式错误脱敏、验收脚本契约与旧病例分析恢复，以及 Phase 2 的日志、预览 token、登录限流和响应头回归；具体数量以冻结前实际运行结果为准；
 - 分诊评测（自建小样本集，n=9）：完整链路 Macro 召回 **0.900**、纯规则 **0.872**，早期基线 0.447–0.513；
 - 完整报告结构完整性 13 / 13，无空段与占位。
 

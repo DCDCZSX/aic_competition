@@ -155,6 +155,18 @@ class TestAnswers(FlowTestBase):
         events = [a["event"] for a in self.store.list_audit(self.case.case_id)]
         self.assertIn("answers_submitted", events)
 
+    def test_too_many_answers_are_rejected_before_processing(self):
+        answers = {f"field-{index}": "回答" for index in range(4)}
+        outcome = self.flow.submit_answers(self.case.case_id, answers)
+        self.assertFalse(outcome["ok"])
+        self.assertIn("最多", outcome["error"])
+
+    def test_overlong_answer_key_is_rejected_before_processing(self):
+        answers = {"k" * 129: "回答"}
+        outcome = self.flow.submit_answers(self.case.case_id, answers)
+        self.assertFalse(outcome["ok"])
+        self.assertIn("键", outcome["error"])
+
     def test_unknown_case(self):
         outcome = self.flow.submit_answers("C-NOT-EXIST", {})
         self.assertFalse(outcome["ok"])

@@ -10,6 +10,7 @@ from unittest import mock
 import app as app_module
 from services.auth import AuthService, ROLE_DOCTOR, ROLE_PATIENT
 from services.case_flow import CaseFlow
+from services.intake import MAX_MAIN_ISSUE_LENGTH
 from services.store import Store
 
 
@@ -141,6 +142,13 @@ class HttpInputHardeningTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json().get("code"), "invalid_json")
+
+        response = self.client.post(
+            "/api/v2/preview", headers=headers,
+            json={"medical_history": "正常资料", "main_issue": "问" * (MAX_MAIN_ISSUE_LENGTH + 1)},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json().get("code"), "invalid_request")
 
     def test_oversized_json_is_json_413_before_business_processing(self):
         headers = self._headers()

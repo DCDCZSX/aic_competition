@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
+from services.config import read_int_env
+
 ROLE_PATIENT = "patient"
 ROLE_DOCTOR = "doctor"
 ROLE_GUEST = "guest"
@@ -141,21 +143,34 @@ class AuthService:
         self.ttl = timedelta(hours=ttl_hours)
         self.accounts = dict(accounts if accounts is not None else _configured_accounts())
         self._login_failures: Dict[str, deque] = {}
-        self._max_login_failures = max(1, int(os.getenv("APP_LOGIN_MAX_FAILURES", "5")))
-        self._login_window_seconds = max(
-            30, int(os.getenv("APP_LOGIN_FAILURE_WINDOW_SECONDS", "300"))
+        self._max_login_failures = read_int_env(
+            "APP_LOGIN_MAX_FAILURES", 5, minimum=1, maximum=100
         )
-        self._login_cooldown_seconds = max(
-            5, int(os.getenv("APP_LOGIN_COOLDOWN_SECONDS", "60"))
+        self._max_login_failure_keys = read_int_env(
+            "APP_MAX_LOGIN_FAILURE_KEYS", 10000, minimum=100, maximum=100000
         )
-        self._max_sessions_per_account = max(
-            1, int(os.getenv("APP_MAX_SESSIONS_PER_ACCOUNT", "5"))
+        self._login_window_seconds = read_int_env(
+            "APP_LOGIN_FAILURE_WINDOW_SECONDS", 300,
+            minimum=30, maximum=86400
         )
-        self._max_total_sessions = max(100, int(os.getenv("APP_MAX_TOTAL_SESSIONS", "10000")))
+        self._login_cooldown_seconds = read_int_env(
+            "APP_LOGIN_COOLDOWN_SECONDS", 60,
+            minimum=5, maximum=3600
+        )
+        self._max_sessions_per_account = read_int_env(
+            "APP_MAX_SESSIONS_PER_ACCOUNT", 5,
+            minimum=1, maximum=1000
+        )
+        self._max_total_sessions = read_int_env(
+            "APP_MAX_TOTAL_SESSIONS", 10000,
+            minimum=100, maximum=1000000
+        )
 
     def create_guest_session(self, ttl_minutes: Optional[int] = None) -> Session:
         """Create a short-lived anonymous session with no persistent-case privileges."""
-        configured_ttl = int(os.getenv("APP_GUEST_TTL_MINUTES", "30"))
+        configured_ttl = read_int_env(
+            "APP_GUEST_TTL_MINUTES", 30, minimum=5, maximum=120
+        )
         minutes = max(5, min(ttl_minutes or configured_ttl, 120))
         guest_id = f"guest-{secrets.token_hex(8)}"
         return self._create_session(
@@ -320,7 +335,20 @@ class AuthService:
     def _record_login_failure(self, keys: List[str]) -> None:
         now = time.time()
         with self._lock:
+            # 先清理过期桶，再限制不同账号/IP 键的总量，避免随机用户名长期撑大内存。
+            for stored_key, attempts in list(self._login_failures.items()):
+                while attempts and attempts[0] <= now - self._login_window_seconds:
+                    attempts.popleft()
+                if not attempts:
+                    self._login_failures.pop(stored_key, None)
             for key in keys:
+                if (key not in self._login_failures
+                        and len(self._login_failures) >= self._max_login_failure_keys):
+                    oldest_key = min(
+                        self._login_failures,
+                        key=lambda item: self._login_failures[item][-1],
+                    )
+                    self._login_failures.pop(oldest_key, None)
                 attempts = self._login_failures.setdefault(key, deque())
                 while attempts and attempts[0] <= now - self._login_window_seconds:
                     attempts.popleft()

@@ -25,6 +25,10 @@ from services.guardrail import screen  # noqa: E402
 
 # 病历正文长度上限（规格书 §4.4 G2 相关：超长引导分批）
 MAX_TEXT_LENGTH = 8000
+# 主要问题通常是短描述；单独限制，避免绕过病历正文上限后把大段文本送入分析链路。
+MAX_MAIN_ISSUE_LENGTH = 2000
+MAX_GOALS = 8
+MAX_GOAL_LENGTH = 64
 
 # 年龄合理区间
 MIN_AGE, MAX_AGE = 1, 129
@@ -107,7 +111,8 @@ def validate_intake(
     """校验一次录入。返回 `IntakeResult`，`ok=False` 表示应阻断进入下一步。"""
     history = _clean(medical_history)
     issue = _clean(main_issue)
-    goals = list(goals or [])
+    goals_input_valid = isinstance(goals, (list, tuple)) or goals is None
+    goals = list(goals or []) if goals_input_valid else []
     combined = "\n".join(x for x in (history, issue) if x)
     result = IntakeResult(goals=goals, text_length=len(history))
 
@@ -120,6 +125,17 @@ def validate_intake(
             result.warnings.append(f"触发依据：{reason}")
         result.ok = False
         return result  # 危象/非医学内容：立即阻断，不做后续校验
+
+    if not goals_input_valid:
+        result.errors.append("就医目标必须是字符串数组")
+    if len(goals) > MAX_GOALS:
+        result.errors.append(f"就医目标最多包含 {MAX_GOALS} 项")
+        goals = goals[:MAX_GOALS]
+    if any(not isinstance(goal, str) or len(goal) > MAX_GOAL_LENGTH for goal in goals):
+        result.errors.append(f"每个就医目标必须是最多 {MAX_GOAL_LENGTH} 个字符的字符串")
+        goals = [goal for goal in goals
+                 if isinstance(goal, str) and len(goal) <= MAX_GOAL_LENGTH]
+    result.goals = list(goals)
 
     # ---- 目标校验（不阻断，仅提示）----
     invalid_goals = [g for g in goals if g not in ALL_GOAL_IDS]
@@ -144,6 +160,10 @@ def validate_intake(
     if len(history) > MAX_TEXT_LENGTH:
         result.errors.append(
             f"病历正文过长（{len(history)} 字 > {MAX_TEXT_LENGTH} 字）：请精简，或分批录入资料"
+        )
+    if len(issue) > MAX_MAIN_ISSUE_LENGTH:
+        result.errors.append(
+            f"主要问题过长（{len(issue)} 字 > {MAX_MAIN_ISSUE_LENGTH} 字）：请精简后再提交"
         )
 
     # ---- 数值域 ----
