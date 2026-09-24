@@ -34,8 +34,10 @@ JS_CONTROLLED = {".hide", ".sr"}
 # 每个关键操作：主入口选择器 + 兜底镜像选择器（None 表示只有主入口）
 CRITICAL_ACTIONS = {
     "/patient": [
-        ("病例上下文 / 分析进度 / 重新分析 / 打印报告", "#ctx-panel", "#ctx-inline-panel"),
         ("录入与提交（表单区）", "#history", None),
+        ("结构画像", "#profile-body", None),
+        ("报告摘要与打印", "#report-body", None),
+        ("就诊后资料更新", "#upd-content", None),
     ],
     "/doctor": [
         ("发布审核版 + 录入线下意见", "#rev-publish", "#rev-publish-inline"),

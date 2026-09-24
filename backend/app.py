@@ -854,7 +854,9 @@ if __name__ == '__main__':
 
     print("=" * 60)
     print("[启动] 多学科就医智助系统")
-    print(f"[地址] http://{host}:{port}")
+    print(f"[首页] http://{host}:{port}/")
+    print(f"[患者端] http://{host}:{port}/patient")
+    print(f"[医生端] http://{host}:{port}/doctor")
     print(f"[模式] 调试={'开启（仅限本地开发）' if debug else '关闭'}")
     print(f"[模型] {os.getenv('AI_MODEL_NAME', 'qwen-max-latest')}")
     if not os.getenv('AI_API_KEY'):

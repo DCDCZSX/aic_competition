@@ -221,6 +221,7 @@ input,textarea,select{
   width:100%;padding:9px 12px;border:1px solid var(--gray-200);border-radius:var(--br-12);
   background:var(--gray-000);color:var(--ink);
 }
+select{border-radius:var(--br-12);}
 textarea{resize:vertical;min-height:140px;line-height:1.7;}
 input:focus,textarea:focus,select:focus{border-color:var(--gray-300);}
 

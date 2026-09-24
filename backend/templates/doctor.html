@@ -69,25 +69,11 @@
       <h1>进入医生工作台</h1>
       <p class="muted">先从风险优先队列开始，只处理需要医生决定的条目；接受、修改、驳回、暂不确定，全部留痕可回溯。</p>
 
-      <div class="role-cards">
-        <div class="role-card" onclick="showAccountLogin()">
-          <span class="ic">🩺</span>
-          <span>
-            <span class="t">进入医生工作台</span>
-            <span class="d">病例审阅 · 证据核查 · 逐条审核 · 录入线下意见</span>
-          </span>
-          <span class="go">→</span>
-        </div>
+      <div class="row" style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
+        <input id="login-user" placeholder="账号" autocomplete="username" style="flex:1;min-width:160px;">
+        <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password" style="flex:1;min-width:160px;">
+        <button class="primary" onclick="loginForm()">登录</button>
       </div>
-
-      <details open>
-        <summary>或使用账号登录</summary>
-        <div class="row" style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
-          <input id="login-user" placeholder="账号" style="flex:1;min-width:160px;">
-          <input id="login-pass" type="password" placeholder="密码" style="flex:1;min-width:160px;">
-          <button class="primary" onclick="loginForm()">登录</button>
-        </div>
-      </details>
 
       <div id="login-msg" class="banner danger hide" style="margin-top:var(--sp-12);"></div>
     </div>
@@ -300,15 +286,6 @@ async function api(path, opt){
 }
 
 /* ===================== 登录 ===================== */
-function showAccountLogin(){
-  const details=document.querySelector('#login details');
-  if(details) details.open=true;
-  const user=$('login-user');
-  if(user && !user.value) user.value='doctor';
-  const pass=$('login-pass');
-  if(pass) pass.focus();
-  msg('login-msg', '请输入医生账号密码', 'info');
-}
 async function loginForm(){
   const username = $('login-user').value.trim(), password = $('login-pass').value;
   const r = await api('/api/login', {method:'POST', body:JSON.stringify({username, password})});

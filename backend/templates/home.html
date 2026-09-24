@@ -368,12 +368,6 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
               <a href="#" role="menuitem" onclick="enterAs('patient');return false;">患者端工作台<span>资料整理 · 就医路径 · 就诊后更新</span></a>
               <a href="#" role="menuitem" onclick="enterAs('doctor');return false;">医生审核台<span>病例审核 · 证据审阅 · 报告确认</span></a>
             </div>
-            <div class="dd-sep"></div>
-            <div class="grp-title">体验账号</div>
-            <div class="cols">
-              <a href="#" role="menuitem" onclick="fillAccount('patient');return false;">patient<span>患者端（一键填入）</span></a>
-              <a href="#" role="menuitem" onclick="fillAccount('doctor');return false;">doctor<span>医生工作台（一键填入）</span></a>
-            </div>
           </div>
         </div>
       </div>
@@ -426,15 +420,6 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
             <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 13V6.5l3-2 3 2V13M8 13V9l3-2 3 2v4M1 13h14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
             进入医生工作台
           </button>
-          <button class="btn btn-ghost btn-block" style="margin-top:10px;" id="accountToggle" aria-expanded="false" aria-controls="accountRow">
-            使用账号登录
-          </button>
-          <div class="form-row" id="accountRow">
-            <input id="login-user" placeholder="账号" autocomplete="username">
-            <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password">
-            <button class="btn btn-white btn-block" onclick="loginForm()">登录</button>
-          </div>
-          <p class="msg" id="loginMsg"></p>
           <p class="legal">
             病例与审核记录保存在本机部署的数据库中；未配置模型密钥时不调用外部模型，启用外部模型时发送到模型服务的是已脱敏的病例文本，不含姓名、电话等直接身份信息。使用前请知悉：
             本系统提供就医信息整理与决策辅助，<strong>不提供诊断或处方，也不替代医生判断</strong>；急症请立即就医。
@@ -1057,64 +1042,15 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();
 
-  /* ---------- 6. 账号表单展开 ---------- */
-  var toggle = document.getElementById('accountToggle');
-  var row = document.getElementById('accountRow');
-  if (toggle && row) {
-    toggle.addEventListener('click', function () {
-      var open = row.classList.toggle('open');
-      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-      if (open) document.getElementById('login-user').focus();
-    });
-  }
 })();
 
 /* ============================================================
-   登录 / 角色入口（跨页保持会话：token 存 localStorage）
+   角色入口
    ============================================================ */
-var SESSION_KEY = 'dsh_session';
-
-function setMsg(text, ok) {
-  var el = document.getElementById('loginMsg');
-  if (!el) return;
-  el.textContent = text;
-  el.className = 'msg show ' + (ok ? 'ok' : 'err');
-}
-function saveSession(session) {
-  try {
-    localStorage.setItem(SESSION_KEY, JSON.stringify({
-      token: session.token, role: session.role,
-      username: session.username, label: session.label
-    }));
-  } catch (e) { /* 隐私模式下 localStorage 不可用：退化为当页会话 */ }
-}
 function goTo(role) { location.href = (role === 'doctor') ? '/doctor' : '/patient'; }
 
 function enterAs(role) {
   goTo(role);
-}
-async function loginForm() {
-  var u = document.getElementById('login-user').value.trim();
-  var p = document.getElementById('login-pass').value;
-  if (!u) { setMsg('请填写账号', false); return; }
-  var res = await fetch('/api/login', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: u, password: p })
-  });
-  var data = await res.json();
-  if (!res.ok || !data.session) { setMsg(data.error || '登录失败', false); return; }
-  saveSession(data.session);
-  goTo(data.session.role);
-}
-function fillAccount(name) {
-  var row = document.getElementById('accountRow');
-  var toggle = document.getElementById('accountToggle');
-  if (row) row.classList.add('open');
-  if (toggle) toggle.setAttribute('aria-expanded', 'true');
-  document.getElementById('login-user').value = name;
-  document.getElementById('login-pass').value = '';
-  document.getElementById('login-pass').focus();
-  setMsg('已填入账号，请输入部署者配置的密码', true);
 }
 </script>
 </body>

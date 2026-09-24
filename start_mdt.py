@@ -84,7 +84,9 @@ def main():
         print("[OK] 应用加载成功")
         print("=" * 50)
         print("[启动] 系统启动成功!")
-        print(f"[地址] http://{host}:{port}   （患者端：/patient）")
+        print(f"[首页] http://{host}:{port}/")
+        print(f"[患者端] http://{host}:{port}/patient")
+        print(f"[医生端] http://{host}:{port}/doctor")
         print(f"[模式] 调试={'开启（仅限本地开发）' if debug else '关闭'}")
         if not os.getenv('AI_API_KEY'):
             print("[提示] 未配置 AI_API_KEY（参考 .env.example），AI 分析将不可用")
