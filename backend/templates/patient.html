@@ -1169,6 +1169,19 @@ function switchReport(view){
     ${rep.doctor_confirmed ? '✅ ' + esc(stageLabel) : '⚠️ ' + esc(statusLabel)}
     <span class="tiny">　病例号 ${esc(rep.case_id)}　版本 ${esc(rep.report_version||1)}　生成于 ${esc(rep.generated_at)}</span></div>`;
 
+  const screening = (S.report||{}).mdt_screening || {};
+  if(screening.decision){
+    const screeningLabels = {single_specialty:'单专科处理', recommend_mdt:'医生建议多学科共同评估', need_more_info:'需要补充资料', urgent_care:'急症处理'};
+    const nextStep = screening.patient_next_step || (screening.decision==='urgent_care'
+      ? '请尽快前往急诊或拨打 120，不要等待普通 MDT 流程。'
+      : '请按医生提示继续准备就医。');
+    html += `<div class="banner ${screening.decision==='urgent_care'?'danger':'info'}" id="mdt-screening-status">
+      <strong>医生初筛：${esc(screeningLabels[screening.decision]||'已完成')}</strong>
+      ${(screening.departments||[]).length?`<div class="tiny">相关科室：${screening.departments.map(esc).join('、')}</div>`:''}
+      <div style="margin-top:4px;">下一步：${esc(nextStep)}</div>
+    </div>`;
+  }
+
   if(view==='summary'){
     /* 一页摘要：只保留会影响下一步行动的内容，完整证据放在按需展开的报告里。 */
     const left = ['主要问题','关键已知资料','当前信息缺口'];

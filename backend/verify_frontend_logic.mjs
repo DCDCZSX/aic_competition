@@ -179,7 +179,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   globalThis.document.querySelectorAll = realQSA;
 
   /* 完整报告 HTML：默认收起 + 目录与段落 id 对应 + 内容仍在 DOM 里 */
-  S.report = { summary: { stage_label: 'AI 就诊准备摘要', report_version: 1, review_status_label: 'AI 生成，尚未经医生审核', doctor_confirmed: false, case_id: 'C1234ABCD', generated_at: '2026-09-24', sections: { '主要问题': '视物模糊', '建议咨询方向': '眼科', '当前任务': ['资料准备｜带上近期检查结果'], '需要向医生确认的问题': ['是否需要完善眼底检查'] } }, full: { sections: { '病例概况': '一句话概况', '检查与证据': ['条目一', '条目二'], '就医路径': [{ '步骤': 'S1', '类型': '资料准备', '内容': '带上近期检查结果' }] },
+  S.report = { mdt_screening: { decision: 'recommend_mdt', departments: ['内分泌科', '眼科'], patient_next_step: '医生建议多学科共同评估，请按后续就医安排准备资料。' }, summary: { stage_label: 'AI 就诊准备摘要', report_version: 1, review_status_label: 'AI 生成，尚未经医生审核', doctor_confirmed: false, case_id: 'C1234ABCD', generated_at: '2026-09-24', sections: { '主要问题': '视物模糊', '建议咨询方向': '眼科', '当前任务': ['资料准备｜带上近期检查结果'], '需要向医生确认的问题': ['是否需要完善眼底检查'] } }, full: { sections: { '病例概况': '一句话概况', '检查与证据': ['条目一', '条目二'], '就医路径': [{ '步骤': 'S1', '类型': '资料准备', '内容': '带上近期检查结果' }] },
                        section_order: ['病例概况', '检查与证据'], complete: true } };
   S.reportOpen = {};
   switchReport('full');
@@ -191,6 +191,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('打印版准备单保留行动信息', summaryHtml.includes('class="print-report"')
     && summaryHtml.includes('患者就医准备单') && summaryHtml.includes('就医步骤')
     && summaryHtml.includes('当前待办') && summaryHtml.includes('就诊时可问医生'), '');
+  check('患者看到医生初筛的下一步', summaryHtml.includes('医生建议多学科共同评估')
+    && summaryHtml.includes('相关科室：内分泌科、眼科'), summaryHtml);
 
   check('完整报告渲染成可折叠段落', (fullHtml.match(/<details class="sec"/g) || []).length === 2,
     String((fullHtml.match(/<details class="sec"/g) || []).length));
@@ -306,8 +308,14 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 
 /* ----------------------------------------------------- 医生工作台断言 */
 {
-  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderReview, setQueueFilter, goQueuePage };');
+  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderReview, renderMdtScreening, setQueueFilter, goQueuePage };');
   const D = globalThis.__D;
+
+  D.S.caseData = { payload: { triage: { selected: ['内分泌科', '眼科'] } } };
+  D.S.review = { mdt_screening: null };
+  const screeningPanel = D.renderMdtScreening();
+  check('医生端显示 MDT 初筛表单', screeningPanel.includes('MDT 初筛与病例分流')
+    && screeningPanel.includes('recommend_mdt') && screeningPanel.includes('保存初筛决定'), screeningPanel);
 
   fetchPayload = {
     status: 200,

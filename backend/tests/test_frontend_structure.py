@@ -388,6 +388,18 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("医生审核版报告", html)
         self.assertNotIn("共 9 步", html)
 
+    def test_mdt_screening_is_explicit_and_patient_safe(self):
+        _, doctor = self.get("/doctor")
+        _, patient = self.get("/patient")
+        for token in (
+            "mdt-screening", "single_specialty", "recommend_mdt",
+            "need_more_info", "urgent_care", "submitMdtScreening",
+        ):
+            self.assertIn(token, doctor, f"医生端缺少初筛入口或决定：{token}")
+        self.assertIn("医生建议多学科共同评估", patient)
+        self.assertIn("请尽快前往急诊或拨打 120", patient)
+        self.assertNotIn("reviewer_id", patient)
+
     def test_patient_stage3_uses_plain_direction_path_and_specialty_summary(self):
         """第三步只给患者方向、关联任务和通俗专科摘要，内部推理留在医生端。"""
         _, html = self.get("/patient")
