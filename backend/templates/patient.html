@@ -310,7 +310,7 @@
     <div id="report-body"></div>
     <div class="actions">
       <button class="ghost" onclick="go('mdt')">← 返回多学科分析</button>
-      <button class="primary" onclick="printReport()">打印 / 导出 PDF</button>
+      <button class="primary" onclick="printReport()">打印就医准备单 / 导出 PDF</button>
       <button class="primary" onclick="go('update')">已就诊，补充新资料 →</button>
     </div>
   </div>
@@ -1213,8 +1213,55 @@ function switchReport(view){
 
   html += `<div class="banner warn" style="margin-top:var(--sp-20);">${esc(rep.disclaimer||'')}<br>
     <span class="tiny">${esc(rep.capability_boundary||'')}</span></div>`;
-  document.getElementById('report-body').innerHTML = html;
+  document.getElementById('report-body').innerHTML =
+    `<div class="report-screen">${html}</div>${buildPrintReportHtml()}`;
   if(view==='full') bindReportToc();
+}
+
+/* 打印版：给患者带去线下使用的行动清单，不把 13 段完整证据一起打出来。 */
+function hasReportValue(v){
+  return !(v===null || v===undefined || v==='' || (Array.isArray(v) && !v.length));
+}
+function printPathValue(steps){
+  if(!Array.isArray(steps) || !steps.length) return '<div class="tiny">（无）</div>';
+  return steps.map((step,i)=>{
+    const title = step && (step['内容'] || step['标题']) || '';
+    const detail = [step && step['说明'], step && step['条件']].filter(Boolean).join('；');
+    return `<div class="print-step"><div><span class="pill">第 ${i+1} 步</span> <strong>${esc(title)}</strong></div>`+
+      (detail ? `<div class="tiny">${esc(detail)}</div>` : '') + '</div>';
+  }).join('');
+}
+function buildPrintReportHtml(){
+  const all = S.report || {};
+  const summary = all.summary || {};
+  const full = all.full || {};
+  const summarySections = summary.sections || {};
+  const fullSections = full.sections || {};
+  const stageLabel = summary.stage_label || (summary.doctor_confirmed ? '医生审核版报告' : 'AI 就诊准备摘要');
+  const statusLabel = summary.review_status_label || (summary.doctor_confirmed ? '已发布医生审核版' : 'AI 生成，尚未经医生审核');
+  const items = [
+    ['主要问题', summarySections['主要问题']],
+    ['建议先咨询', summarySections['建议咨询方向']],
+    ['就医步骤', fullSections['就医路径']],
+    ['当前待办', summarySections['当前任务']],
+    ['就诊时可问医生', summarySections['需要向医生确认的问题']],
+    ['还缺什么资料', summarySections['当前信息缺口']],
+    ['关键已知资料', summarySections['关键已知资料']],
+  ];
+  const sectionsHtml = items.filter(([,value])=>hasReportValue(value)).map(([label,value])=>{
+    const body = label==='就医步骤' ? printPathValue(value) : renderSectionValue(value);
+    return `<section class="print-section"><h3>${esc(label)}</h3>${body}</section>`;
+  }).join('');
+  return `<div class="print-report" aria-label="患者就医准备单">
+    <div class="print-head">
+      <h2>患者就医准备单</h2>
+      <div class="tiny">${esc(stageLabel)} · ${esc(statusLabel)}</div>
+      <div class="tiny">病例号 ${esc(summary.case_id||'')}　生成于 ${esc(summary.generated_at||'')}</div>
+    </div>
+    <p class="print-intro">这份清单用于帮助你准备就医和与医生沟通，最终以线下医生判断为准。</p>
+    ${sectionsHtml}
+    <div class="print-disclaimer">${esc(summary.disclaimer||'')}<br>${esc(summary.capability_boundary||'')}</div>
+  </div>`;
 }
 
 /* 段落摘要（折叠时右侧的小提示，让用户不展开也知道里面有多少内容） */
@@ -1284,7 +1331,7 @@ function bindReportToc(){
   secs.forEach(s=>_tocObserver.observe(s));
 }
 
-/* 打印必须给完整的报告：打印前全部展开，打印后恢复用户原来的折叠状态 */
+/* 保留完整报告的屏幕折叠状态；打印使用独立的患者就医准备单。 */
 function openAllForPrint(){
   S._reportOpenBeforePrint = Object.assign({}, S.reportOpen || {});
   setAllReportSections(true);
@@ -1324,8 +1371,7 @@ function renderSectionValue(v){
 }
 
 function printReport(){
-  const view = S.reportView==='full' ? '完整报告' : '一页就医摘要';
-  document.title = `多学科就医智助_${view}_${S.caseId}`;
+  document.title = `多学科就医准备单_${S.caseId}`;
   window.print();
   document.title = '多学科就医智助系统 · 患者端';
 }

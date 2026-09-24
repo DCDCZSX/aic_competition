@@ -316,6 +316,7 @@ details.sec > summary:focus-visible{outline:2px solid var(--accent);outline-offs
       transform:rotate(45deg);transition:transform .16s ease;}
 details.sec[open] .chev{transform:rotate(-135deg);}
 .sec-body{padding:var(--sp-12) var(--sp-16) var(--sp-16);}
+.print-report{display:none;}
 
 /* 4.9 三栏工作台（MDT / 分诊依据） */
 .mdt{display:grid;gap:var(--sp-16);grid-template-columns:1fr;}
@@ -458,5 +459,20 @@ details summary{cursor:pointer;color:var(--accent);font-size:var(--caption);marg
   .sec-hint,.chev,.doc-tools{display:none !important;}
   .doc{display:block;}
   .banner{border-width:1px;}
+  .report-screen{display:none !important;}
+  .print-report{display:block !important;}
+  .print-head{border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:12px;}
+  .print-head h2{margin:0 0 4px;font-size:22px;}
+  .print-intro{margin:0 0 14px;color:var(--ink2);}
+  .print-section{break-inside:avoid;margin:0 0 12px;padding:0 0 10px;border-bottom:1px solid var(--line);}
+  .print-section h3{margin:0 0 6px;font-size:15px;}
+  .print-section .field{margin:3px 0;padding:0;border:0;background:none;}
+  .print-section .def{margin:4px 0;}
+  .print-section .rec{margin:4px 0;padding:6px 8px;border:1px solid var(--line);border-radius:6px;}
+  .print-section ul.bullet{margin:4px 0 4px 18px;}
+  .print-section li{margin-bottom:3px;}
+  .print-step{break-inside:avoid;margin:5px 0;padding:6px 8px;border:1px solid var(--line);border-radius:6px;}
+  .print-step .pill{font-size:10px;padding:2px 6px;}
+  .print-disclaimer{font-size:10px;color:var(--ink3);margin-top:14px;}
   a[href]:after{content:"";}
 }

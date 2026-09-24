@@ -350,6 +350,9 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("sectionDigest", html, "折叠段应带内容摘要提示")
         self.assertIn("syncReportToggle", html)
         self.assertIn("openAllForPrint", html)
+        self.assertIn('class="report-screen"', html)
+        self.assertIn('class="print-report"', html)
+        self.assertIn("buildPrintReportHtml", html)
         # 打印前自动展开、打印后恢复
         self.assertRegex(html, r"addEventListener\(\s*'beforeprint'[^)]*\)")
         self.assertRegex(html, r"addEventListener\(\s*'afterprint'[^)]*\)")
@@ -364,6 +367,8 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("details.sec", print_block)
         self.assertIn(".sec-hint,.chev,.doc-tools", print_block.replace(" ", ""))
         self.assertIn("display:none !important", print_block.replace(" ", " "))
+        self.assertIn(".report-screen{display:none!important;}", print_block.replace(" ", ""))
+        self.assertIn(".print-report{display:block!important;}", print_block.replace(" ", ""))
 
     def test_patient_ui_has_no_internal_jargon(self):
         """患者端不出现内部代码与实现术语（前端评审 P0：降低认知负担）。"""

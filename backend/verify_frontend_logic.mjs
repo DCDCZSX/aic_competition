@@ -168,7 +168,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('收起后按钮文案回到「展开全部」', el('rep-toggle-all').textContent === '展开全部',
     el('rep-toggle-all').textContent);
 
-  /* 打印：必须打印完整报告，打印后恢复用户原来的折叠状态 */
+  /* 完整报告的屏幕折叠状态：打印版独立，打印后仍恢复原来的折叠状态 */
   fakeSecs[0].open = true;
   S.reportOpen = { 0: true };
   openAllForPrint();
@@ -179,7 +179,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   globalThis.document.querySelectorAll = realQSA;
 
   /* 完整报告 HTML：默认收起 + 目录与段落 id 对应 + 内容仍在 DOM 里 */
-  S.report = { summary: { stage_label: 'AI 就诊准备摘要', report_version: 1, review_status_label: 'AI 生成，尚未经医生审核', doctor_confirmed: false, case_id: 'C1234ABCD', generated_at: '2026-09-24', sections: { '主要问题': '视物模糊' } }, full: { sections: { '病例概况': '一句话概况', '检查与证据': ['条目一', '条目二'] },
+  S.report = { summary: { stage_label: 'AI 就诊准备摘要', report_version: 1, review_status_label: 'AI 生成，尚未经医生审核', doctor_confirmed: false, case_id: 'C1234ABCD', generated_at: '2026-09-24', sections: { '主要问题': '视物模糊', '建议咨询方向': '眼科', '当前任务': ['资料准备｜带上近期检查结果'], '需要向医生确认的问题': ['是否需要完善眼底检查'] } }, full: { sections: { '病例概况': '一句话概况', '检查与证据': ['条目一', '条目二'], '就医路径': [{ '步骤': 'S1', '类型': '资料准备', '内容': '带上近期检查结果' }] },
                        section_order: ['病例概况', '检查与证据'], complete: true } };
   S.reportOpen = {};
   switchReport('full');
@@ -188,6 +188,9 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   const summaryHtml = el('report-body').innerHTML;
   check('摘要默认显示 AI 就诊准备阶段', summaryHtml.includes('AI 就诊准备摘要') && summaryHtml.includes('版本 1'), '');
   check('摘要不把 AI 阶段写成医生审核版', !summaryHtml.includes('已发布医生审核版'), '');
+  check('打印版准备单保留行动信息', summaryHtml.includes('class="print-report"')
+    && summaryHtml.includes('患者就医准备单') && summaryHtml.includes('就医步骤')
+    && summaryHtml.includes('当前待办') && summaryHtml.includes('就诊时可问医生'), '');
 
   check('完整报告渲染成可折叠段落', (fullHtml.match(/<details class="sec"/g) || []).length === 2,
     String((fullHtml.match(/<details class="sec"/g) || []).length));
