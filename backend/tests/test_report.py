@@ -28,6 +28,7 @@ from services.report_service import (  # noqa: E402
     DISCLAIMER,
     REQUIRED_SECTIONS,
     build_both,
+    build_mdt_preparation_packet,
     build_full_report,
     build_patient_summary,
     render_markdown,
@@ -237,6 +238,47 @@ class TestPatientSummary(unittest.TestCase):
 
     def test_disclaimer_always_present(self):
         self.assertEqual(build_patient_summary(sample_case()).disclaimer, DISCLAIMER)
+
+
+class TestMdtPreparationPacket(unittest.TestCase):
+    def test_packet_collects_screening_sources_and_open_items(self):
+        case = sample_case_with_mdt()
+        case["payload"]["mdt_screening"] = {
+            "decision": "recommend_mdt",
+            "decision_label": "医生建议多学科共同评估",
+            "purpose": "明确眼底和肾功能的共同就医重点",
+            "departments": ["眼科", "肾内科"],
+            "reason": "资料涉及多个相关方向",
+            "status": "decided",
+        }
+
+        packet = build_mdt_preparation_packet(case)
+
+        self.assertEqual(packet["screening"]["purpose"], "明确眼底和肾功能的共同就医重点")
+        self.assertEqual(packet["screening"]["departments"], ["眼科", "肾内科"])
+        self.assertTrue(packet["timeline"])
+        self.assertTrue(packet["evidence"])
+        self.assertTrue(packet["information_gaps"])
+        self.assertTrue(packet["consensus"])
+        self.assertTrue(packet["disagreements"])
+        self.assertTrue(packet["open_questions"])
+
+    def test_packet_labels_specialty_content_and_never_copies_raw_history(self):
+        case = sample_case_with_mdt()
+        case["medical_history"] = "这段原始病史不应进入会前资料包"
+        case["payload"]["masked_history"] = "脱敏后的完整病史也不应被复制"
+
+        packet = build_mdt_preparation_packet(case)
+        specialty = packet["specialty_opinions"][0]
+
+        self.assertEqual(specialty["source_type"], "ai_reference")
+        self.assertEqual(specialty["source_label"], "专科 AI 参考意见")
+        self.assertNotIn("medical_history", packet)
+        self.assertNotIn("masked_history", packet)
+        serialized = json.dumps(packet, ensure_ascii=False)
+        self.assertNotIn("原始病史不应进入", serialized)
+        self.assertNotIn("脱敏后的完整病史也不应被复制", serialized)
+        self.assertNotIn("confidence", serialized)
 
 
 class TestFullReport(unittest.TestCase):

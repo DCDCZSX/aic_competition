@@ -57,6 +57,8 @@ METHOD_LLM = "llm"
 METHOD_LLM_REPAIRED = "llm_repaired"   # 输出有格式缺陷或被截断，已按已写出字段恢复
 METHOD_SKIPPED = "skipped"
 METHOD_FAILED = "failed"
+SOURCE_AI_REFERENCE = "ai_reference"
+SOURCE_AI_REFERENCE_LABEL = "专科 AI 参考意见"
 
 # 输出预算：实测 deepseek-chat 的血液科意见卡需要 ~2335 token，而默认的 2000 会把
 # JSON 截断（finish_reason=length）→ 非法 JSON → 整个科室被丢弃。这里给足余量。
@@ -125,7 +127,9 @@ class SpecialtyAnalysis:
     def to_dict(self) -> Dict[str, Any]:
         if self.card is None:
             return {"department": self.department, "status": "unavailable",
-                    "method": self.method, "error": self.error}
+                    "method": self.method, "error": self.error,
+                    "source_type": SOURCE_AI_REFERENCE,
+                    "source_label": SOURCE_AI_REFERENCE_LABEL}
         c = self.card
         return {
             "department": c.specialty_name,
@@ -138,6 +142,8 @@ class SpecialtyAnalysis:
             "referral": c.referral,
             "status": "ok",
             "method": self.method,
+            "source_type": SOURCE_AI_REFERENCE,
+            "source_label": SOURCE_AI_REFERENCE_LABEL,
             # 卡片可用但有需要如实说明的情况（如"输出被截断，已按已写出字段恢复"）
             "notice": self.error,
         }

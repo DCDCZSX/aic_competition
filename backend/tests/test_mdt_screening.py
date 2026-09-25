@@ -185,6 +185,9 @@ class MdtScreeningHttpTest(unittest.TestCase):
         review = self.client.get("/api/v2/case/C-MDT/review", headers=self._headers(doctor))
         self.assertEqual(review.status_code, 200)
         self.assertEqual(review.get_json()["mdt_screening"]["decision"], "recommend_mdt")
+        packet = review.get_json()["mdt_preparation_packet"]
+        self.assertEqual(packet["screening"]["purpose"], "明确眼底和代谢问题的就医重点")
+        self.assertNotIn("masked_history", json.dumps(packet, ensure_ascii=False))
 
         patient = self._token("alice", "alice-password")
         case = self.client.get("/api/v2/case/C-MDT", headers=self._headers(patient))
