@@ -44,6 +44,20 @@ UNCERTAIN = "uncertain"
 # 与"医生已接受"必须严格区分 —— 报告、审计都不能把它写成医生确认过（红线）。
 AUTO_PROCESSED = "auto_processed"
 
+# 审核责任分级。当前比赛版只有现有的明确自动处理规则；没有经过临床/产品
+# 审核的新规则不会把条目降为抽查或自动处理。
+REQUIRED = "required"
+SAMPLE = "sample"
+AUTOMATIC = "automatic"
+REVIEW_TIERS = (REQUIRED, SAMPLE, AUTOMATIC)
+REVIEW_TIER_LABELS: Dict[str, str] = {
+    REQUIRED: "必审",
+    SAMPLE: "建议抽查",
+    AUTOMATIC: "自动处理",
+}
+UNKNOWN_TIER_REASON = "未匹配已审核的分级规则，默认必审"
+REQUIRED_GENERIC_REASON = "该条目需要医生确认"
+
 ITEM_STATES = (AWAITING, CONFIRMED, MODIFIED, REJECTED, UNCERTAIN, AUTO_PROCESSED)
 ITEM_STATE_LABELS: Dict[str, str] = {
     AWAITING: "待审",
@@ -123,6 +137,31 @@ class ReviewItem:
     decision_id: str = ""
     needs_doctor_review: bool = True
     auto_reason: str = ""                            # 规则判定免审时的原因（仅派生态有值）
+    review_tier: str = REQUIRED
+    tier_reason: str = ""
+    high_risk: bool = False
+    conflict: bool = False
+    analysis_failed: bool = False
+
+    def __post_init__(self) -> None:
+        """规范化分级；未知值必须回到必审，避免静默放行。"""
+        tier = str(self.review_tier or REQUIRED)
+        if tier not in REVIEW_TIERS:
+            tier = REQUIRED
+            self.tier_reason = self.tier_reason or UNKNOWN_TIER_REASON
+        self.review_tier = tier
+        if not self.tier_reason:
+            self.tier_reason = (
+                AUTO_PROCESSED_REASON if tier == AUTOMATIC else
+                "经审核的抽查规则" if tier == SAMPLE else
+                REQUIRED_GENERIC_REASON
+            )
+        if tier != REQUIRED and (self.high_risk or self.conflict or self.analysis_failed):
+            tier = REQUIRED
+            self.review_tier = tier
+            self.tier_reason = "存在风险、冲突或分析失败，必须由医生处理"
+        # 分级是审核责任的单一来源；保留 needs_doctor_review 作为旧接口兼容字段。
+        self.needs_doctor_review = tier == REQUIRED
 
     @property
     def final_content(self) -> str:
@@ -139,6 +178,31 @@ class ReviewItem:
     def changed_by_doctor(self) -> bool:
         """是否被医生改写（报告里用 after、审核记录里保留 before）。"""
         return bool(self.state == MODIFIED and self.reviewer_content)
+
+    @property
+    def review_tier_label(self) -> str:
+        return REVIEW_TIER_LABELS.get(self.review_tier, REVIEW_TIER_LABELS[REQUIRED])
+
+    @property
+    def batch_block_reason(self) -> str:
+        """返回不能被批量接受的原因；空字符串表示可批量处理。"""
+        if self.review_tier != REQUIRED:
+            return ""
+        if self.high_risk:
+            return "高风险条目必须逐条处理"
+        if self.conflict:
+            return "冲突或分歧条目必须逐条处理"
+        if self.analysis_failed:
+            return "分析失败条目必须逐条处理"
+        if self.target_type == "department_selection":
+            return "科室选择必须逐条确认"
+        if self.target_type == "path_step":
+            return "关键路径步骤必须逐条确认"
+        return ""
+
+    @property
+    def batch_eligible(self) -> bool:
+        return not self.batch_block_reason
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -160,6 +224,14 @@ class ReviewItem:
             "changed_by_doctor": self.changed_by_doctor,
             "needs_doctor_review": self.needs_doctor_review,
             "auto_reason": _clean(self.auto_reason),
+            "review_tier": self.review_tier,
+            "review_tier_label": self.review_tier_label,
+            "tier_reason": _clean(self.tier_reason),
+            "high_risk": self.high_risk,
+            "conflict": self.conflict,
+            "analysis_failed": self.analysis_failed,
+            "batch_eligible": self.batch_eligible,
+            "batch_block_reason": _clean(self.batch_block_reason),
         }
 
 
@@ -205,6 +277,9 @@ def build_items(case: Any) -> List[ReviewItem]:
             reason_hint=str(step.get("detail") or ""),
             evidence_refs=[],
             needs_doctor_review=bool(step.get("requires_doctor")),
+            review_tier=REQUIRED if step.get("requires_doctor") else AUTOMATIC,
+            tier_reason=("该路径步骤明确要求医生处理"
+                         if step.get("requires_doctor") else AUTO_PROCESSED_REASON),
         ))
 
     # ---- ③ 共识 / 分歧 ----
@@ -225,6 +300,8 @@ def build_items(case: Any) -> List[ReviewItem]:
             ai_content=str(entry.get("example") or topic),
             reason_hint="多科室在同一方向上一致（" + "、".join(entry.get("supporters") or []) + "）",
             evidence_refs=refs,
+            review_tier=REQUIRED,
+            tier_reason="共识内容仍需医生确认",
         ))
     for idx, entry in enumerate(agg.get("disagreements") or [], start=1):
         topic = str(entry.get("topic") or "")
@@ -244,6 +321,9 @@ def build_items(case: Any) -> List[ReviewItem]:
             reason_hint=str(entry.get("resolving_info") or "需医生裁决"),
             evidence_refs=["证据状态：conflict"],
             needs_doctor_review=True,
+            review_tier=REQUIRED,
+            tier_reason="存在未解决分歧，必须由医生裁决",
+            conflict=True,
         ))
     for idx, question in enumerate(agg.get("open_questions") or [], start=1):
         text = str(question)
@@ -256,6 +336,8 @@ def build_items(case: Any) -> List[ReviewItem]:
             title="待医生确认问题",
             ai_content=text,
             reason_hint="由多学科分析聚合产出",
+            review_tier=REQUIRED,
+            tier_reason="待医生确认的问题不能自动处理",
         ))
 
     # ---- ④ 患者建议（来自一页摘要的可审核段落）----
@@ -278,8 +360,11 @@ def build_items(case: Any) -> List[ReviewItem]:
                 title=f"患者建议：{section}",
                 ai_content=text,
                 reason_hint="来自一页就医摘要",
+                review_tier=REQUIRED,
+                tier_reason="患者建议需要医生确认",
             ))
 
+    _annotate_item_flags(items, payload)
     return items
 
 
@@ -294,7 +379,99 @@ def _dept_item(case_id: str, dept: str, pick: Dict[str, Any], *, role_label: str
         reason_hint=str(pick.get("reason") or "；".join(signals)),
         evidence_refs=[f"命中信号：{s}" for s in signals],
         needs_doctor_review=True,
+        review_tier=REQUIRED,
+        tier_reason="科室选择必须由医生逐条确认",
+        high_risk=bool(pick.get("high_risk") or pick.get("risk_level") in ("高", "high")),
+        conflict=bool(pick.get("conflict")),
     )
+
+
+def _is_failed_state(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"failed", "partial_failed", "error"}
+
+
+def _annotate_item_flags(items: Sequence[ReviewItem], payload: Dict[str, Any]) -> None:
+    """把病例级风险、冲突和分析失败标记映射到审核条目。
+
+    这里只使用可解释的结构化字段，不使用模型置信度作为免审依据。
+    """
+    triage = payload.get("triage") or {}
+    mdt = payload.get("mdt") or {}
+    aggregation = mdt.get("aggregation") or {}
+    reliability = (triage.get("reliability") or {}).get("level")
+    high_risk = bool(
+        triage.get("high_risk") or triage.get("risk_flags") or
+        payload.get("high_risk") or payload.get("risk_flags") or
+        triage.get("risk_level") in ("高", "high") or
+        payload.get("risk_level") in ("高", "high") or reliability == "低"
+    )
+
+    conflict_departments = {
+        str(entry.get("department") or "")
+        for entry in (triage.get("conflicts") or [])
+        if entry.get("department")
+    }
+    for entry in aggregation.get("disagreements") or []:
+        conflict_departments.update(str(dep) for dep in (entry.get("positions") or {}) if dep)
+
+    analysis = payload.get("analysis") or {}
+    analysis_mdt = analysis.get("mdt") or {}
+    gaps = [str(gap).strip() for gap in (payload.get("gaps") or []) if str(gap).strip()]
+    phase_states = [
+        (phase or {}).get("state")
+        for phase in (analysis.get("phases") or {}).values()
+    ]
+    global_analysis_failed = _is_failed_state(analysis.get("state")) or any(
+        _is_failed_state(state) for state in phase_states
+    ) or _is_failed_state(analysis_mdt.get("state")) or _is_failed_state(mdt.get("state"))
+    failed_departments = {
+        str(entry.get("department") or "")
+        for entry in (mdt.get("analyses") or [])
+        if entry.get("department") and entry.get("status") not in (None, "ok")
+    }
+    failed_departments.update(
+        str(department) for department in (analysis_mdt.get("failed") or []) if str(department).strip()
+    )
+    global_analysis_failed = bool(global_analysis_failed or failed_departments)
+
+    for item in items:
+        item.high_risk = bool(item.high_risk or high_risk)
+        item.conflict = bool(
+            item.conflict or
+            (item.target_type == "department_selection" and item.target_id in conflict_departments) or
+            (item.target_type == "patient_advice" and "分歧" in item.ai_content)
+        )
+        item.analysis_failed = bool(
+            item.analysis_failed or
+            (item.target_type == "department_selection" and item.target_id in failed_departments) or
+            (global_analysis_failed and (
+                not failed_departments or item.target_type != "department_selection"
+            ))
+        )
+
+        item_text = " ".join((item.title, item.ai_content, item.reason_hint))
+        gap_match = False
+        for gap in gaps:
+            label = re.split(r"[:：]", gap, maxsplit=1)[0].strip()
+            # 带字段名的缺口只影响相关条目；没有字段名的缺口按未知情况处理，
+            # 不能让自动规则静默放行。
+            if (label and label in item_text) or (not re.search(r"[:：]", gap)):
+                gap_match = True
+                break
+
+        critical_reason = ""
+        if item.high_risk:
+            critical_reason = "存在高风险标记，必须由医生处理"
+        elif item.conflict:
+            critical_reason = "存在冲突或分歧，必须由医生处理"
+        elif item.analysis_failed:
+            critical_reason = "相关分析未完成，必须由医生处理"
+        elif gap_match:
+            critical_reason = "存在资料缺口，必须由医生处理"
+        if critical_reason and item.review_tier != REQUIRED:
+            item.review_tier = REQUIRED
+            item.needs_doctor_review = True
+            item.tier_reason = critical_reason
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +499,7 @@ def apply_decisions(items: Sequence[ReviewItem],
     """
     by_id = latest_decisions(decisions)
     for item in items:
+        item.auto_reason = ""
         decision = by_id.get(item.item_id)
         if not decision:
             continue
@@ -334,27 +512,45 @@ def apply_decisions(items: Sequence[ReviewItem],
         item.decided_at = str(decision.get("created_at") or "")
         item.decision_id = str(decision.get("decision_id") or "")
     for item in items:
-        if not item.needs_doctor_review and not item.decision_id:
+        has_decision = item.item_id in by_id
+        if item.review_tier == AUTOMATIC and not has_decision:
             item.state = AUTO_PROCESSED
-            item.auto_reason = AUTO_PROCESSED_REASON
+            item.auto_reason = item.tier_reason or AUTO_PROCESSED_REASON
+        elif item.review_tier in (REQUIRED, SAMPLE) and not has_decision:
+            item.state = AWAITING
     return list(items)
 
 
 def summarize(items: Sequence[ReviewItem]) -> Dict[str, Any]:
     """审核进度概览（待审红点 / 底部发布条件）。
 
-    `pending` 只统计**必审且未处理**的条目：规则判定免审的条目不该计入待审，
-    更不该阻塞发布（修复前它们会，实测占条目 21.9%）。
+    `pending` 只统计**必审且未处理**的条目：建议抽查和自动处理不会阻塞发布，
+    但建议抽查仍单独显示为待抽查。
     """
     counts = {state: 0 for state in ITEM_STATES}
     for item in items or []:
         counts[item.state] = counts.get(item.state, 0) + 1
     total = len(items or [])
-    pending = sum(1 for i in items or [] if i.needs_doctor_review and i.state == AWAITING)
+    tier_counts = {
+        tier: sum(1 for item in items or [] if item.review_tier == tier)
+        for tier in REVIEW_TIERS
+    }
+    pending = sum(1 for i in items or []
+                  if i.review_tier == REQUIRED and i.state == AWAITING)
+    sample_pending = sum(1 for i in items or []
+                         if i.review_tier == SAMPLE and i.state == AWAITING)
     # "医生已处理" = 医生这次决定**仍然生效**（终态）；被撤销回到待审的条目不能既算待审又算已处理
     doctor_reviewed = sum(1 for i in items or []
                           if i.decision_id and i.state in TERMINAL_STATES)
     auto_processed = counts.get(AUTO_PROCESSED, 0)
+    high_risk = sum(1 for i in items or [] if i.high_risk)
+    conflict = sum(1 for i in items or [] if i.conflict)
+    analysis_failed = sum(1 for i in items or [] if i.analysis_failed)
+    batch_blocked = sum(1 for i in items or []
+                        if i.review_tier == REQUIRED and not i.batch_eligible)
+    batch_blocked_pending = sum(1 for i in items or []
+                                if i.review_tier == REQUIRED and i.state == AWAITING
+                                and not i.batch_eligible)
     blocking: List[str] = []
     if total == 0:
         blocking.append("该病例暂无决策条目")
@@ -366,12 +562,23 @@ def summarize(items: Sequence[ReviewItem]) -> Dict[str, Any]:
         "pending": pending,
         "doctor_reviewed": doctor_reviewed,
         "auto_processed": auto_processed,
+        "tier_counts": tier_counts,
+        # 平铺字段方便队列摘要和旧版前端读取。
+        "required": tier_counts[REQUIRED],
+        "sample": tier_counts[SAMPLE],
+        "automatic": tier_counts[AUTOMATIC],
+        "sample_pending": sample_pending,
+        "high_risk": high_risk,
+        "conflict": conflict,
+        "analysis_failed": analysis_failed,
+        "batch_blocked": batch_blocked,
+        "batch_blocked_pending": batch_blocked_pending,
         # 兼容字段：语义收紧为"医生真正处理过"（此前把免审放行也算进去，分不清人和规则）
         "human_touched": doctor_reviewed,
-        "all_resolved": total > 0 and pending == 0,
+        "all_resolved": total > 0 and pending == 0 and sample_pending == 0,
         "can_publish": total > 0 and pending == 0,
         "blocking_reasons": blocking,
-        "progress": round((total - pending) / total, 2) if total else 0.0,
+        "progress": round((total - pending - sample_pending) / total, 2) if total else 0.0,
     }
 
 

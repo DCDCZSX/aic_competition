@@ -265,6 +265,17 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("doctor_reviewed", html)
         self.assertIn("免审（自动）", html)
 
+    def test_doctor_review_template_exposes_review_tiers_and_risk_counts(self):
+        _, html = self.get("/doctor")
+        for token in (
+            "review_tier", "tier_reason", "tier_counts", "建议抽查",
+            "必审", "自动处理", "高风险", "冲突", "分析失败",
+        ):
+            self.assertIn(token, html, f"医生审核分级缺少：{token}")
+        self.assertIn("review_tier==='required'", html)
+        self.assertIn("review_tier==='sample'", html)
+        self.assertIn("review_tier==='automatic'", html)
+
     # ------------------------------------------------------------------ 4. 合规
     def test_login_pages_are_full_bleed_two_column(self):
         """登录页必须铺满视口并分两栏（左进入方式 / 右产品说明）。

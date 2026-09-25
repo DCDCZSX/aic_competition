@@ -845,6 +845,7 @@ def list_review_cases():
         'has_more': page['has_more'],
         'filters': page['filters'],
         'sorts': page['sorts'],
+        'review_summary': page.get('review_summary') or {},
         'reviewer': session.to_dict(include_token=False),
     })
 

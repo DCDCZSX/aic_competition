@@ -466,7 +466,14 @@ class TestEndToEnd(unittest.TestCase):
         before = self.flow.build_reports(r.case_id)["full"]["sections"]["审核记录与版本"]
         self.assertEqual(before.get("免审条目"), "0 条")
         # 发布后：免审条数如实单列，且写明"未计入医生审核"
-        self.flow.publish_review(r.case_id, reviewer_name="医学生", accept_all=True)
+        review = self.flow.get_review(r.case_id)
+        for item in (review or {}).get("items", []):
+            if item["review_tier"] == "required" and item["state"] == "awaiting":
+                result = self.flow.submit_decision(
+                    r.case_id, item["item_id"], "accept", reviewer_name="医学生")
+                self.assertTrue(result["ok"], result.get("error"))
+        published = self.flow.publish_review(r.case_id, reviewer_name="医学生")
+        self.assertTrue(published["ok"], published.get("error"))
         after = self.flow.build_reports(r.case_id)["full"]["sections"]["审核记录与版本"]
         self.assertIn(f"{auto} 条", str(after.get("免审条目")))
         self.assertIn("未计入医生审核", str(after.get("免审条目")))

@@ -1535,7 +1535,9 @@ class CaseFlow:
         """
         if not self.store:
             return {"rows": [], "total": 0, "has_more": False,
-                    "filters": {}, "sorts": list(self.QUEUE_SORTS)}
+                    "filters": {}, "sorts": list(self.QUEUE_SORTS),
+                    "review_summary": {"required": 0, "sample": 0, "automatic": 0,
+                                       "high_risk": 0, "conflict": 0, "analysis_failed": 0}}
 
         rows: List[Dict[str, Any]] = []
         # 授权筛选尽量下推到 SQLite，避免审核员每次打开队列都读取全库病例。
@@ -1586,6 +1588,12 @@ class CaseFlow:
                 "chief_complaint": profile.get("chief_complaint") or case.get("main_issue") or "",
                 "pending_items": int(summary.get("pending") or 0),
                 "exempt_items": int(summary.get("auto_processed") or 0),
+                "required_items": int(summary.get("required") or 0),
+                "sample_items": int(summary.get("sample") or 0),
+                "automatic_items": int(summary.get("automatic") or 0),
+                "high_risk_items": int(summary.get("high_risk") or 0),
+                "conflict_items": int(summary.get("conflict") or 0),
+                "analysis_failed_items": int(summary.get("analysis_failed") or 0),
                 "conflict_count": conflict_count,
                 "gap_count": gap_count,
                 "risk_level": risk_level,
@@ -1609,6 +1617,14 @@ class CaseFlow:
             rows = [r for r in rows if r["case_state"] == state_filter]
         if department:
             rows = [r for r in rows if r.get("primary_department") == department]
+        review_summary = {
+            "required": sum(int(r.get("required_items") or 0) for r in rows),
+            "sample": sum(int(r.get("sample_items") or 0) for r in rows),
+            "automatic": sum(int(r.get("automatic_items") or 0) for r in rows),
+            "high_risk": sum(int(r.get("high_risk_items") or 0) for r in rows),
+            "conflict": sum(int(r.get("conflict_items") or 0) for r in rows),
+            "analysis_failed": sum(int(r.get("analysis_failed_items") or 0) for r in rows),
+        }
         # 筛选计数使用当前状态/科室范围，但不受当前 filter_kind 影响，
         # 这样左轨可以告诉医生切换筛选后预计有多少病例，而不会把计数显示成误导性的 0。
         filter_counts = {
@@ -1663,6 +1679,7 @@ class CaseFlow:
             "has_more": bool(safe_limit is not None and safe_offset + safe_limit < total),
             "filters": filter_counts,
             "sorts": list(self.QUEUE_SORTS),
+            "review_summary": review_summary,
         }
 
     def get_review(self, case_id: str) -> Optional[Dict[str, Any]]:
@@ -1765,6 +1782,7 @@ class CaseFlow:
           （不是静默通过：每条都落一条决策记录）；
         - **规则判定免审的条目不计入待审、也不阻塞发布**（修复前它们会，实测占条目 21.9%），
           且**不得**被批量记成"医生接受"；
+        - 批量接受遇到高风险、冲突、分析失败、科室选择或关键路径项目时直接停用，必须逐条处理；
         - 发布后病例状态 `doctor_confirmed`、`report_version + 1`、审计留痕。
         """
         case = self.store.load_case(case_id) if self.store else None
@@ -1785,6 +1803,17 @@ class CaseFlow:
 
         accepted_ids: List[str] = []
         if pending and accept_all:
+            blocked = [item for item in pending if not item.batch_eligible]
+            if blocked:
+                return {
+                    "ok": False,
+                    "error": "高风险、冲突、分析失败、科室选择和关键路径条目必须逐条处理，不能批量接受",
+                    "pending_items": [item.item_id for item in pending],
+                    "batch_blocked_items": [
+                        {"item_id": item.item_id, "reason": item.batch_block_reason}
+                        for item in blocked
+                    ],
+                }
             for item in pending:
                 result = self.submit_decision(
                     case_id, item.item_id, "accept",

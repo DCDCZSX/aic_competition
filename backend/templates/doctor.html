@@ -399,11 +399,17 @@ async function loadList(options){
   if(r.status!==200){ $('list-body').innerHTML = `<div class="banner danger">${esc(r.data.error||'加载失败')}</div>`; return; }
   S.cases = r.data.cases || [];
   S.queue.total=Number(r.data.total||0); S.queue.hasMore=!!r.data.has_more;
-  S.queueMeta={filters:r.data.filters||{}, sorts:r.data.sorts||{}};
+  S.queueMeta={filters:r.data.filters||{}, sorts:r.data.sorts||{}, reviewSummary:r.data.review_summary||{}};
   if($('f-state')) $('f-state').value=state;
   if($('f-sort')) $('f-sort').value=sort;
   if($('f-page-size')) $('f-page-size').value=String(pageSize);
-  $('list-note').textContent = S.queue.total ? `第 ${S.queue.page} 页 · 风险优先展示高风险和待医生处理项` : '暂无匹配病例';
+  const queueSummary=S.queueMeta.reviewSummary||{};
+  const tierNote = S.queue.total
+    ? `必审 ${Number(queueSummary.required||0)} · 建议抽查 ${Number(queueSummary.sample||0)} · 自动处理 ${Number(queueSummary.automatic||0)} · 高风险 ${Number(queueSummary.high_risk||0)} · 冲突 ${Number(queueSummary.conflict||0)} · 分析失败 ${Number(queueSummary.analysis_failed||0)}`
+    : '';
+  $('list-note').textContent = S.queue.total
+    ? `第 ${S.queue.page} 页 · 风险优先展示高风险和待医生处理项 · ${tierNote}`
+    : '暂无匹配病例';
   renderQueueFilters();
   if(!S.cases.length){
     $('list-body').innerHTML = '<div class="banner warn">暂无匹配病例。可切换筛选条件，或先在患者端提交一份就诊资料。</div>';
@@ -412,13 +418,18 @@ async function loadList(options){
   const rows = S.cases.map(c=>{
     const risk=String(c.risk_level||'low'), riskLabel={high:'高风险',medium:'中风险',low:'低风险'}[risk]||risk;
     const pending=Number(c.pending_items||0), exempt=Number(c.exempt_items||0);
+    const required=Number(c.required_items||0), sample=Number(c.sample_items||0), automatic=Number(c.automatic_items||0);
+    const highRisk=Number(c.high_risk_items||0), conflicts=Number(c.conflict_items||0), analysisFailed=Number(c.analysis_failed_items||0);
     return `<div class="queue-row" tabindex="0" role="button" onclick="openCase('${esc(c.case_id)}')" onkeydown="if(event.key==='Enter'||event.key===' ')openCase('${esc(c.case_id)}')">
       <div class="q-id">#${esc(c.case_id)}<div class="tiny">${esc(c.sex||'—')} · ${esc(c.age||'—')}</div></div>
       <div class="q-main"><strong>${esc(c.primary_department||'待分诊')}</strong><div class="muted" title="${esc(c.chief_complaint||'')}">${esc(c.chief_complaint||'（未提供主诉）')}</div></div>
       <div class="q-risk ${esc(risk)}"><span class="pill ${risk==='high'?'danger':(risk==='medium'?'warn':'ok')}">${esc(riskLabel)}</span>${c.conflict_count?`<div class="tiny">分歧 ${esc(c.conflict_count)}</div>`:''}</div>
       <div><span class="pill ${c.reliability==='高'?'ok':(c.reliability==='中'?'warn':'danger')}">${esc(c.reliability||'—')}</span></div>
       <div>${analysisBadge(c)}</div>
-      <div>${pending?`<span class="pill danger"><span class="dot"></span>必审 ${pending}</span>`:`<span class="pill ok">已处理</span>`}${exempt?`<div class="tiny">免审 ${exempt}</div>`:''}</div>
+      <div>${pending?`<span class="pill danger"><span class="dot"></span>必审 ${pending}</span>`:`<span class="pill ok">已处理</span>`}
+        <div class="tiny">必审 ${required} · 建议抽查 ${sample} · 自动处理 ${automatic}</div>
+        ${(highRisk||conflicts||analysisFailed)?`<div class="tiny">${highRisk?`高风险 ${highRisk}　`:''}${conflicts?`冲突 ${conflicts}　`:''}${analysisFailed?`分析失败 ${analysisFailed}`:''}</div>`:''}
+        ${exempt?`<div class="tiny">免审 ${exempt}</div>`:''}</div>
       <div class="tiny">${esc(c.updated_at||c.created_at||'—')}<div>${esc(c.case_state_label||c.case_state||'')}</div></div>
     </div>`;
   }).join('');
@@ -803,6 +814,7 @@ function renderReview(){
   const sum = r.summary||{};
   const stateCls = {'awaiting':'st-awaiting','confirmed':'st-confirmed','modified':'st-modified','rejected':'st-rejected','uncertain':'st-uncertain','auto_processed':'st-auto'};
   const byState = sum.by_state||{};
+  const tierCounts = sum.tier_counts||{};
   const doctorReviewed = Number(sum.doctor_reviewed!=null ? sum.doctor_reviewed : (sum.human_touched||0));
   const autoProcessed = Number(sum.auto_processed||byState.auto_processed||0);
   const bar = $('rev-bar'), note = $('rev-note');
@@ -820,7 +832,9 @@ function renderReview(){
       已驳回 ${byState.rejected||0}　暂不确定 ${byState.uncertain||0}　
       免审（自动） ${autoProcessed}　（医生已处理 ${doctorReviewed}/${sum.total||0}）
       ${S.extraQuestion?`<div class="tiny">已从 MDT 审阅台加入待确认问题：${esc(S.extraQuestion)}（可在下方对应分歧条目上操作）</div>`:''}
-    </div>`;
+    </div>
+    <div class="tiny" style="margin-top:8px;">审核分级：必审 ${Number(tierCounts.required||sum.required||0)} · 建议抽查 ${Number(tierCounts.sample||sum.sample||0)} · 自动处理 ${Number(tierCounts.automatic||sum.automatic||0)}</div>
+    <div class="tiny">风险提示：高风险 ${Number(sum.high_risk||0)} · 冲突 ${Number(sum.conflict||0)} · 分析失败 ${Number(sum.analysis_failed||0)}</div>`;
   if(!items.length){
     $('rev-body').innerHTML = '<div class="banner warn">该病例暂无决策条目（需先完成分诊与路径生成）。</div>';
     $('rev-publish').innerHTML = '';
@@ -828,7 +842,11 @@ function renderReview(){
     return;
   }
   const typeLabel = {'department_selection':'科室入选','path_step':'路径步骤','consensus_item':'共识/分歧','patient_advice':'患者建议'};
+  // API 分级值固定为 review_tier==='required'、review_tier==='sample'、review_tier==='automatic'。
+  const tierOf = it=>it.review_tier || (it.needs_doctor_review===false?'automatic':'required');
+  const tierLabel = {required:'必审', sample:'建议抽查', automatic:'自动处理'};
   function itemMarkup(it, index, compact){
+    const tier = tierOf(it);
     const tone=it.state==='confirmed'||it.state==='modified'?'ok':(it.state==='rejected'?'danger':(it.state==='uncertain'?'warn':(it.state==='auto_processed'?'info':'gray')));
     const actions = compact
       ? `<button class="primary mini" onclick="decide('${esc(it.item_id)}','accept')">接管并确认</button>
@@ -842,6 +860,7 @@ function renderReview(){
     return `<div class="item ${stateCls[it.state]||''}" data-state="${esc(it.state)}">
       <div class="head"><div><strong>${index}. ${esc(it.title)}</strong>
         <span class="pill gray">${esc(typeLabel[it.target_type]||it.target_type)}</span>
+        <span class="pill ${tier==='required'?'danger':(tier==='sample'?'warn':'info')}">${esc(it.review_tier_label||tierLabel[tier]||tier||'必审')}</span>
         <span class="pill ${tone}">${esc(it.state_label)}</span>
         ${it.changed_by_doctor?'<span class="pill ok">医生已改写</span>':''}
       </div><div class="tiny mono">${esc(it.item_id)}</div></div>
@@ -850,18 +869,23 @@ function renderReview(){
         ${it.changed_by_doctor?`<div class="diff">医生改写为：${esc(it.reviewer_content)}<div class="tiny">原因：${esc(it.decision_reason)}</div></div>`:''}
         ${it.reason_hint?`<div class="field"><div class="muted" style="min-width:66px;">依据</div><div style="flex:1;" class="tiny">${esc(it.reason_hint)}</div></div>`:''}
         ${(it.evidence_refs||[]).length?`<div class="field"><div class="muted" style="min-width:66px;">证据</div><div style="flex:1;">${it.evidence_refs.map(x=>`<span class="ref">${esc(x)}</span>`).join(' ')}</div></div>`:''}
+        <div class="tiny">分级依据：${esc(it.tier_reason||'未匹配已审核规则，默认必审')}</div>
+        ${(it.high_risk||it.conflict||it.analysis_failed)?`<div class="tiny" style="color:var(--danger);">${it.high_risk?'高风险　':''}${it.conflict?'存在冲突　':''}${it.analysis_failed?'分析失败':''}</div>`:''}
+        ${it.batch_block_reason?`<div class="tiny" style="color:var(--warn);">批量处理限制：${esc(it.batch_block_reason)}</div>`:''}
         ${it.auto_reason?`<div class="tiny">自动处理依据：${esc(it.auto_reason)}（医生可接管）</div>`:''}
         ${it.decision_reason&&!it.changed_by_doctor?`<div class="tiny">审核记录：${esc(it.state_label)}｜原因：${esc(it.decision_reason)}｜${esc(it.reviewer||'')} ${esc(it.decided_at||'')}</div>`:''}
       </div><div class="btnbar">${actions}</div>
     </div>`;
   }
-  const pending=items.filter(it=>it.needs_doctor_review && it.state==='awaiting');
-  const auto=items.filter(it=>it.state==='auto_processed' || (!it.needs_doctor_review && !it.decision_id));
-  const processed=items.filter(it=>!pending.includes(it) && !auto.includes(it));
+  const pending=items.filter(it=>tierOf(it)==='required' && it.state==='awaiting');
+  const sample=items.filter(it=>tierOf(it)==='sample' && it.state==='awaiting');
+  const auto=items.filter(it=>tierOf(it)==='automatic' && (it.state==='auto_processed' || !it.decision_id));
+  const processed=items.filter(it=>!pending.includes(it) && !sample.includes(it) && !auto.includes(it));
   const group=(title, list, open, cls, compact)=>list.length?`<details class="review-group ${cls||''}" ${open?'open':''}><summary><span>${title}</span><span class="tiny">${list.length} 条</span></summary>${list.map((it,i)=>itemMarkup(it, items.indexOf(it)+1, compact)).join('')}</details>`:'';
   $('rev-body').innerHTML = group('需要医生决定', pending, true, 'pending', false)
+    + group('建议抽查', sample, false, 'sample', false)
     + group('已完成审核', processed, false, 'processed', false)
-    + group('免审（自动）', auto, false, 'auto', true);
+    + group('自动处理', auto, false, 'auto', true);
 
   const canPublish = sum.pending===0 && sum.total>0;
   /* 同一份面板渲染到两处：右轨（≥1440px 常驻）+ 屏 F 主区（窄屏时右轨被隐藏）。
@@ -874,14 +898,17 @@ function renderReview(){
 /* 发布审核版 + 录入线下意见（两处入口共用同一份 HTML 与同一套接口） */
 function publishPanelHtml(sum, canPublish, pfx){
   sum = sum || {};
+  const batchBlockedPending = Number(sum.batch_blocked_pending||0);
+  const batchAllowed = !batchBlockedPending;
   return `
     <div class="card" style="margin-top:6px;">
       <h3 style="margin-top:0;">发布审核版报告</h3>
       <div class="tiny">审核进度：医生已处理 ${sum.doctor_reviewed||sum.human_touched||0}　免审（自动） ${sum.auto_processed||0}　待审 ${sum.pending||0}</div>
-      <div class="tiny">规则：免审条目不会计入医生确认；仅剩必审条目时，医生可逐条处理或批量接受并发布，所有批量操作仍会留痕。</div>
+      <div class="tiny">规则：免审条目不会计入医生确认；批量处理只适用于已明确允许批量的条目，高风险、冲突、分析失败、科室选择和关键路径必须逐条处理。</div>
+      ${batchBlockedPending?`<div class="tiny" style="color:var(--warn);">当前有 ${batchBlockedPending} 条必审项目必须逐条处理，批量入口已停用。</div>`:''}
       <div class="actions">
         <button class="mini" onclick="publish(false)" ${canPublish?'':'disabled'}>确认发布审核版（${sum.pending||0} 条待审）</button>
-        <button class="primary mini" onclick="publish(true)" ${sum.total?'':'disabled'}>处理剩余必审并发布</button>
+        <button class="primary mini" onclick="publish(true)" ${sum.total&&batchAllowed?'':'disabled'}>处理剩余必审并发布</button>
       </div>
       <h3>录入线下实际意见（就诊后闭环）</h3>
       <div class="tiny">由医生端录入线下真实医生意见（来源=医生上传），用于生成「AI 建议 vs 医生意见」对照；患者端不承担"替医生写意见"。</div>
