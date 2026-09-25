@@ -10,6 +10,7 @@ from unittest import mock
 import app as app_module
 from services.auth import AuthService, ROLE_DOCTOR, ROLE_PATIENT
 from services.case_flow import CaseFlow
+from services.intake import MAX_MAIN_ISSUE_LENGTH
 from services.store import Store
 
 
@@ -142,6 +143,13 @@ class HttpInputHardeningTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json().get("code"), "invalid_json")
 
+        response = self.client.post(
+            "/api/v2/preview", headers=headers,
+            json={"medical_history": "正常资料", "main_issue": "问" * (MAX_MAIN_ISSUE_LENGTH + 1)},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json().get("code"), "invalid_request")
+
     def test_oversized_json_is_json_413_before_business_processing(self):
         headers = self._headers()
         limit = app_module.app.config.get("MAX_CONTENT_LENGTH")
@@ -222,6 +230,74 @@ class HttpInputHardeningTest(unittest.TestCase):
             with self.assertRaises(Exception) as ctx:
                 auth.login(username="alice", password="alice-password", client_key="ip")
             self.assertIn("账号或密码", str(ctx.exception))
+
+    def test_login_throttle_returns_http_429_with_retry_after(self):
+        with mock.patch.dict(os.environ, {
+            "APP_LOGIN_MAX_FAILURES": "2",
+            "APP_LOGIN_COOLDOWN_SECONDS": "60",
+        }):
+            app_module.auth_service = AuthService(accounts=ACCOUNTS)
+            for _ in range(2):
+                response = self.client.post("/api/login", json={
+                    "username": "alice", "password": "wrong-password",
+                })
+                self.assertEqual(response.status_code, 401, response.get_json())
+                self.assertEqual(response.get_json().get("code"), "invalid_credentials")
+                self.assertIn("账号或密码", response.get_json().get("error", ""))
+
+            response = self.client.post("/api/login", json={
+                "username": "alice", "password": "alice-password",
+            })
+            self.assertEqual(response.status_code, 429, response.get_json())
+            self.assertEqual(response.get_json().get("code"), "rate_limited")
+            self.assertIn("账号或密码", response.get_json().get("error", ""))
+            retry_after = response.headers.get("Retry-After", "")
+            self.assertRegex(retry_after, r"^[1-9][0-9]*$")
+
+            app_module.auth_service = AuthService(accounts=ACCOUNTS)
+            response = self.client.post("/api/login", json={
+                "username": "alice", "password": "wrong-password",
+            })
+            self.assertEqual(response.status_code, 401, response.get_json())
+            self.assertEqual(response.get_json().get("code"), "invalid_credentials")
+            self.assertIn("账号或密码", response.get_json().get("error", ""))
+
+
+class HttpResponseHeaderHardeningTest(unittest.TestCase):
+    def setUp(self):
+        app_module.app.config.update(TESTING=True)
+        self.client = app_module.app.test_client()
+
+    def _assert_security_headers(self, response):
+        self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(response.headers.get("X-Frame-Options"), "DENY")
+        self.assertEqual(
+            response.headers.get("Referrer-Policy"),
+            "strict-origin-when-cross-origin",
+        )
+        csp = response.headers.get("Content-Security-Policy", "")
+        self.assertTrue(csp)
+        for directive in (
+            "frame-ancestors 'none'",
+            "object-src 'none'",
+            "base-uri 'self'",
+        ):
+            self.assertIn(directive, csp)
+        self.assertNotIn("Strict-Transport-Security", response.headers)
+
+    def test_html_response_has_baseline_security_headers(self):
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self._assert_security_headers(response)
+
+    def test_api_response_has_baseline_security_headers_and_stays_json(self):
+        response = self.client.get("/api/me")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        self.assertIsInstance(response.get_json(), dict)
+        self._assert_security_headers(response)
 
 
 if __name__ == "__main__":

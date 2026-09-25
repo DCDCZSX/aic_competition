@@ -695,7 +695,11 @@ async function doCreateCase(){
     S.triage=d.triage||null; S.path=d.path||null; S.mdt=d.mdt||null;
     S.mdtPending = !!d.mdt_pending || !!d.analysis_pending;
     S.mdtStatus = null;
-    S.analysisStatus = null;
+    S.analysisStatus = d.analysis_mode === 'rules_only'
+      ? rulesOnlyAnalysisStatus((d.warnings||[]).find(x=>String(x).includes('模型服务未配置')))
+      : null;
+    S.mdtStatus = S.analysisStatus ? S.analysisStatus.mdt : null;
+    S.analysisWarnings = d.warnings || [];
     S.profileRulesOnly = !!d.profile_is_rules_only;
     renderProfile(d); renderQuestions();
     msg('flow-msg','');
@@ -709,6 +713,19 @@ async function doCreateCase(){
 
 /* 分析任务相关函数（插到 renderProfile 之前）：轮询 + 增量替换 + 重试 */
 const PHASE_LABELS = {profile:'整理资料', triage:'判断就医方向', mdt:'整理相关科室建议'};
+function rulesOnlyAnalysisStatus(note){
+  const reason = note || '模型服务未配置，本次未运行多学科分析';
+  return {
+    state:'done', mode:'rules_only',
+    phases:{
+      profile:{state:'done', label:PHASE_LABELS.profile, note:'使用规则画像'},
+      triage:{state:'done', label:PHASE_LABELS.triage, note:'使用规则分诊'},
+      mdt:{state:'skipped', label:PHASE_LABELS.mdt, note:reason}
+    },
+    mdt:{state:'skipped', done:0, total:0, current:'', step:reason, failed:[]},
+    warnings:[reason]
+  };
+}
 function phaseRow(name, entry){
   const state = (entry||{}).state || 'pending';
   const pill = state==='done' ? '<span class="pill ok">已完成</span>'
@@ -1060,6 +1077,11 @@ function mdtProgressHtml(status){
   const total = st.total || 0, done = st.done || 0;
   const pct = total ? Math.round(done/total*100) : 0;
   const state = st.state || 'running';
+  if(state === 'skipped'){
+    return `<div class="banner warn"><strong>本次未运行多学科分析</strong><br>
+      原因：${esc(st.step||'模型服务未配置或本例无需多学科分析')}<br>
+      <span class="tiny">规则画像、就医方向与路径结果已经完成并可正常使用；系统没有等待中的模型任务。</span></div>`;
+  }
   if(state === 'failed'){
     return `<div class="banner warn"><strong>多学科分析未完成</strong><br>
       原因：${esc(st.error||'模型调用失败或超时')}<br>
@@ -1099,6 +1121,12 @@ async function pollMdt(budgetMs){
         return;
       }
       if((data.status||{}).state === 'failed'){
+        S.mdtPending = false;
+        if(body) body.innerHTML = mdtProgressHtml(data.status);
+        renderContext();
+        return;
+      }
+      if((data.status||{}).state === 'skipped'){
         S.mdtPending = false;
         if(body) body.innerHTML = mdtProgressHtml(data.status);
         renderContext();
@@ -1582,7 +1610,12 @@ function renderMdt(){
   let html='';
 
   if(!m.card_count){
-    html+='<div class="banner warn">暂时没有生成专科参考意见，但你的就医方向和路径仍然有效。</div>';
+    const skipped = (S.mdtStatus||{}).state === 'skipped'
+      || (S.analysisStatus||{}).mdt && (S.analysisStatus||{}).mdt.state === 'skipped';
+    html += skipped
+      ? `<div class="banner warn">本次未运行多学科分析（${esc((S.mdtStatus||{}).step||'模型服务未配置或本例无需多学科分析')}）。你的就医方向和路径仍然有效。</div>`
+      : '<div class="banner warn">暂时没有生成专科参考意见，但你的就医方向和路径仍然有效。</div>';
+    if(m.notes) html+=m.notes.map(n=>`<div class="tiny">· ${esc(n)}</div>`).join('');
     document.getElementById('mdt-body').innerHTML=html; return;
   }
 

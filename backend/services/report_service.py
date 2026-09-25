@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import copy
 import os
 import sys
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ from services.review_service import (  # noqa: E402
     ACTION_LABELS as REVIEW_ACTION_LABELS,
     TARGET_TYPE_LABELS,
 )
+from services.department_domain import ALL_NAMES  # noqa: E402
 
 # 未审核角标 / 免责（固定文案，所有导出件必带）
 AI_BADGE = "AI 生成，尚未经医生审核"
@@ -94,6 +96,116 @@ def _refs_text(refs: Any) -> str:
 
 def _yes_no(value: Any) -> str:
     return "是" if value else "否"
+
+
+def _decision_map(decisions: Any) -> Dict[str, Dict[str, Any]]:
+    """当前审核轮次内，按条目保留最后一次医生决定。"""
+    out: Dict[str, Dict[str, Any]] = {}
+    for decision in decisions or []:
+        key = f"{decision.get('target_type')}:{decision.get('target_id')}"
+        out[key] = decision
+    return out
+
+
+def _department_from_review(text: Any) -> str:
+    """从医生的整句改写中提取域内科室名，兼容“牵头建议：眼科”这类内容。"""
+    value = str(text or "").strip()
+    matches = [name for name in ALL_NAMES if name in value]
+    return max(matches, key=len) if matches else value
+
+
+def _reviewed_case(case: Dict[str, Any]) -> Dict[str, Any]:
+    """生成报告专用有效视图：修改覆盖、驳回移除，不篡改病例原始审计数据。"""
+    reviewed = copy.deepcopy(case or {})
+    payload = reviewed.get("payload") or {}
+    decisions = _decision_map(payload.get("decisions") or [])
+
+    triage = payload.get("triage") or {}
+    picks = []
+    if triage.get("primary"):
+        picks.append(("primary", triage["primary"]))
+    picks.extend(("secondary", item) for item in (triage.get("secondary") or []))
+    kept = []
+    for original_group, pick in picks:
+        dep = str(pick.get("department") or "")
+        decision = decisions.get(f"department_selection:{dep}") or {}
+        if decision.get("action") == "reject":
+            continue
+        updated = dict(pick)
+        if decision.get("action") == "modify" and str(decision.get("after") or "").strip():
+            updated["department"] = _department_from_review(decision["after"])
+            updated["reason"] = "医生审核后修改"
+        kept.append((original_group, updated))
+    # 医生把牵头方向改为原有协同科室时只保留一份，避免报告出现重复科室。
+    unique_kept = []
+    seen_departments = set()
+    for group, item in kept:
+        department = str(item.get("department") or "")
+        if department and department in seen_departments:
+            continue
+        seen_departments.add(department)
+        unique_kept.append((group, item))
+    kept = unique_kept
+    primary = next((item for group, item in kept if group == "primary"), None)
+    secondary = [item for group, item in kept if group == "secondary"]
+    if primary is None and secondary:
+        primary = secondary.pop(0)
+        primary["role"] = "牵头"
+    triage["primary"] = primary
+    triage["secondary"] = secondary
+    triage["selected"] = ([primary.get("department")] if primary else []) + [
+        item.get("department") for item in secondary if item.get("department")]
+
+    path = payload.get("path") or {}
+    effective_steps = []
+    for step in path.get("steps") or []:
+        decision = decisions.get(f"path_step:{step.get('step_id')}") or {}
+        if decision.get("action") == "reject":
+            continue
+        updated = dict(step)
+        if decision.get("action") == "modify" and str(decision.get("after") or "").strip():
+            updated["title"] = str(decision["after"]).strip()
+            updated["detail"] = "医生审核后修改"
+        effective_steps.append(updated)
+    path["steps"] = effective_steps
+
+    aggregation = (payload.get("mdt") or {}).get("aggregation") or {}
+    effective_consensus = []
+    for index, item in enumerate(aggregation.get("consensus") or [], start=1):
+        decision = decisions.get(f"consensus_item:C-{index:02d}") or {}
+        if decision.get("action") == "reject":
+            continue
+        updated = dict(item)
+        if decision.get("action") == "modify" and str(decision.get("after") or "").strip():
+            updated["example"] = str(decision["after"]).strip()
+        effective_consensus.append(updated)
+    aggregation["consensus"] = effective_consensus
+
+    effective_disagreements = []
+    for index, item in enumerate(aggregation.get("disagreements") or [], start=1):
+        decision = decisions.get(f"consensus_item:X-{index:02d}") or {}
+        if decision.get("action") == "reject":
+            continue
+        updated = dict(item)
+        if decision.get("action") == "modify" and str(decision.get("after") or "").strip():
+            updated["reason"] = str(decision["after"]).strip()
+        effective_disagreements.append(updated)
+    aggregation["disagreements"] = effective_disagreements
+    return reviewed
+
+
+def _apply_advice_decisions(values: List[str], section: str,
+                            decisions: Dict[str, Dict[str, Any]]) -> List[str]:
+    effective: List[str] = []
+    for index, value in enumerate(values, start=1):
+        decision = decisions.get(f"patient_advice:{section}-{index:02d}") or {}
+        if decision.get("action") == "reject":
+            continue
+        if decision.get("action") == "modify" and str(decision.get("after") or "").strip():
+            effective.append(str(decision["after"]).strip())
+        else:
+            effective.append(value)
+    return effective
 
 
 def timeline_for_report(events: Any) -> List[Dict[str, Any]]:
@@ -324,6 +436,7 @@ def _now() -> str:
 # ---------------------------------------------------------------------------
 
 def build_patient_summary(case: Dict[str, Any]) -> Report:
+    case = _reviewed_case(case)
     payload = case.get("payload") or {}
     profile = payload.get("profile") or {}
     triage = payload.get("triage") or {}
@@ -333,6 +446,7 @@ def build_patient_summary(case: Dict[str, Any]) -> Report:
     primary = triage.get("primary") or {}
     secondary = triage.get("secondary") or []
     gaps = [g for g in (payload.get("gaps") or [])]
+    decisions = _decision_map(payload.get("decisions") or [])
     confirmed = case.get("case_state") == "doctor_confirmed"
 
     consult_questions: List[str] = []
@@ -341,13 +455,21 @@ def build_patient_summary(case: Dict[str, Any]) -> Report:
             content = str(t.get("content") or "").strip()
             if content and content not in consult_questions:
                 consult_questions.append(content)
-    for q in ((payload.get("mdt") or {}).get("aggregation") or {}).get("open_questions") or []:
-        text = str(q).strip()
+    for index, q in enumerate(
+            ((payload.get("mdt") or {}).get("aggregation") or {}).get("open_questions") or [],
+            start=1):
+        decision = decisions.get(f"patient_advice:Q-{index:02d}") or {}
+        if decision.get("action") == "reject":
+            continue
+        text = str(decision.get("after") or q).strip() \
+            if decision.get("action") == "modify" else str(q).strip()
         if text and text not in consult_questions:
             consult_questions.append(text)
         if len(consult_questions) >= 6:
             break
     consult_questions = consult_questions[:6]
+    consult_questions = _apply_advice_decisions(
+        consult_questions, "需要向医生确认的问题", decisions)
 
     report = Report(kind="summary", case_id=case.get("case_id", ""),
                     generated_at=_now(),
@@ -355,13 +477,17 @@ def build_patient_summary(case: Dict[str, Any]) -> Report:
                     stage="doctor_reviewed" if confirmed else "ai_preparation",
                     report_version=int(case.get("report_version") or 1),
                     review_status="doctor_confirmed" if confirmed else "ai_unreviewed")
+    direction_values = _apply_advice_decisions(
+        [_departments_line(primary, secondary)], "建议咨询方向", decisions)
     report.sections = {
         "主要问题": profile.get("chief_complaint") or case.get("main_issue") or "（未提供）",
         "关键已知资料": _known_facts(profile),
-        "当前信息缺口": gaps,
-        "建议咨询方向": _departments_line(primary, secondary),
-        "需要向医生确认的问题": consult_questions,
-        "当前任务": [f"{t.get('type')}｜{t.get('content')}" for t in tasks[:6]],
+        "当前信息缺口": gaps or ["（暂无）"],
+        "建议咨询方向": direction_values[0] if direction_values else "（已由医生驳回）",
+        "需要向医生确认的问题": consult_questions or ["（暂无）"],
+        "当前任务": [f"{t.get('type')}｜{t.get('content')}" for t in tasks[:6]] or ["（暂无）"],
+        "结果可靠性": (triage.get("reliability") or {}).get("level", "—"),
+        "可靠性原因": (triage.get("reliability") or {}).get("reasons") or [],
     }
     return report
 
@@ -393,6 +519,7 @@ def _departments_line(primary: Dict[str, Any], secondary: List[Dict[str, Any]]) 
 # ---------------------------------------------------------------------------
 
 def build_full_report(case: Dict[str, Any]) -> Report:
+    case = _reviewed_case(case)
     payload = case.get("payload") or {}
     profile = payload.get("profile") or {}
     triage = payload.get("triage") or {}
@@ -400,6 +527,7 @@ def build_full_report(case: Dict[str, Any]) -> Report:
     mdt = payload.get("mdt") or {}
     aggregation = mdt.get("aggregation") or {}
     decisions = payload.get("decisions") or []
+    decision_lookup = _decision_map(decisions)
 
     cards = build_evidence_cards(profile, triage, mdt)
     review_status = {
@@ -421,6 +549,15 @@ def build_full_report(case: Dict[str, Any]) -> Report:
                     review_status="doctor_confirmed" if confirmed else "ai_unreviewed")
 
     reliability = triage.get("reliability") or {}
+    open_questions: List[str] = []
+    for index, question in enumerate(aggregation.get("open_questions") or [], start=1):
+        decision = decision_lookup.get(f"patient_advice:Q-{index:02d}") or {}
+        if decision.get("action") == "reject":
+            continue
+        open_questions.append(
+            str(decision.get("after") or question) if decision.get("action") == "modify"
+            else str(question))
+
     sections: Dict[str, Any] = {
         "病例画像": {
             "基本信息": f"{profile.get('sex') or ''} {profile.get('age') or ''}".strip() or "（未提供）",
@@ -451,7 +588,7 @@ def build_full_report(case: Dict[str, Any]) -> Report:
         "共识": consensus_for_report(aggregation.get("consensus")),
         "分歧": disagreements_for_report(aggregation.get("disagreements")),
         "不确定性": uncertainties_for_report(aggregation.get("uncertainties")),
-        "关键待解决问题": list(aggregation.get("open_questions") or []),
+        "关键待解决问题": open_questions,
         "证据关联": {
             "证据状态统计": [
                 (f"{STATE_LABELS[k]}：{v} 条" if k in STATE_LABELS else f"卡片合计：{v} 张")
@@ -486,7 +623,7 @@ def build_full_report(case: Dict[str, Any]) -> Report:
         # 让占位文案说清"为什么没有多学科这一段"：单科 / A 型本来就不该硬凑 MDT
         triage = payload.get("triage") or {}
         if len(triage.get("selected") or []) < 2:
-            sections["各专科 AI 视角"] = "（仅 1 个就医方向，无需多学科会诊）"
+            sections["各专科 AI 视角"] = "（仅 1 个就医方向，本版未运行多学科会诊）"
         elif triage and not triage.get("needs_mdt"):
             sections["各专科 AI 视角"] = "（本例以单科为主，未运行多学科会诊）"
     report.missing_sections = []

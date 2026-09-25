@@ -17,9 +17,20 @@ class PreviewPayload:
     expires_at: datetime
 
 
+def _safe_positive_limit(value, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed > 0 else fallback
+
+
 class PreviewTokenService:
-    def __init__(self, ttl_minutes: int = 10) -> None:
+    def __init__(self, ttl_minutes: int = 10, per_owner_limit: int = 5,
+                 global_limit: int = 5000) -> None:
         self.ttl = timedelta(minutes=max(1, min(ttl_minutes, 30)))
+        self.per_owner_limit = _safe_positive_limit(per_owner_limit, 5)
+        self.global_limit = _safe_positive_limit(global_limit, 5000)
         self._items: Dict[str, PreviewPayload] = {}
         self._lock = threading.Lock()
 
@@ -33,6 +44,12 @@ class PreviewTokenService:
         )
         with self._lock:
             self._purge_expired_locked()
+            owner_count = sum(item.owner_id == owner_id for item in self._items.values())
+            while owner_count >= self.per_owner_limit:
+                self._evict_oldest_locked(owner_id)
+                owner_count -= 1
+            while len(self._items) >= self.global_limit:
+                self._evict_oldest_locked()
             self._items[token] = payload
         return token
 
@@ -46,6 +63,15 @@ class PreviewTokenService:
                 return None
             self._items.pop(token, None)
             return payload
+
+    def _evict_oldest_locked(self, owner_id: Optional[str] = None) -> None:
+        token_to_evict = None
+        for token, payload in self._items.items():
+            if owner_id is None or payload.owner_id == owner_id:
+                token_to_evict = token
+                break
+        if token_to_evict is not None:
+            self._items.pop(token_to_evict)
 
     def _purge_expired_locked(self) -> None:
         now = datetime.now()

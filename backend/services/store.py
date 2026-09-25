@@ -443,7 +443,8 @@ class Store:
     def list_decisions(self, case_id: str) -> List[Dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT payload FROM decisions WHERE case_id = ? ORDER BY created_at ASC",
+                "SELECT payload FROM decisions WHERE case_id = ? "
+                "ORDER BY created_at ASC, rowid ASC",
                 (case_id,),
             ).fetchall()
         out: List[Dict[str, Any]] = []
@@ -467,7 +468,7 @@ class Store:
             with self._lock:
                 rows = self._conn.execute(
                     f"SELECT case_id, payload FROM decisions WHERE case_id IN ({placeholders}) "
-                    "ORDER BY created_at ASC",
+                    "ORDER BY created_at ASC, rowid ASC",
                     chunk,
                 ).fetchall()
             for row in rows:

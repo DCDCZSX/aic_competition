@@ -12,8 +12,12 @@ import io
 import json
 import os
 import sys
+import threading
+import time
 import unittest
 from unittest import mock
+
+import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -70,6 +74,48 @@ class TestRawCall(unittest.TestCase):
                 service.call_ai_api_raw("提示词")
         self.assertEqual(fake.timeouts, [(10.0, 60.0)])
 
+    def test_retry_and_concurrency_limits_are_configured(self):
+        with mock.patch.dict(os.environ, {
+            "AI_MAX_RETRIES": "5",
+            "AI_MAX_CONCURRENT_REQUESTS": "1",
+        }):
+            service = AIService()
+        self.assertEqual(service.max_retries, 5)
+        self.assertEqual(service.max_concurrent_requests, 1)
+
+    def test_outbound_requests_obey_process_local_concurrency_limit(self):
+        with mock.patch.dict(os.environ, {
+            "AI_MAX_RETRIES": "1",
+            "AI_MAX_CONCURRENT_REQUESTS": "1",
+        }):
+            service = AIService()
+        service.api_key = "test-key"
+        active = 0
+        peak = 0
+        lock = threading.Lock()
+
+        def slow_post(*args, **kwargs):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return mock.Mock(raise_for_status=lambda: None,
+                             json=lambda: _response("ok"))
+
+        with mock.patch("services.ai_service.requests.post", side_effect=slow_post):
+            threads = [threading.Thread(target=service.call_ai_api_raw, args=("提示词",))
+                       for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=2)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(peak, 1)
+
     def test_truncation_is_detected(self):
         result, _ = self._call(_response('{"facts": ["a"', finish_reason="length"))
         self.assertTrue(result["ok"])
@@ -99,16 +145,49 @@ class TestRawCall(unittest.TestCase):
         self.service.api_key = ""
         result = self.service.call_ai_api_raw("提示词")
         self.assertFalse(result["ok"])
-        self.assertIn("AI_API_KEY", result["error"])
+        self.assertEqual(result["error_code"], "ai_missing_api_key")
+        self.assertNotIn("AI_API_KEY", result["error"])
 
     def test_gateway_error_is_reported_not_raised(self):
+        secret = "gateway-secret-detail"
+
         def boom(*args, **kwargs):
-            raise RuntimeError("网关炸了")
+            raise RuntimeError(secret)
 
         with mock.patch("services.ai_service.requests.post", boom):
             result = self.service.call_ai_api_raw("提示词")
         self.assertFalse(result["ok"])
         self.assertEqual(result["content"], "")
+        self.assertEqual(result["error_code"], "ai_request_failed")
+        self.assertNotIn(secret, result["error"])
+
+    def test_invalid_payload_log_redacts_response_body(self):
+        secret = "invalid-payload-secret-7f3c"
+        payload = {"choices": [], "error": secret}
+
+        with self.assertLogs("services.ai_service", level="WARNING") as captured:
+            self._call(payload)
+
+        logs = "\n".join(captured.output)
+        self.assertNotIn(secret, logs)
+        self.assertNotIn(json.dumps(payload), logs)
+        self.assertIn("top_level_keys", logs)
+
+    def test_request_failure_log_redacts_exception_message(self):
+        secret = "request-failure-secret-9a2b"
+
+        def boom(*args, **kwargs):
+            raise requests.RequestException(secret)
+
+        with mock.patch("services.ai_service.requests.post", boom), \
+                mock.patch("services.ai_service.time.sleep"):
+            with self.assertLogs("services.ai_service", level="WARNING") as captured:
+                self.service.call_ai_api_raw("提示词")
+
+        logs = "\n".join(captured.output)
+        self.assertNotIn(secret, logs)
+        self.assertIn("RequestException", logs)
+        self.assertIn("attempt=1/3", logs)
 
 
 class TestCallStructured(unittest.TestCase):
@@ -144,15 +223,18 @@ class TestCallStructured(unittest.TestCase):
         self.assertEqual(error, "")
 
     def test_exception_becomes_error(self):
+        secret = "gateway-secret-detail"
+
         class Broken:
             api_key = "k"
 
             def call_ai_api(self, prompt, role_description=None):
-                raise RuntimeError("网关不可用")
+                raise RuntimeError(secret)
 
         content, truncated, error = call_structured(Broken(), "p")
         self.assertEqual(content, "")
-        self.assertIn("网关不可用", error)
+        self.assertEqual(error, "模型服务调用失败")
+        self.assertNotIn(secret, error)
 
 
 if __name__ == "__main__":

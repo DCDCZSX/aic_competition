@@ -6,6 +6,7 @@
 """
 
 import json
+import os
 import sys
 
 import requests
@@ -129,6 +130,18 @@ def main():
     check("非医生会话以「医生上传」来源提交被拒", r.status_code in (401, 403), str(r.status_code))
     doctor = requests.Session()
     login(doctor, BASE, "doctor")
+    doctor_username = os.getenv("APP_DOCTOR_USERNAME", "doctor").strip()
+    access = s.post(
+        f"{BASE}/api/v2/case/{case_id}/access",
+        json={"reviewer_id": doctor_username},
+        timeout=30,
+    )
+    try:
+        access_body = access.json()
+    except ValueError:
+        access_body = {"error": access.text[:160]}
+    check("患者显式授权医生", access.status_code == 200 and access_body.get("ok") is True,
+          json.dumps(access_body, ensure_ascii=False))
     r = doctor.post(f"{BASE}/api/v2/case/{case_id}/updates", json={
         "kind": "医生意见", "content": "建议眼科评估后行眼底激光，同步内分泌科控糖",
         "source": "医生上传", "department": "眼科"}, timeout=60)
@@ -263,12 +276,23 @@ def main():
     check("mdt 相位取值合法（done/partial/failed/skipped）",
           st["phases"]["mdt"]["state"] in ("done", "partial", "failed", "skipped"),
           st["phases"]["mdt"]["state"])
-    check("全部科室成功时 failed 为空",
-          (st.get("mdt") or {}).get("failed") == [], json.dumps(st.get("mdt"), ensure_ascii=False))
+    failed_departments = (st.get("mdt") or {}).get("failed") or []
+    if os.getenv("AI_API_KEY", "").strip():
+        check("配置模型时全部科室成功",
+              failed_departments == [], json.dumps(st.get("mdt"), ensure_ascii=False))
+    else:
+        check("无 Key 时如实记录未完成科室",
+              bool(failed_departments), json.dumps(st.get("mdt"), ensure_ascii=False))
     r = s.post(f"{BASE}/api/v2/case/{case3}/analysis/retry", json={}, timeout=30)
-    check("全部完成后重试被拒（400 且有说明）",
-          r.status_code == 400 and "无需重试" in (r.json().get("error") or ""),
-          json.dumps(r.json(), ensure_ascii=False)[:120])
+    retry_body = r.json()
+    if os.getenv("AI_API_KEY", "").strip():
+        check("全部完成后重试被拒（400 且有说明）",
+              r.status_code == 400 and "无需重试" in (retry_body.get("error") or ""),
+              json.dumps(retry_body, ensure_ascii=False)[:120])
+    else:
+        check("无 Key 时未完成 MDT 可重试",
+              r.status_code == 200 and "mdt" in (retry_body.get("retried") or []),
+              json.dumps(retry_body, ensure_ascii=False)[:120])
 
     print("\n[9] 非法输入被拒")
     r = s.post(f"{BASE}/api/v2/case/{case_id}/updates",

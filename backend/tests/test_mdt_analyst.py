@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -139,6 +140,15 @@ class TestS2RestrictedSpeech(unittest.TestCase):
         self.assertEqual(result.method, METHOD_FAILED)
         self.assertEqual(result.picks, [])
 
+    def test_parser_exception_detail_is_not_returned(self):
+        secret = "parser-secret-detail"
+        with mock.patch("services.s2_analyst._parse_picks",
+                        side_effect=ValueError(secret)):
+            result = s2_analyze(ai_service=FakeAI(reply='{"picks": []}'),
+                                text=CASE_B, evaluation=self.evaluation)
+        self.assertEqual(result.method, METHOD_FAILED)
+        self.assertNotIn(secret, result.error)
+
     def test_broken_service_degrades(self):
         result = s2_analyze(ai_service=BrokenAI(), text=CASE_B, evaluation=self.evaluation)
         self.assertEqual(result.method, METHOD_FAILED)
@@ -214,12 +224,22 @@ class TestSpecialtyCard(unittest.TestCase):
         self.assertEqual(result.method, METHOD_FAILED)
         self.assertIsNone(result.card)
 
+    def test_parser_exception_detail_is_not_returned(self):
+        secret = "specialty-parser-secret"
+        with mock.patch("services.mdt_analyst._parse_or_raise",
+                        side_effect=ValueError(secret)):
+            result = analyze_specialty(
+                ai_service=FakeAI(reply=self.CARD_JSON), department="眼科", text=CASE_B
+            )
+        self.assertEqual(result.method, METHOD_FAILED)
+        self.assertNotIn(secret, result.error)
+
     def test_empty_object_is_failed_not_a_successful_card(self):
         result = analyze_specialty(ai_service=FakeAI(reply="{}"),
                                    department="眼科", text=CASE_B, case_id="C1")
         self.assertEqual(result.method, METHOD_FAILED)
         self.assertIsNone(result.card)
-        self.assertIn("不能为空", result.error)
+        self.assertIn("意见卡校验失败", result.error)
 
 
 class TestMalformedModelOutput(unittest.TestCase):
@@ -290,7 +310,7 @@ class TestMalformedModelOutput(unittest.TestCase):
                                    department="血液科", text=CASE_B)
         self.assertEqual(result.method, METHOD_FAILED)
         self.assertIsNone(result.card)
-        self.assertIn("未找到 JSON", result.error)
+        self.assertIn("意见卡解析失败", result.error)
 
     def test_truncation_is_named_in_failure_reason(self):
         """连恢复都失败时，原因里必须写明"输出被长度截断"（而不是含糊的 JSON 错误）。"""

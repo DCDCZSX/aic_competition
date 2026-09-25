@@ -26,6 +26,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from schemas import CHALLENGE_OUTCOMES, CHALLENGE_STANCES, ChallengeRound  # noqa: E402
 from services.ai_service import call_structured  # noqa: E402
 from services.json_recovery import loads_lenient  # noqa: E402
+from services.model_output_guard import (  # noqa: E402
+    assert_safe_generated_list,
+    assert_safe_generated_text,
+)
 
 MAX_CHALLENGES = 3            # P0：每例最多 3 条质询问题
 MAX_RESPONDERS = 2            # 每条问题最多问 2 个科室
@@ -178,9 +182,13 @@ def _parse_response(raw: str) -> Dict[str, Any]:
     stance = str(data.get("stance") or "").strip()
     if stance not in CHALLENGE_STANCES:
         stance = "维持原判断"
-    follow_up = [str(x) for x in (data.get("follow_up_evidence") or []) if str(x).strip()]
+    follow_up = assert_safe_generated_list(
+        [x for x in (data.get("follow_up_evidence") or []) if str(x).strip()],
+        field_name="质询补充证据",
+    )
     return {"stance": stance,
-            "reason": str(data.get("reason") or "").strip(),
+            "reason": assert_safe_generated_text(
+                data.get("reason") or "", field_name="质询回应"),
             "follow_up_evidence": follow_up[:5]}
 
 
@@ -242,7 +250,7 @@ def run(
                     parsed = {"stance": "维持原判断", "reason": "模型未返回内容",
                               "follow_up_evidence": []}
             except Exception as exc:  # pragma: no cover
-                parsed = {"stance": "维持原判断", "reason": f"回应失败：{exc}",
+                parsed = {"stance": "维持原判断", "reason": "回应失败：模型输出无法解析",
                           "follow_up_evidence": []}
             responses.append({"specialty": dept, "stance": parsed["stance"],
                               "reason": parsed["reason"]})

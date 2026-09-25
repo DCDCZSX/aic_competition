@@ -27,7 +27,13 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services.ask_service import Question, apply_answers, build_questions  # noqa: E402
+from services.ask_service import (  # noqa: E402
+    MAX_ANSWER_ITEMS,
+    MAX_ANSWER_KEY_LENGTH,
+    Question,
+    apply_answers,
+    build_questions,
+)
 from services import challenge_service  # noqa: E402
 from services.guardrail import screen  # noqa: E402
 from services.intake import IntakeResult, sanitized_payload, validate_intake  # noqa: E402
@@ -541,12 +547,18 @@ class CaseFlow:
 
         if not isinstance(answers, dict):
             return {"ok": False, "error": "answers 必须是 JSON 对象"}
+        if len(answers) > MAX_ANSWER_ITEMS:
+            return {"ok": False,
+                    "error": f"answers 最多包含 {MAX_ANSWER_ITEMS} 项"}
         # 追问回答也会合并进病史并持久化，不能成为绕过 G3 的入口。
         safe_answers: Dict[str, str] = {}
         try:
             for key, value in answers.items():
                 if not isinstance(key, str) or not isinstance(value, str):
                     return {"ok": False, "error": "answers 的键和值必须是字符串"}
+                if len(key) > MAX_ANSWER_KEY_LENGTH:
+                    return {"ok": False,
+                            "error": f"answers 的键长度不能超过 {MAX_ANSWER_KEY_LENGTH} 个字符"}
                 safe_answers[key] = update_service.sanitize_update_content(
                     value, field_name="追问回答"
                 ) if value.strip() else ""
@@ -813,10 +825,9 @@ class CaseFlow:
             except Exception as exc:                        # noqa: BLE001 - 单相位失败不影响其他相位
                 failed.append(phase)
                 self._set_phase(case_id, phase, "failed",
-                                note=f"{type(exc).__name__}: {exc}"[:180])
+                                note=f"{self.PHASE_LABELS.get(phase, phase)}阶段执行失败（可重试）")
                 self._append_analysis_warning(
-                    case_id, f"{self.PHASE_LABELS.get(phase, phase)}未完成："
-                             f"{type(exc).__name__}（已保留其它已就绪结果）")
+                    case_id, f"{self.PHASE_LABELS.get(phase, phase)}未完成（已保留其它已就绪结果）")
 
         # ---- 相位 1：画像增强（失败则保留规则画像）----
         def do_profile() -> None:

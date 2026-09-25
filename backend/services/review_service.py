@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Sequence
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schemas import DOCTOR_ACTIONS, DECISION_TARGET_TYPES, DoctorDecision, Reviewer  # noqa: E402
+from services.model_output_guard import public_text  # noqa: E402
 
 # 条目状态（界面层可见规则，对应 UI 设计说明 §4）
 AWAITING = "awaiting"
@@ -86,14 +87,6 @@ ACTION_TO_STATE: Dict[str, str] = {
 # 报告里"患者建议"类条目的来源段落（report_service 一页摘要的段落名）
 ADVICE_SECTIONS = ("建议咨询方向", "需要向医生确认的问题")
 
-# 红线：概率/置信度数字不得进入医生端 UI（模型自报数值同样不得展示）。
-# 注意：**只**处理"概率/可能性 + 数字"这类表述，不动检验数值（如"空腹血糖 9.2"）与剂量，
-# 否则会把真实医学数据篡改掉。
-_FORBIDDEN_NUMERIC = re.compile(
-    r"(概率|置信度|confidence|可能性)\s*[:：]?\s*(\d+(\.\d+)?\s*%?)",
-    re.IGNORECASE,
-)
-
 # 报告里"（暂无）"类占位不进入审核条目（没有内容无从审核）
 _PLACEHOLDER = re.compile(r"^[（(]\s*(暂无|未提供|暂未给出)")
 
@@ -108,7 +101,7 @@ def _now() -> str:
 
 def _clean(text: Any) -> str:
     """去掉可能混入的概率/置信度表述（红线兜底），保留原意与检验数值。"""
-    return _FORBIDDEN_NUMERIC.sub("（数值不展示）", str(text or ""))
+    return public_text(text)
 
 
 @dataclass

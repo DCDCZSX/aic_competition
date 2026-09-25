@@ -20,10 +20,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 修改为绝对导入
 from services.ai_service import AIService
-from services.auth import (AuthService, AuthError, ROLE_DOCTOR, ROLE_GUEST, ROLE_PATIENT,
+from services.auth import (AuthService, AuthError, AuthRateLimitError, ROLE_DOCTOR, ROLE_GUEST, ROLE_PATIENT,
                            auth_required, extract_token)
 from services.case_flow import CaseFlow, patient_safe_mdt_screening
-from services.intake import MAX_TEXT_LENGTH, sanitized_payload
+from services.ask_service import MAX_ANSWER_ITEMS, MAX_ANSWER_KEY_LENGTH
+from services.config import read_int_env
+from services.intake import MAX_MAIN_ISSUE_LENGTH, MAX_TEXT_LENGTH, sanitized_payload
 from services.preview_tokens import PreviewTokenService
 from services.store import Store
 from schemas import CASE_STATE_LABELS
@@ -39,8 +41,9 @@ import time
 from collections import defaultdict, deque
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = max(
-    1, int(os.getenv('APP_MAX_CONTENT_LENGTH', str(1 * 1024 * 1024)))
+app.config['MAX_CONTENT_LENGTH'] = read_int_env(
+    'APP_MAX_CONTENT_LENGTH', 1 * 1024 * 1024,
+    minimum=1, maximum=16 * 1024 * 1024
 )
 _cors_origins = [x.strip() for x in os.getenv(
     'APP_CORS_ORIGINS', 'http://127.0.0.1:5000,http://localhost:5000'
@@ -49,6 +52,17 @@ CORS(app, resources={r"/api/*": {"origins": _cors_origins}}, supports_credential
 # 不按字母排序 JSON 键：报告段落内部的字段顺序（判断 → 依据 → 证据状态 → 支持证据 …）
 # 是给人读的，排序后会被打乱（例如"证据卡片"跑到"证据状态统计"前面）。
 app.json.sort_keys = False
+
+
+@app.after_request
+def _security_response_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+    )
+    return response
 
 
 def _json_object():
@@ -87,7 +101,30 @@ def _api_unhandled_error(exc):
     raise exc
 
 auth_service = AuthService()
-preview_tokens = PreviewTokenService(int(os.getenv('APP_PREVIEW_TTL_MINUTES', '10')))
+PREVIEW_TTL_MINUTES = read_int_env(
+    'APP_PREVIEW_TTL_MINUTES', 10, minimum=1, maximum=30
+)
+GUEST_SESSIONS_PER_HOUR = read_int_env(
+    'APP_GUEST_SESSIONS_PER_HOUR', 5, minimum=1, maximum=100
+)
+GUEST_TRACKED_IPS = read_int_env(
+    'APP_GUEST_TRACKED_IPS', 10000, minimum=100, maximum=1000000
+)
+GUEST_PREVIEW_LIMIT = read_int_env(
+    'APP_GUEST_PREVIEW_LIMIT', 5, minimum=1, maximum=100
+)
+GUEST_TRIAGE_LIMIT = read_int_env(
+    'APP_GUEST_TRIAGE_LIMIT', 2, minimum=1, maximum=100
+)
+GUEST_MAX_CHARS = read_int_env(
+    'APP_GUEST_MAX_CHARS', 2000, minimum=1, maximum=100000
+)
+preview_tokens = PreviewTokenService(
+    PREVIEW_TTL_MINUTES,
+    # PreviewTokenService 保留旧版非法配额值的安全回退，兼容既有部署配置。
+    per_owner_limit=os.getenv('APP_PREVIEW_MAX_PER_USER', '5'),
+    global_limit=os.getenv('APP_PREVIEW_MAX_TOTAL', '5000'),
+)
 _guest_issue_lock = threading.Lock()
 _guest_issues = defaultdict(deque)
 
@@ -213,6 +250,10 @@ def login():
         )
     except InputValidationError as exc:
         return _invalid_input(exc)
+    except AuthRateLimitError as exc:
+        return jsonify({'error': str(exc), 'code': 'rate_limited'}), 429, {
+            'Retry-After': str(exc.retry_after),
+        }
     except AuthError as exc:
         # 登录失败统一 401 且不区分“账号不存在/密码错误”，避免账号枚举。
         return jsonify({'error': str(exc), 'code': 'invalid_credentials'}), 401
@@ -224,7 +265,7 @@ def create_guest_session():
     """Issue a short-lived anonymous token; it cannot access persistent case APIs."""
     remote = request.remote_addr or 'unknown'
     now = time.time()
-    per_hour = max(1, int(os.getenv('APP_GUEST_SESSIONS_PER_HOUR', '5')))
+    per_hour = GUEST_SESSIONS_PER_HOUR
     with _guest_issue_lock:
         recent = _guest_issues[remote]
         while recent and recent[0] <= now - 3600:
@@ -232,7 +273,7 @@ def create_guest_session():
         if not recent:
             _guest_issues.pop(remote, None)
             recent = _guest_issues[remote]
-        max_tracked = max(100, int(os.getenv('APP_GUEST_TRACKED_IPS', '10000')))
+        max_tracked = GUEST_TRACKED_IPS
         if len(_guest_issues) > max_tracked:
             # 只保留近期有记录的来源，防止伪造大量来源地址使内存字典无限增长。
             stale = sorted(
@@ -254,9 +295,9 @@ def create_guest_session():
         'session': session.to_dict(),
         'scopes': session.scopes,
         'limits': {
-            'preview': int(os.getenv('APP_GUEST_PREVIEW_LIMIT', '5')),
-            'triage': int(os.getenv('APP_GUEST_TRIAGE_LIMIT', '2')),
-            'max_chars': int(os.getenv('APP_GUEST_MAX_CHARS', '2000')),
+            'preview': GUEST_PREVIEW_LIMIT,
+            'triage': GUEST_TRIAGE_LIMIT,
+            'max_chars': GUEST_MAX_CHARS,
         },
         'data_policy': '仅用于本次内存分析，不创建病例档案',
     }), 201
@@ -293,7 +334,7 @@ def preview_intake():
         return error
     try:
         history = string_field(data, 'medical_history', default='')
-        issue = string_field(data, 'main_issue', default='')
+        issue = string_field(data, 'main_issue', default='', max_length=MAX_MAIN_ISSUE_LENGTH)
     except InputValidationError as exc:
         return _invalid_input(exc)
     if len(history) > MAX_TEXT_LENGTH:
@@ -324,12 +365,12 @@ def guest_preview():
         issue = string_field(data, 'main_issue', default='')
     except InputValidationError as exc:
         return _invalid_input(exc)
-    max_chars = int(os.getenv('APP_GUEST_MAX_CHARS', '2000'))
+    max_chars = GUEST_MAX_CHARS
     if len(history) + len(issue) > max_chars:
         return jsonify({'error': f'游客输入最多 {max_chars} 个字符'}), 413
     if not history.strip() and not issue.strip():
         return jsonify({'error': '请至少填写一项就医资料'}), 400
-    limit = int(os.getenv('APP_GUEST_PREVIEW_LIMIT', '5'))
+    limit = GUEST_PREVIEW_LIMIT
     if not auth_service.consume(session, 'preview', limit):
         return jsonify({'error': '游客脱敏预览次数已用完，请登录继续'}), 429
     preview = case_flow.build_preview(history, issue)
@@ -356,13 +397,13 @@ def guest_triage():
         sex = string_field(data, 'sex', default='')
     except InputValidationError as exc:
         return _invalid_input(exc)
-    max_chars = int(os.getenv('APP_GUEST_MAX_CHARS', '2000'))
+    max_chars = GUEST_MAX_CHARS
     if len(history) + len(issue) > max_chars:
         return jsonify({'error': f'游客输入最多 {max_chars} 个字符'}), 413
     # Do not spend a quota unit on malformed or oversized input.
     if not history.strip() and not issue.strip():
         return jsonify({'error': '请至少填写一项就医资料'}), 400
-    limit = int(os.getenv('APP_GUEST_TRIAGE_LIMIT', '2'))
+    limit = GUEST_TRIAGE_LIMIT
     if not auth_service.consume(session, 'triage', limit):
         return jsonify({'error': '游客分析次数已用完，请登录使用完整功能'}), 429
     guest_store = Store(':memory:')
@@ -507,7 +548,10 @@ def submit_answers(case_id):
     if error:
         return error
     try:
-        answers = object_field(data, 'answers', default={})
+        answers = object_field(
+            data, 'answers', default={}, max_items=MAX_ANSWER_ITEMS,
+            max_key_length=MAX_ANSWER_KEY_LENGTH,
+        )
     except InputValidationError as exc:
         return _invalid_input(exc)
     # 科室集合变化时会重跑多学科分析（15-30 秒）：同样支持两段式，先返回分诊结果
@@ -890,7 +934,7 @@ if __name__ == '__main__':
 
     # 绑定与调试开关走环境变量：默认只监听本机、关闭 debug（合规要求）
     host = os.getenv('APP_HOST', '127.0.0.1').strip()
-    port = int(os.getenv('APP_PORT', '5000'))
+    port = read_int_env('APP_PORT', 5000, minimum=1, maximum=65535)
     debug = os.getenv('APP_DEBUG', 'false').strip().lower() in ('1', 'true', 'yes')
 
     print("=" * 60)

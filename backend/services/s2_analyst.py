@@ -22,6 +22,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services.ai_service import call_structured  # noqa: E402
 from services.department_domain import ALL_NAMES, is_department  # noqa: E402
 from services.json_recovery import loads_lenient  # noqa: E402
+from services.model_output_guard import (  # noqa: E402
+    UnsafeModelOutput,
+    assert_safe_generated_text,
+    public_text,
+)
 from services.rule_engine import RuleEvaluation  # noqa: E402
 
 METHOD_LLM = "llm"
@@ -79,10 +84,17 @@ class S2Result:
         return [p for p in self.picks if p.stance == "reject"]
 
     def to_dict(self, include_raw: bool = False) -> Dict[str, Any]:
+        # 数值置信度只供 S3 内部阈值判断，不能进入病例 API / 前端。
+        public_picks = [
+            {"department": p.department, "stance": p.stance,
+             "reason": public_text(p.reason)}
+            for p in self.picks
+        ]
         data = {
             "method": self.method,
-            "picks": [{"department": p.department, "stance": p.stance,
-                       "confidence": p.confidence, "reason": p.reason} for p in self.picks],
+            "picks": public_picks,
+            # 兼容现有医生端模板使用的字段名；同样不包含内部置信度。
+            "orchestrator_picks": public_picks,
             "error": self.error,
         }
         if include_raw:
@@ -163,9 +175,14 @@ def _parse_picks(raw: str) -> List[ModelPick]:
             confidence = None
         if confidence is not None:
             confidence = max(0.0, min(1.0, confidence))
+        try:
+            reason = assert_safe_generated_text(
+                item.get("reason") or "", field_name="分诊模型理由")
+        except UnsafeModelOutput:
+            # 理由越过医疗安全边界时整条模型建议作废；规则分诊仍可继续。
+            continue
         picks.append(ModelPick(department=dep, stance=stance,
-                               confidence=confidence,
-                               reason=str(item.get("reason") or "").strip()))
+                               confidence=confidence, reason=reason))
     return picks
 
 
@@ -194,7 +211,7 @@ def analyze(
     except Exception as exc:
         hint = "（模型输出被长度截断）" if truncated else ""
         return S2Result(method=METHOD_FAILED,
-                        error=f"模型输出解析失败{hint}：{exc}", raw=content[:500])
+                        error=f"模型输出解析失败{hint}：模型输出无法解析", raw=content[:500])
 
     # 域外科室过滤（不静默丢弃：记在 error 里说明）
     known, unknown = [], []

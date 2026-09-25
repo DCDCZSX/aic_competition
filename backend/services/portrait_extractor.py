@@ -308,7 +308,7 @@ def extract(
                         gaps.append(str(gap))
                 method = "hybrid"
         except Exception as exc:  # pragma: no cover - 取决于外部服务
-            warnings.append(f"模型增强失败，已回退为规则抽取：{exc}")
+            warnings.append("模型增强失败，已回退为规则抽取")
 
     profile = PatientProfile(
         case_id=case_id,
@@ -340,8 +340,8 @@ def extract(
     try:
         profile.validate()
     except SchemaError as exc:
-        schema_error = str(exc)
-        warnings.append(f"画像字段校验失败：{exc}")
+        schema_error = "画像字段校验失败"
+        warnings.append("画像字段校验失败")
 
     # ---- G4 门禁 ----
     if not profile.passes_gate:
