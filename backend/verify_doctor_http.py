@@ -87,6 +87,14 @@ def main():
     check("scopes 含 review/decision", {"review", "decision"} <= set(r.json().get("scopes") or []),
           json.dumps(r.json().get("scopes"), ensure_ascii=False))
 
+    r = doctor.post(
+        f"{BASE}/api/v2/case/{case_id}/mdt-screening",
+        json={"decision": "recommend_mdt", "reason": "资料提示需要共同评估",
+              "purpose": "明确眼底和代谢问题的就医重点",
+              "departments": ["内分泌科", "眼科"]}, timeout=30)
+    check("医生提交 MDT 初筛", r.status_code == 200 and r.json().get("ok") is True,
+          json.dumps(r.json(), ensure_ascii=False)[:240])
+
     print("\n[3] 屏 A 病例列表")
     r = doctor.get(f"{BASE}/api/v2/cases?limit=100", timeout=60)
     check("列表 200", r.status_code == 200, str(r.status_code))
@@ -119,6 +127,9 @@ def main():
     check("review 200", r.status_code == 200, str(r.status_code))
     review = r.json()
     items = review.get("items") or []
+    check("审核数据带 MDT 初筛结果",
+          (review.get("mdt_screening") or {}).get("decision") == "recommend_mdt",
+          json.dumps(review.get("mdt_screening"), ensure_ascii=False))
     check("条目非空", bool(items), f"{len(items)} 条")
     types = {i["target_type"] for i in items}
     check("含科室入选条目", "department_selection" in types, json.dumps(sorted(types), ensure_ascii=False))

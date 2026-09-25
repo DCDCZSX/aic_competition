@@ -45,14 +45,23 @@ from services import report_service  # noqa: E402
 from services import review_service  # noqa: E402
 from services import task_service  # noqa: E402
 from services import update_service  # noqa: E402
+from services import department_domain  # noqa: E402
 from services.rule_engine import evaluate as evaluate_rules  # noqa: E402
 from services.s2_analyst import analyze as s2_analyze  # noqa: E402
 from services.store import Store  # noqa: E402
 from services.triage import orchestrate  # noqa: E402
-from schemas import CASE_STATE_LABELS  # noqa: E402
+from schemas import (CASE_STATE_LABELS, MDT_SCREENING_DECISIONS,
+                     MDT_SCREENING_LABELS)  # noqa: E402
 
 # 耗时控制：多专科分析最多取前 3 个科室
 MAX_MDT_DEPARTMENTS = 3
+
+MDT_SCREENING_NEXT_STEPS = {
+    "single_specialty": "请按医生安排先咨询相关专科。",
+    "recommend_mdt": "医生建议多学科共同评估，请按后续就医安排准备资料。",
+    "need_more_info": "请按医生提示补充资料后再继续。",
+    "urgent_care": "请尽快前往急诊或拨打 120，不要等待普通 MDT 流程。",
+}
 
 # 病例状态（与 schemas.CASE_STATES 保持一致）
 STATE_PENDING = "pending_materials"
@@ -64,6 +73,17 @@ logger = logging.getLogger(__name__)
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def patient_safe_mdt_screening(screening: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """返回患者可见的初筛状态，不暴露审核人账号或内部审计字段。"""
+    if not screening:
+        return None
+    allowed = (
+        "status", "decision", "decision_label", "purpose", "departments",
+        "patient_next_step", "mdt_queue_eligible", "decided_at",
+    )
+    return {key: screening[key] for key in allowed if key in screening}
 
 
 def new_case_id() -> str:
@@ -1189,6 +1209,101 @@ class CaseFlow:
         return {"case_id": case_id, "status": status, "ready": bool(mdt), "mdt": mdt}
 
     # ------------------------------------------------------------------ 查询
+    @serialized_case
+    def submit_mdt_screening(
+        self,
+        case_id: str,
+        *,
+        decision: str,
+        reason: str,
+        purpose: str = "",
+        departments: Optional[List[str]] = None,
+        reviewer_id: str = "",
+    ) -> Dict[str, Any]:
+        """保存医生负责的 MDT 初筛决定（不改变病例主状态机）。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+        if str(case.get("case_state") or "") == "doctor_confirmed":
+            return {"ok": False, "error": "已发布审核版的病例不能重新进行初筛"}
+
+        decision = str(decision or "").strip()
+        if decision not in MDT_SCREENING_DECISIONS:
+            return {"ok": False, "error": "初筛决定非法"}
+        if not isinstance(reviewer_id, str) or not reviewer_id.strip():
+            return {"ok": False, "error": "审核人不能为空"}
+
+        try:
+            safe_reason = update_service.sanitize_optional_content(reason, field_name="初筛原因")
+            safe_purpose = update_service.sanitize_optional_content(purpose, field_name="会诊目的")
+            safe_reviewer = update_service.sanitize_optional_content(
+                reviewer_id, field_name="审核人")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not safe_reason:
+            return {"ok": False, "error": "初筛原因不能为空"}
+        if decision == "recommend_mdt" and not safe_purpose:
+            return {"ok": False, "error": "建议 MDT 时会诊目的不能为空"}
+
+        raw_departments = departments if departments is not None else []
+        if not isinstance(raw_departments, list):
+            return {"ok": False, "error": "科室必须是列表"}
+        if len(raw_departments) > 6:
+            return {"ok": False, "error": "参与科室最多 6 个"}
+        normalized_departments: List[str] = []
+        invalid_departments: List[str] = []
+        for raw in raw_departments:
+            if not isinstance(raw, str) or not raw.strip():
+                invalid_departments.append(str(raw))
+                continue
+            resolved = department_domain.resolve(raw)
+            if not resolved.name:
+                invalid_departments.append(raw.strip())
+                continue
+            normalized_departments.append(resolved.name)
+        if invalid_departments:
+            return {"ok": False, "error": "科室不在支持的科室域内：" + "、".join(invalid_departments)}
+        if len(normalized_departments) != len(set(normalized_departments)):
+            return {"ok": False, "error": "参与科室必须是不同科室"}
+        if decision == "recommend_mdt" and len(normalized_departments) < 2:
+            return {"ok": False, "error": "建议 MDT 时至少两个不同科室"}
+
+        now = _now()
+        screening = {
+            "status": "decided",
+            "decision": decision,
+            "decision_label": MDT_SCREENING_LABELS[decision],
+            "reason": safe_reason,
+            "purpose": safe_purpose,
+            "departments": normalized_departments,
+            "reviewer_id": safe_reviewer,
+            "decided_at": now,
+            "patient_next_step": MDT_SCREENING_NEXT_STEPS[decision],
+            "mdt_queue_eligible": decision == "recommend_mdt",
+        }
+        payload = dict(case.get("payload") or {})
+        payload["mdt_screening"] = screening
+        self.store.save_case(
+            case_id,
+            owner_id=case.get("owner_id") or "",
+            patient_name=case.get("patient_name") or "",
+            main_issue=case.get("main_issue") or "",
+            status=case.get("status") or "running",
+            case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
+            report_version=int(case.get("report_version") or 1),
+            payload=payload,
+        )
+        self.store.add_audit(
+            case_id,
+            "mdt_screening_recorded",
+            f"decision={decision}; departments={'、'.join(normalized_departments) or '无'}; reason=provided",
+        )
+        return {
+            "ok": True,
+            "mdt_screening": screening,
+            "patient_mdt_screening": patient_safe_mdt_screening(screening),
+        }
+
     def get_case(self, case_id: str) -> Optional[Dict[str, Any]]:
         return self.store.load_case(case_id) if self.store else None
 
@@ -1433,6 +1548,10 @@ class CaseFlow:
         )
         for case in cases:
             payload = case.get("payload") or {}
+            screening = payload.get("mdt_screening") or {}
+            # 急症处理已经离开普通 MDT 流程，不进入医生常规审核队列。
+            if screening.get("decision") == "urgent_care":
+                continue
             triage = payload.get("triage") or {}
             items = review_service.apply_decisions(
                 review_service.build_items(case),
@@ -1473,6 +1592,11 @@ class CaseFlow:
                 "risk_rank": risk_rank,
                 "review": summary,
                 "reviewed_by": (payload.get("review") or {}).get("published_by") or "",
+                "mdt_screening": {
+                    "decision": screening.get("decision") or "",
+                    "decision_label": screening.get("decision_label") or "",
+                    "mdt_queue_eligible": screening.get("mdt_queue_eligible"),
+                } if screening else None,
                 "report_version": int(case.get("report_version") or 1),
                 "analysis_state": analysis_state,
                 "analysis_phases": {k: (v or {}).get("state")
@@ -1554,6 +1678,7 @@ class CaseFlow:
             "case_id": case_id,
             "case_state": case.get("case_state"),
             "case_state_label": CASE_STATE_LABELS.get(str(case.get("case_state")), case.get("case_state")),
+            "mdt_screening": payload.get("mdt_screening") or None,
             "items": [i.to_dict() for i in items],
             "summary": summary,
             "pending_questions": review_service.pending_questions(items),

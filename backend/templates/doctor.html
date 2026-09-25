@@ -69,25 +69,11 @@
       <h1>进入医生工作台</h1>
       <p class="muted">先从风险优先队列开始，只处理需要医生决定的条目；接受、修改、驳回、暂不确定，全部留痕可回溯。</p>
 
-      <div class="role-cards">
-        <div class="role-card" onclick="showAccountLogin()">
-          <span class="ic">🩺</span>
-          <span>
-            <span class="t">进入医生工作台</span>
-            <span class="d">病例审阅 · 证据核查 · 逐条审核 · 录入线下意见</span>
-          </span>
-          <span class="go">→</span>
-        </div>
+      <div class="row" style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
+        <input id="login-user" placeholder="账号" autocomplete="username" style="flex:1;min-width:160px;">
+        <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password" style="flex:1;min-width:160px;">
+        <button class="primary" onclick="loginForm()">登录</button>
       </div>
-
-      <details open>
-        <summary>或使用账号登录</summary>
-        <div class="row" style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
-          <input id="login-user" placeholder="账号" style="flex:1;min-width:160px;">
-          <input id="login-pass" type="password" placeholder="密码" style="flex:1;min-width:160px;">
-          <button class="primary" onclick="loginForm()">登录</button>
-        </div>
-      </details>
 
       <div id="login-msg" class="banner danger hide" style="margin-top:var(--sp-12);"></div>
     </div>
@@ -300,15 +286,6 @@ async function api(path, opt){
 }
 
 /* ===================== 登录 ===================== */
-function showAccountLogin(){
-  const details=document.querySelector('#login details');
-  if(details) details.open=true;
-  const user=$('login-user');
-  if(user && !user.value) user.value='doctor';
-  const pass=$('login-pass');
-  if(pass) pass.focus();
-  msg('login-msg', '请输入医生账号密码', 'info');
-}
 async function loginForm(){
   const username = $('login-user').value.trim(), password = $('login-pass').value;
   const r = await api('/api/login', {method:'POST', body:JSON.stringify({username, password})});
@@ -496,6 +473,62 @@ function updateBadge(){
     : 'AI 生成 · 尚未经医生审核';
 }
 
+/* ===================== MDT 初筛与病例分流 ===================== */
+function renderMdtScreening(){
+  const screening = (S.review&&S.review.mdt_screening) || {};
+  if(screening.status === 'decided'){
+    const tone = screening.decision==='urgent_care' ? 'danger' :
+      (screening.decision==='recommend_mdt' ? 'info' : 'ok');
+    return `<div class="card" style="margin:0 0 var(--sp-16);border-left:3px solid var(--accent);">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
+        <h3 style="margin:0;">MDT 初筛结果</h3><span class="pill ${tone}">${esc(screening.decision_label||'已完成')}</span>
+      </div>
+      <div class="field" style="margin-top:10px;"><div class="muted" style="min-width:72px;">处理原因</div><div style="flex:1;">${esc(screening.reason||'—')}</div></div>
+      ${screening.purpose?`<div class="field"><div class="muted" style="min-width:72px;">会诊目的</div><div style="flex:1;">${esc(screening.purpose)}</div></div>`:''}
+      ${(screening.departments||[]).length?`<div class="field"><div class="muted" style="min-width:72px;">参与科室</div><div style="flex:1;">${screening.departments.map(esc).join('、')}</div></div>`:''}
+      <div class="tiny" style="margin-top:8px;">已记录于 ${esc(screening.decided_at||'')}；患者只会看到下一步提示。</div>
+    </div>`;
+  }
+  const selected = (((S.caseData||{}).payload||{}).triage||{}).selected || [];
+  const options = selected.length ? selected : ['内分泌科','眼科','肾内科'];
+  return `<div class="card" style="margin:0 0 var(--sp-16);border-left:3px solid var(--accent);">
+    <h3 style="margin-top:0;">MDT 初筛与病例分流</h3>
+    <p class="muted">先判断是否需要多学科协作，再进入后续审核。初筛决定会单独留痕。</p>
+    <div class="field"><label style="min-width:88px;">处理方向</label>
+      <select id="mdt-screening-decision" onchange="toggleMdtScreeningFields()" style="flex:1;">
+        <option value="single_specialty">单专科处理</option>
+        <option value="recommend_mdt">建议 MDT</option>
+        <option value="need_more_info">需要补充资料</option>
+        <option value="urgent_care">急症处理</option>
+      </select>
+    </div>
+    <div id="mdt-screening-multi-fields" class="hide">
+      <div class="field"><label style="min-width:88px;">会诊目的</label><input id="mdt-screening-purpose" placeholder="填写这次希望共同解决的问题" style="flex:1;"></div>
+      <div class="field"><label style="min-width:88px;">参与科室</label><div style="flex:1;display:flex;gap:8px;flex-wrap:wrap;">${options.map(d=>`<label class="chip"><input type="checkbox" data-mdt-dept value="${esc(d)}"> ${esc(d)}</label>`).join('')}</div></div>
+    </div>
+    <div class="field"><label style="min-width:88px;">初筛原因</label><textarea id="mdt-screening-reason" placeholder="说明为什么选择这个处理方向" style="flex:1;min-height:70px;"></textarea></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;align-items:center;"><span id="mdt-screening-msg" class="tiny"></span><button class="primary" onclick="submitMdtScreening()">保存初筛决定</button></div>
+  </div>`;
+}
+function toggleMdtScreeningFields(){
+  const select = $('mdt-screening-decision');
+  const box = $('mdt-screening-multi-fields');
+  if(select && box) box.classList.toggle('hide', select.value!=='recommend_mdt');
+}
+async function submitMdtScreening(){
+  const decision = String(($('mdt-screening-decision')||{}).value||'');
+  const reason = String(($('mdt-screening-reason')||{}).value||'').trim();
+  const purpose = String(($('mdt-screening-purpose')||{}).value||'').trim();
+  const departments = Array.from(document.querySelectorAll('[data-mdt-dept]:checked')).map(x=>x.value);
+  const r = await api('/api/v2/case/'+S.caseId+'/mdt-screening', {method:'POST', body:JSON.stringify({decision, reason, purpose, departments})});
+  if(r.status!==200 || !r.data.ok){
+    const n=$('mdt-screening-msg'); if(n) n.textContent=r.data.error||'保存失败';
+    return;
+  }
+  await openCase(S.caseId);
+  go('overview');
+}
+
 /* ===================== 屏 B：病例总览 ===================== */
 function renderOverview(){
   const c = S.caseData||{}, p = c.payload||{}, prof = p.profile||{}, t = p.triage||{};
@@ -518,7 +551,7 @@ function renderOverview(){
       <button class="mini" onclick="go('evidence')">看证据</button></div>`);
   if(!todo.length) todo.push('<div class="tiny">暂无待处理事项</div>');
 
-  $('ov-body').innerHTML = `
+  $('ov-body').innerHTML = renderMdtScreening() + `
     <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">
       <div style="flex:1.3;min-width:280px;">
         <div class="ai-block"><strong>画像卡（每条带原文出处；紫色=AI 推断，灰色=待确认）</strong></div>

@@ -50,6 +50,31 @@ class FrontendStructureTest(unittest.TestCase):
                 status, _ = self.get(path)
                 self.assertEqual(status, 200, f"{path} 应为 200")
 
+    def test_root_is_the_role_selection_home(self):
+        """启动后应先进入首页，由首页选择患者端或医生工作台。"""
+        status, html = self.get("/")
+        self.assertEqual(status, 200)
+        self.assertIn('id="homeHero"', html)
+        self.assertNotIn('<title>多学科就医智助系统 · 患者端</title>', html)
+        self.assertNotIn('<title>多学科就医智助系统 · 医生工作台</title>', html)
+
+    def test_home_does_not_duplicate_account_login(self):
+        """主页只负责角色选择，账号和密码输入应放在对应角色页。"""
+        _, html = self.get("/")
+        self.assertNotIn('id="accountToggle"', html)
+        self.assertNotIn('id="accountRow"', html)
+        self.assertNotIn('id="login-user"', html)
+        self.assertNotIn('id="login-pass"', html)
+        self.assertNotIn('fillAccount(', html)
+
+    def test_startup_banner_lists_home_as_primary_entry(self):
+        """命令行启动提示的主入口必须是根目录首页，不应误导到患者端。"""
+        from pathlib import Path
+        source = Path(flask_app.__file__).read_text(encoding="utf-8")
+        self.assertIn('[首页] http://{host}:{port}/', source)
+        self.assertIn('[患者端] http://{host}:{port}/patient', source)
+        self.assertIn('[医生端] http://{host}:{port}/doctor', source)
+
     def test_shared_stylesheet_served(self):
         """公共样式与 token 都要能取到；且 token 是**单一来源**（dsh.css 只 @import，不复制色板）。"""
         status, css = self.get("/static/css/dsh.css")
@@ -110,17 +135,21 @@ class FrontendStructureTest(unittest.TestCase):
             self.assertEqual(offenders, [], f"{name} 第 {offenders} 行含 `{{#`（改写成 `{{ #id`）")
 
     # ------------------------------------------------------------------ 3. 三轨外壳
-    def test_patient_three_track_shell(self):
+    def test_patient_shell_has_four_stage_flow_without_persistent_context_rail(self):
         _, html = self.get("/patient")
         self.assertIn('href="/static/css/dsh.css"', html)
         self.assertIn('class="appbar"', html)
         self.assertIn('class="shell"', html)
         self.assertEqual(html.count('class="rail rail-left"'), 1)
-        self.assertEqual(html.count('class="rail rail-right"'), 1)
-        self.assertIn('id="ctx-panel"', html)
-        self.assertIn('id="ctx-inline-panel"', html)   # <1440px 的整宽上下文
+        self.assertEqual(html.count('class="rail rail-right"'), 0)
+        self.assertNotIn('id="ctx-panel"', html)
+        self.assertNotIn('id="ctx-inline-panel"', html)
         self.assertIn('id="steps"', html)              # 左轨流程导航
         self.assertIn('id="steps-bar"', html)
+        self.assertIn('id="s-stage1"', html)
+        self.assertIn('id="s-stage2"', html)
+        self.assertIn('id="s-stage3"', html)
+        self.assertIn('id="s-stage4"', html)
 
     def test_patient_sections_live_inside_main(self):
         """所有业务屏必须在 <main class="work"> 内：两条轨道都必须在 main 之外。
@@ -129,22 +158,79 @@ class FrontendStructureTest(unittest.TestCase):
         """
         _, html = self.get("/patient")
         ids = self.sections_of(html, "main")
-        expected = {"s-goal", "s-intake", "s-mask", "s-profile", "s-ask", "s-triage",
-                    "s-path", "s-mdt", "s-report", "s-update", "s-changes", "s-done"}
+        expected = {"s-stage1", "s-stage2", "s-stage3", "s-stage4", "s-update", "s-changes", "s-done"}
         self.assertTrue(expected.issubset(set(ids)), f"main 内缺少屏：{expected - set(ids)}")
+        self.assertEqual(
+            {x for x in ids if x.startswith("s-stage")},
+            {"s-stage1", "s-stage2", "s-stage3", "s-stage4"},
+            "首次准备流程必须只有四个主阶段"
+        )
 
         rail_left = html.index('class="rail rail-left"')
-        rail_right = html.index('class="rail rail-right"')
         main_open = html.index('<main class="work">')
         main_close = html.index("</main>")
         self.assertLess(rail_left, main_open, "左轨应排在 main 之前且不在 main 内")
-        self.assertLess(main_close, rail_right, "右轨应排在 main 结束之后且不在 main 内")
+        self.assertGreater(main_close, main_open)
 
     def test_patient_uses_shared_tokens_only(self):
         """患者端不应再自带蓝色主题变量（已统一为暖色 token）。"""
         _, html = self.get("/patient")
         self.assertNotIn("--blue", html)
         self.assertIn("--accent", html)
+
+    def test_patient_stage1_is_one_concise_intake_form(self):
+        """第 1 步只保留患者填写所需内容，目标和资料共用一个底部主按钮。"""
+        _, html = self.get("/patient")
+        start = html.index('id="s-stage1"')
+        end = html.index('id="s-stage2"')
+        stage1 = html[start:end]
+
+        self.assertIn('id="s-intake-group"', stage1)
+        self.assertIn('id="s-goal"', stage1)
+        self.assertIn('id="s-intake"', stage1)
+        self.assertEqual(stage1.count('onclick="startCaseFlow()"'), 1)
+        self.assertIn('继续 → 核对资料', stage1)
+
+        for removed in (
+            "这个系统会做什么",
+            "不会做什么",
+            "一段资料大概长什么样",
+            "为什么先脱敏",
+            "提交后会看到",
+            "直接开始录入资料",
+            "系统会先帮你整理成画像卡",
+        ):
+            self.assertNotIn(removed, stage1)
+        self.assertNotIn('class="upd-grid"', stage1)
+
+    def test_patient_revalidates_persisted_session_before_showing_app(self):
+        """服务重启后旧 token 会失效，不能只凭 localStorage 直接展示工作台。"""
+        _, html = self.get("/patient")
+        self.assertIn("async function restoreSession()", html)
+        self.assertIn("api('/api/me'", html)
+        self.assertIn("restoreSession().then", html)
+        self.assertIn("localStorage.removeItem('dsh_session')", html)
+
+    def test_patient_stage2_skips_visible_mask_preview_but_keeps_auto_privacy_gate(self):
+        """第 2 步直接展示画像；脱敏仍在后台作为病例创建前的安全门槛。"""
+        _, html = self.get("/patient")
+        stage2_start = html.index('id="s-stage2"')
+        stage3_start = html.index('id="s-stage3"')
+        stage2 = html[stage2_start:stage3_start]
+        self.assertNotIn('id="s-mask"', stage2)
+
+    def test_patient_stage2_does_not_duplicate_stage3_analysis_progress(self):
+        """回答完毕后会跳到第 3 步，进度只应在第 3 步顶部展示。"""
+        _, html = self.get("/patient")
+        stage2_start = html.index('id="s-stage2"')
+        stage3_start = html.index('id="s-stage3"')
+        stage2 = html[stage2_start:stage3_start]
+        self.assertNotIn('id="analysis-note"', stage2)
+        self.assertIn('id="s-profile"', stage2)
+        self.assertIn('id="s-ask"', stage2)
+        self.assertIn("startCaseFlow", html)
+        self.assertIn("preview_token:S.previewToken", html)
+        self.assertIn("blocking_hit_count", html)
 
     def test_doctor_three_track_shell(self):
         """医生工作台：左轨 = 队列筛选 + 审阅视图；右轨 = 审核面板。"""
@@ -196,30 +282,26 @@ class FrontendStructureTest(unittest.TestCase):
                 self.assertIn('class="auth-side"', html)
                 self.assertIn('class="auth-foot"', html)
                 self.assertIn(side_marker, html, f"{path} 右侧说明栏缺内容")
-                self.assertIn('id="login-user"', html)
                 self.assertIn('id="login-pass"', html)
                 # 旧的内联 padding 规则会把整块撑变形，必须已移除
                 self.assertNotIn("#login{padding:24px;}", html)
 
-    def test_login_pages_offer_only_their_own_entry(self):
-        """登录页一端一入口：/patient 只提供患者端入口，/doctor 只提供医生工作台入口。
-
-        回归背景：早期"屏 0"是一个共用登录页（双角色卡）；拆成两页后整块复制，
-        导致两端页面上都摆着对方的入口，用户不知道该进哪个。
-        跨端只保留底部一条弱链接（"医务人员请前往医生工作台 →" / "就诊者请前往患者端 →"）。
-        """
+    def test_login_pages_use_direct_role_password_login(self):
+        """角色页直接显示本角色密码登录，不再要求重复点击角色入口卡。"""
         cases = (("/patient", "patient", "doctor"), ("/doctor", "doctor", "patient"))
         for path, own, other in cases:
             with self.subTest(path=path):
                 _, html = self.get(path)
                 login = html[html.index('<div id="login"'):]
-                cards = re.findall(r'<div class="role-card" onclick="showAccountLogin\(\)"', login)
-                self.assertEqual(len(cards), 1, f"{path} 登录页应只有一个本端账号入口")
-                self.assertNotIn("loginAs(", login, f"{path} 不应再调用免密角色登录")
-                # 跨端只允许弱链接，不出现对端的"进入"字样按钮
+                self.assertNotIn('class="role-card"', login, f"{path} 不应再出现重复角色入口卡")
+                self.assertNotIn("showAccountLogin(", login, f"{path} 不应再要求二次点击后才显示密码框")
+                self.assertIn('id="login-user"', login)
+                self.assertIn('id="login-pass"', login)
+                self.assertNotIn('class="login-account"', login)
+                self.assertNotIn(f"const u='{own}'", login)
+                self.assertNotIn(f"const username = '{own}'", login)
+                # 跨端只保留弱链接，避免用户走错后无法切换
                 self.assertIn(f'href="/{other}"', login, f"{path} 应有一条跨端弱链接")
-                self.assertNotIn(f'<span class="t">进入{"医生工作台" if own == "patient" else "患者端"}</span>',
-                                 login, f"{path} 不应出现对端入口卡")
 
     def test_json_key_order_is_preserved(self):
         """报告段落内部字段是"给人读的顺序"，JSON 序列化不得按字母重排。
@@ -268,6 +350,9 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("sectionDigest", html, "折叠段应带内容摘要提示")
         self.assertIn("syncReportToggle", html)
         self.assertIn("openAllForPrint", html)
+        self.assertIn('class="report-screen"', html)
+        self.assertIn('class="print-report"', html)
+        self.assertIn("buildPrintReportHtml", html)
         # 打印前自动展开、打印后恢复
         self.assertRegex(html, r"addEventListener\(\s*'beforeprint'[^)]*\)")
         self.assertRegex(html, r"addEventListener\(\s*'afterprint'[^)]*\)")
@@ -282,21 +367,51 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("details.sec", print_block)
         self.assertIn(".sec-hint,.chev,.doc-tools", print_block.replace(" ", ""))
         self.assertIn("display:none !important", print_block.replace(" ", " "))
+        self.assertIn(".report-screen{display:none!important;}", print_block.replace(" ", ""))
+        self.assertIn(".print-report{display:block!important;}", print_block.replace(" ", ""))
 
     def test_patient_ui_has_no_internal_jargon(self):
-        """患者端不出现内部代码与实现术语（前端评审 P0：降低认知负担）。
-
-        典型泄漏：`决策路径 rule-dominant`、`（G4 门禁）`、`编排结果（安全约束后）`、
-        `阈值校验`。中文标签由后端随分诊结果一起给出（`decision_path_label` /
-        `behavior_type_label`），前端直接展示。
-        """
+        """患者端不出现内部代码与实现术语（前端评审 P0：降低认知负担）。"""
         _, html = self.get("/patient")
         for jargon in ("G4 门禁", "编排结果", "安全约束后", "阈值校验", "规则引擎"):
             with self.subTest(jargon=jargon):
                 self.assertNotIn(jargon, html)
-        self.assertIn("decision_path_label", html)
-        self.assertIn("behavior_type_label", html)
         self.assertNotIn("esc(t.decision_path||", html, "决策路径不应直接显示内部代码")
+        self.assertNotIn("decision_path_label", html)
+        self.assertNotIn("behavior_type_label", html)
+
+    def test_patient_stage_labels_and_report_status_copy(self):
+        _, html = self.get("/patient")
+        for label in ("填写情况", "核对资料", "查看建议", "生成就医摘要"):
+            self.assertIn(label, html)
+        self.assertIn("AI 就诊准备摘要", html)
+        self.assertIn("医生审核版报告", html)
+        self.assertNotIn("共 9 步", html)
+
+    def test_mdt_screening_is_explicit_and_patient_safe(self):
+        _, doctor = self.get("/doctor")
+        _, patient = self.get("/patient")
+        for token in (
+            "mdt-screening", "single_specialty", "recommend_mdt",
+            "need_more_info", "urgent_care", "submitMdtScreening",
+        ):
+            self.assertIn(token, doctor, f"医生端缺少初筛入口或决定：{token}")
+        self.assertIn("医生建议多学科共同评估", patient)
+        self.assertIn("请尽快前往急诊或拨打 120", patient)
+        self.assertNotIn("reviewer_id", patient)
+
+    def test_patient_stage3_uses_plain_direction_path_and_specialty_summary(self):
+        """第三步只给患者方向、关联任务和通俗专科摘要，内部推理留在医生端。"""
+        _, html = self.get("/patient")
+        stage3_start = html.index('id="s-stage3"')
+        stage4_start = html.index('id="s-stage4"')
+        stage3 = html[stage3_start:stage4_start]
+
+        for internal in ("规则命中（确定性，可审计）", "模型受限发言", "可靠性", "病例类型",
+                         "建议向医生确认的问题", "还不确定的部分", "共识", "质询"):
+            self.assertNotIn(internal, stage3)
+        self.assertIn("AI 多学科参考意见", stage3)
+        self.assertIn("路径中的任务", html)
 
     # ------------------------------------------- 医生端关键操作的窄屏可见性
     def test_doctor_publish_entry_survives_narrow_screens(self):

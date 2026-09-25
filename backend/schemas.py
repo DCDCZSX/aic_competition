@@ -59,6 +59,20 @@ CASE_STATE_LABELS: Dict[str, str] = {
     "awaiting_recheck": "新资料进入后待复核",
 }
 
+# 医生 MDT 初筛子状态（独立于病例主状态机）。
+MDT_SCREENING_DECISIONS = (
+    "single_specialty",
+    "recommend_mdt",
+    "need_more_info",
+    "urgent_care",
+)
+MDT_SCREENING_LABELS: Dict[str, str] = {
+    "single_specialty": "单专科处理",
+    "recommend_mdt": "建议 MDT",
+    "need_more_info": "需要补充资料",
+    "urgent_care": "急症处理",
+}
+
 # 证据状态（规格书 §5 / 主文档 §9.3）
 EVIDENCE_STATES = (
     "direct",            # 有明确证据

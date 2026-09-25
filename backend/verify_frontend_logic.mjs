@@ -1,7 +1,7 @@
 /**
  * 前端渲染逻辑校验（Node + 最小 DOM 桩，不需要浏览器）
  * ---------------------------------------------------------------------------
- * 为什么需要：三轨工作台的两条轨道（患者端流程导航/病例上下文、医生工作台待办病例/审核面板）
+ * 为什么需要：工作台的流程导航、阶段内容和医生审核面板都由内联 JS 渲染
  * 全部由内联 JS 渲染。业务单测跑不到、服务端 HTML 里也没有这些内容，而它们恰恰是
  * "页面两侧空白" 问题的解法所在。这个脚本把两页的内联 JS 抽出来，在 Node 里用最小
  * DOM 桩执行关键渲染函数，断言产出真的填进了对应的容器。
@@ -19,10 +19,20 @@ const TPL = path.join(HERE, 'templates');
 /* ------------------------------------------------------------------ DOM 桩 */
 const els = new Map();
 function mkEl(id) {
+  const classes = new Set();
   return {
     id, innerHTML: '', textContent: '', className: '', value: '', dataset: {},
     style: { setProperty() { }, width: '' },
-    classList: { add() { }, remove() { }, toggle() { }, contains() { return false; } },
+    classList: {
+      add(...names) { names.forEach(name => classes.add(name)); },
+      remove(...names) { names.forEach(name => classes.delete(name)); },
+      toggle(name, force) {
+        if (force === true || (force === undefined && !classes.has(name))) classes.add(name);
+        else if (force === false || classes.has(name)) classes.delete(name);
+        return classes.has(name);
+      },
+      contains(name) { return classes.has(name); },
+    },
     setAttribute() { }, getAttribute() { return null; }, removeAttribute() { },
     addEventListener() { }, querySelector() { return null; }, querySelectorAll() { return []; },
     focus() { }, click() { },
@@ -58,53 +68,52 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 
 /* -------------------------------------------------------------- 患者端断言 */
 {
-  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner, sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, renderTriage };');
+  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, syncStagePanels, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner, sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, renderTriage, renderPath, renderMdt, doPreview };');
   const { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner,
-          sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, renderTriage } = globalThis.__P;
+          syncStagePanels, sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, renderTriage,
+          renderPath, renderMdt,
+          doPreview } = globalThis.__P;
 
-  check('患者端主流程为 9 步', STEPS.length === 9, String(STEPS.length));
+  check('患者端主流程为 4 个阶段', STEPS.length === 4, String(STEPS.length));
 
-  renderSteps('goal');
+  renderSteps('stage1');
   const h1 = el('steps').innerHTML;
   const count = (h1.match(/class="step[ "]/g) || []).length;
-  check('左轨渲染出 9 个步骤项', count === 9, String(count));
-  check('左轨含步骤名与两位序号', h1.includes('就医目标') && h1.includes('09'), '');
-  check('当前步骤高亮', h1.includes('class="step active"'), '');
-  check('第 1 步进度 0%', el('steps-bar').style.width === '0%', el('steps-bar').style.width);
-  check('第 1 步说明为「第 1 / 9 步」', el('steps-note').textContent.includes('第 1 / 9 步'),
+  check('左轨渲染出 4 个阶段项', count === 4, String(count));
+  check('左轨含阶段名与两位序号', h1.includes('填写情况') && h1.includes('04'), '');
+  check('当前阶段高亮', h1.includes('class="step active"'), '');
+  check('第 1 阶段进度 0%', el('steps-bar').style.width === '0%', el('steps-bar').style.width);
+  check('第 1 阶段说明为「第 1 / 4 步」', el('steps-note').textContent.includes('第 1 / 4 步'),
     el('steps-note').textContent);
 
-  renderSteps('triage');
-  const h6 = el('steps').innerHTML;
-  const done = (h6.match(/class="step done"/g) || []).length;
-  check('已走过的 5 步标记为 done', done === 5, String(done));
-  check('已走过的步骤可点击回跳', h6.includes(`onclick="go('goal')"`), '');
-  check('第 6 步进度 63%', el('steps-bar').style.width === '63%', el('steps-bar').style.width);
+  renderSteps('stage3');
+  const h3 = el('steps').innerHTML;
+  const done = (h3.match(/class="step done"/g) || []).length;
+  check('已走过的 2 个阶段标记为 done', done === 2, String(done));
+  check('已走过的阶段可点击回跳', h3.includes('onclick="go(' + "'" + 'stage1' + "'" + ')"'), '');
+  check('第 3 阶段进度 67%', el('steps-bar').style.width === '67%', el('steps-bar').style.width);
 
-  // 就诊后更新 / 变化摘要不在 9 步主流程内 → 应显示"附加环节"而不是"尚未开始"
+  syncStagePanels('stage2');
+  check('回看核对资料阶段直接显示画像和追问',
+    !el('s-profile').classList.contains('hide') && !el('s-ask').classList.contains('hide'), '');
+  syncStagePanels('stage3');
+  check('回看查看建议阶段显示三个建议面板',
+    !el('s-triage').classList.contains('hide') && !el('s-path').classList.contains('hide')
+      && !el('s-mdt').classList.contains('hide'), '');
+
+  // 就诊后更新 / 变化摘要不在首次准备的四个阶段内 → 主流程显示为已完成
   renderSteps('update');
   const hu = el('steps').innerHTML;
-  check('附加环节：主流程 9 步全部完成', (hu.match(/class="step done"/g) || []).length === 9, '');
+  check('附加环节：四个阶段全部完成', (hu.match(/class="step done"/g) || []).length === 4, '');
   check('附加环节：进度条 100%', el('steps-bar').style.width === '100%', el('steps-bar').style.width);
   check('附加环节：说明不写「尚未开始」',
     !el('steps-note').textContent.includes('尚未开始') && el('steps-note').textContent.includes('附加环节'),
     el('steps-note').textContent);
 
-  // 右轨上下文（有数据）
+  // 患者端保留顶栏病例号，不再渲染常驻病例上下文栏
   S.caseId = 'C1234ABCD';
-  S.profile = { chief_complaint: '视物模糊3月', age: 58, sex: '男' };
-  S.triage = { primary: { department: '内分泌科' }, reliability: { level: '中', reasons: ['仍有信息缺口'] } };
-  S.gaps = ['眼底检查：信息不足', '心脏/冠脉检查：信息不足', '血常规：信息不足'];
-  S.path = { tasks: [{ state: 'done' }, { state: 'todo' }, { state: 'todo' }] };
   renderContext();
-  const rail = el('ctx-panel').innerHTML;
-  check('右轨含当前病例与病例号', rail.includes('当前病例') && rail.includes('C1234ABCD'), '');
-  check('右轨含可靠性等级', rail.includes('可靠性 中'), '');
-  check('右轨列出信息缺口与条数', rail.includes('眼底检查') && rail.includes('(3)'), '');
-  check('右轨含任务进度 1 / 3', rail.includes('已完成 1 / 3'), '');
-  check('窄屏整宽上下文与右轨同源', el('ctx-inline-panel').innerHTML === rail, '');
   check('顶栏病例号同步', el('ctx-case').textContent.includes('C1234ABCD'), el('ctx-case').textContent);
-  check('右轨声明未经医生审核', rail.includes('尚未经医生审核'), '');
 
   /* 报告段落渲染器：绝不能把对象拼成 [object Object]（"报告里冒出英文/乱码"缺陷的回归） */
   const nested = {
@@ -159,7 +168,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('收起后按钮文案回到「展开全部」', el('rep-toggle-all').textContent === '展开全部',
     el('rep-toggle-all').textContent);
 
-  /* 打印：必须打印完整报告，打印后恢复用户原来的折叠状态 */
+  /* 完整报告的屏幕折叠状态：打印版独立，打印后仍恢复原来的折叠状态 */
   fakeSecs[0].open = true;
   S.reportOpen = { 0: true };
   openAllForPrint();
@@ -170,11 +179,21 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   globalThis.document.querySelectorAll = realQSA;
 
   /* 完整报告 HTML：默认收起 + 目录与段落 id 对应 + 内容仍在 DOM 里 */
-  S.report = { full: { sections: { '病例概况': '一句话概况', '检查与证据': ['条目一', '条目二'] },
+  S.report = { mdt_screening: { decision: 'recommend_mdt', departments: ['内分泌科', '眼科'], patient_next_step: '医生建议多学科共同评估，请按后续就医安排准备资料。' }, summary: { stage_label: 'AI 就诊准备摘要', report_version: 1, review_status_label: 'AI 生成，尚未经医生审核', doctor_confirmed: false, case_id: 'C1234ABCD', generated_at: '2026-09-24', sections: { '主要问题': '视物模糊', '建议咨询方向': '眼科', '当前任务': ['资料准备｜带上近期检查结果'], '需要向医生确认的问题': ['是否需要完善眼底检查'] } }, full: { sections: { '病例概况': '一句话概况', '检查与证据': ['条目一', '条目二'], '就医路径': [{ '步骤': 'S1', '类型': '资料准备', '内容': '带上近期检查结果' }] },
                        section_order: ['病例概况', '检查与证据'], complete: true } };
   S.reportOpen = {};
   switchReport('full');
   const fullHtml = el('report-body').innerHTML;
+  switchReport('summary');
+  const summaryHtml = el('report-body').innerHTML;
+  check('摘要默认显示 AI 就诊准备阶段', summaryHtml.includes('AI 就诊准备摘要') && summaryHtml.includes('版本 1'), '');
+  check('摘要不把 AI 阶段写成医生审核版', !summaryHtml.includes('已发布医生审核版'), '');
+  check('打印版准备单保留行动信息', summaryHtml.includes('class="print-report"')
+    && summaryHtml.includes('患者就医准备单') && summaryHtml.includes('就医步骤')
+    && summaryHtml.includes('当前待办') && summaryHtml.includes('就诊时可问医生'), '');
+  check('患者看到医生初筛的下一步', summaryHtml.includes('医生建议多学科共同评估')
+    && summaryHtml.includes('相关科室：内分泌科、眼科'), summaryHtml);
+
   check('完整报告渲染成可折叠段落', (fullHtml.match(/<details class="sec"/g) || []).length === 2,
     String((fullHtml.match(/<details class="sec"/g) || []).length));
   check('默认全部收起（没有 open 属性）', !fullHtml.includes(' open>'), '');
@@ -204,15 +223,46 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   };
   renderTriage();
   const tri = el('triage-body').innerHTML;
-  check('分诊页显示中文决策方式而不是内部代码',
-    tri.includes('以规则为主（模型仅作补充）') && !tri.includes('rule-dominant'), '');
-  check('分诊页病例类型带中文说明',
-    tri.includes('B 型（多病共病）'), '');
-  check('分诊页不再出现内部术语（编排结果/安全约束/阈值校验/门禁）',
-    !tri.includes('编排结果') && !tri.includes('安全约束') && !tri.includes('阈值校验'), '');
-  check('分诊页仍说明"规则先于模型"的信任逻辑',
-    tri.includes('不能推翻规则已经命中的方向'), '');
-  check('分诊页保留"牵头 ≠ 确诊"的免责说明', tri.includes('牵头方向 ≠ 最终诊断科室'), '');
+  check('分诊页只展示就医方向',
+    tri.includes('内分泌科') && tri.includes('眼科') && !tri.includes('规则命中')
+      && !tri.includes('模型受限发言') && !tri.includes('rule-dominant'), tri);
+  check('分诊页隐藏可靠性和病例类型等内部信息',
+    !tri.includes('可靠性') && !tri.includes('病例类型') && !tri.includes('决策方式'), tri);
+  check('分诊页保留"牵头方向 ≠ 确诊"的免责说明', tri.includes('牵头方向 ≠ 最终诊断科室'), '');
+
+  /* 路径与任务合并：每个路径步骤下直接挂对应任务，不再渲染独立任务栏 */
+  S.path = {steps: [
+    {step_id: 'S1', title: '先做好资料准备', detail: '整理近期检查报告'},
+    {step_id: 'S2', title: '挂内分泌科（牵头方向）', detail: '带上就医摘要'},
+    {step_id: 'S4', title: '带检查结果复诊', detail: '若医生安排了检查'},
+  ], tasks: [
+    {task_id: 'T-001', type: '资料准备', content: '整理近 3 个月血糖记录', priority: 'high', state: 'todo', source: 'path:内分泌科'},
+    {task_id: 'T-002', type: '就医咨询', content: '向医生确认是否需要复查', priority: 'high', state: 'todo', source: '内分泌科:checks'},
+    {task_id: 'T-003', type: '就诊后资料更新', content: '就诊后上传新检查结果', priority: 'medium', state: 'todo', source: 'path:followup'},
+  ]};
+  renderPath();
+  const pathHtml = el('path-body').innerHTML;
+  check('路径页面将任务挂在对应步骤下',
+    pathHtml.includes('路径中的任务') && pathHtml.includes('整理近 3 个月血糖记录')
+      && pathHtml.includes('向医生确认是否需要复查'), pathHtml);
+  check('路径页面不再单独渲染任务栏', !pathHtml.includes('我的任务（'), pathHtml);
+
+  /* 专科参考意见：保留通俗摘要，隐藏置信度、确认问题、不确定性和聚合技术词 */
+  S.mdt = {card_count: 1, departments: ['眼科'], analyses: [
+    {department: '眼科', status: 'ok', focus: '眼底与视网膜',
+      inferences: [{text: '可能需要进一步了解眼底情况', confidence: 'medium'}],
+      checks: [{content: '建议向医生确认是否需要眼底检查'}], referral: null},
+  ], aggregation: {
+    consensus: [{topic: '眼底检查'}], disagreements: [], uncertainties: [{topic: '信息不足'}],
+    open_questions: ['是否需要眼科随诊'],
+  }};
+  renderMdt();
+  const mdtHtml = el('mdt-body').innerHTML;
+  check('专科参考意见使用患者能理解的摘要',
+    mdtHtml.includes('参考提示') && mdtHtml.includes('可能需要进一步了解眼底情况'), mdtHtml);
+  check('专科参考意见隐藏确认问题和不确定性',
+    !mdtHtml.includes('建议向医生确认') && !mdtHtml.includes('还不确定')
+      && !mdtHtml.includes('共识') && !mdtHtml.includes('medium'), mdtHtml);
 
   /* 后台 MDT 进度渲染（两段式）：必须显示"第几科/共几科"，失败时如实说明 */
   const running = mdtProgressHtml({ state: 'running', done: 1, total: 3, current: '眼科' });
@@ -220,17 +270,19 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     running.slice(0, 80));
   check('进度显示已完成科数', running.includes('已完成 1 / 3'), '');
   check('进度条按科数计算', running.includes('width:33%'), '');
-  check('进度文案解释为什么不显示概率', running.includes('独立研判'), '');
+  check('进度文案使用患者能理解的表达', running.includes('正在整理各专科建议')
+    && !running.includes('独立研判') && !running.includes('共识与分歧聚合'), '');
   /* 后台分析任务的状态横幅（渐进式）：三相位 + MDT 子步骤 + 失败可重试 */
   const bannerRun = analysisBanner({ state: 'running',
     phases: { profile: { state: 'done' }, triage: { state: 'running' }, mdt: { state: 'pending' } },
     mdt: { state: 'running', done: 1, total: 3, current: '眼科', step: '正在读取资料并形成意见卡' } });
-  check('横幅显示三个相位', bannerRun.includes('画像模型增强') && bannerRun.includes('就医方向（模型发言）')
-    && bannerRun.includes('多学科独立意见'), bannerRun.slice(0, 90));
+  check('横幅显示三个相位', bannerRun.includes('整理资料') && bannerRun.includes('判断就医方向')
+    && bannerRun.includes('整理相关科室建议'), bannerRun.slice(0, 90));
   check('横幅区分完成/进行中', bannerRun.includes('已完成') && bannerRun.includes('进行中'), '');
   check('横幅显示 MDT 子步骤与第几科', bannerRun.includes('眼科') && bannerRun.includes('第 2 科')
-    && bannerRun.includes('正在读取资料并形成意见卡'), '');
-  check('横幅说明规则优先', bannerRun.includes('模型不会推翻规则命中的强项'), '');
+    && bannerRun.includes('正在整理眼科的参考意见'), '');
+  check('横幅不泄漏内部阶段术语', !bannerRun.includes('模型发言')
+    && !bannerRun.includes('独立意见'), '');
   const single = analysisBanner({ state: 'done',
     phases: { mdt: { state: 'skipped' } },
     mdt: { state: 'skipped', step: '仅 1 个就医方向，无需多学科会诊' } });
@@ -239,17 +291,31 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     phases: { profile: { state: 'failed', note: 'RuntimeError: 网关不可用' } },
     mdt: { state: 'pending' } });
   check('失败横幅给出原因与重试入口',
-    bad.includes('网关不可用') && bad.includes('retryAnalysis') && bad.includes('不会编造结论'),
+    bad.includes('部分建议暂未整理完成') && bad.includes('整理资料：暂未完成')
+      && bad.includes('retryAnalysis'),
     bad.slice(0, 120));
   const failed = mdtProgressHtml({ state: 'failed', error: 'ReadTimeout' });
   check('失败时如实说明且不编造', failed.includes('未完成') && failed.includes('ReadTimeout')
     && failed.includes('不会因此编造结论'), failed.slice(0, 80));
+
+  /* API 失败时必须把服务端原因告诉患者，不能统一吞成“预览失败” */
+  el('history').value = '2型糖尿病5年，视物模糊3个月。';
+  el('main-issue').value = '该看哪个科';
+  fetchPayload = { status: 401, data: { error: '未登录或会话已过期，请先登录' } };
+  await doPreview();
+  check('预览失败显示服务端原因', el('intake-msg').innerHTML.includes('会话已过期'), el('intake-msg').innerHTML);
 }
 
 /* ----------------------------------------------------- 医生工作台断言 */
 {
-  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderReview, setQueueFilter, goQueuePage };');
+  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderReview, renderMdtScreening, setQueueFilter, goQueuePage };');
   const D = globalThis.__D;
+
+  D.S.caseData = { payload: { triage: { selected: ['内分泌科', '眼科'] } } };
+  D.S.review = { mdt_screening: null };
+  const screeningPanel = D.renderMdtScreening();
+  check('医生端显示 MDT 初筛表单', screeningPanel.includes('MDT 初筛与病例分流')
+    && screeningPanel.includes('recommend_mdt') && screeningPanel.includes('保存初筛决定'), screeningPanel);
 
   fetchPayload = {
     status: 200,

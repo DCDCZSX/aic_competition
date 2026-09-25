@@ -385,6 +385,19 @@ class Report:
     sections: Dict[str, Any] = field(default_factory=dict)
     missing_sections: List[str] = field(default_factory=list)
     doctor_confirmed: bool = False
+    stage: str = "ai_preparation"
+    report_version: int = 1
+    review_status: str = "ai_unreviewed"
+
+    @property
+    def stage_label(self) -> str:
+        if self.stage == "doctor_reviewed":
+            return "医生审核版报告" if self.kind == "full" else "医生审核版摘要"
+        return "AI 就诊准备报告" if self.kind == "full" else "AI 就诊准备摘要"
+
+    @property
+    def review_status_label(self) -> str:
+        return "已发布医生审核版" if self.review_status == "doctor_confirmed" else "AI 生成，尚未经医生审核"
 
     @property
     def complete(self) -> bool:
@@ -398,6 +411,11 @@ class Report:
             "generated_at": self.generated_at,
             "badge": ("" if self.doctor_confirmed else self.badge),
             "doctor_confirmed": self.doctor_confirmed,
+            "stage": self.stage,
+            "stage_label": self.stage_label,
+            "review_status": self.review_status,
+            "review_status_label": self.review_status_label,
+            "report_version": self.report_version,
             "sections": self.sections,
             # JSON 序列化（Flask jsonify）会按 key 排序，因此额外给出**权威段落顺序**
             # （完整报告须遵循规格书 §12.2 的 1-13 段，不能被打乱）
@@ -429,6 +447,7 @@ def build_patient_summary(case: Dict[str, Any]) -> Report:
     secondary = triage.get("secondary") or []
     gaps = [g for g in (payload.get("gaps") or [])]
     decisions = _decision_map(payload.get("decisions") or [])
+    confirmed = case.get("case_state") == "doctor_confirmed"
 
     consult_questions: List[str] = []
     for t in tasks:
@@ -454,7 +473,10 @@ def build_patient_summary(case: Dict[str, Any]) -> Report:
 
     report = Report(kind="summary", case_id=case.get("case_id", ""),
                     generated_at=_now(),
-                    doctor_confirmed=(case.get("case_state") == "doctor_confirmed"))
+                    doctor_confirmed=confirmed,
+                    stage="doctor_reviewed" if confirmed else "ai_preparation",
+                    report_version=int(case.get("report_version") or 1),
+                    review_status="doctor_confirmed" if confirmed else "ai_unreviewed")
     direction_values = _apply_advice_decisions(
         [_departments_line(primary, secondary)], "建议咨询方向", decisions)
     report.sections = {
@@ -478,7 +500,7 @@ def _known_facts(profile: Dict[str, Any]) -> List[str]:
         facts.append(f"{item.get('item')} {item.get('value') or ''}".strip())
     for item in (profile.get("medications") or [])[:3]:
         facts.append(f"用药：{item.get('name')} {item.get('dose') or ''}".strip())
-    return facts or ["（未提供）"]
+    return facts
 
 
 def _departments_line(primary: Dict[str, Any], secondary: List[Dict[str, Any]]) -> str:
@@ -518,9 +540,13 @@ def build_full_report(case: Dict[str, Any]) -> Report:
         card["doctor_confirmed"] = review_status == "doctor_confirmed"
     evidence_stat = summarize_evidence(cards)
 
+    confirmed = case.get("case_state") == "doctor_confirmed"
     report = Report(kind="full", case_id=case.get("case_id", ""),
                     generated_at=_now(),
-                    doctor_confirmed=(case.get("case_state") == "doctor_confirmed"))
+                    doctor_confirmed=confirmed,
+                    stage="doctor_reviewed" if confirmed else "ai_preparation",
+                    report_version=int(case.get("report_version") or 1),
+                    review_status="doctor_confirmed" if confirmed else "ai_unreviewed")
 
     reliability = triage.get("reliability") or {}
     open_questions: List[str] = []
@@ -648,14 +674,15 @@ def _differences(decisions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def render_markdown(report: Report) -> str:
     lines: List[str] = []
-    title = "一页就医摘要" if report.kind == "summary" else "多学科就医辅助报告（模拟审核版）"
+    title = report.stage_label
     lines.append(f"# {title}")
     lines.append("")
     lines.append(f"> 病例号：{report.case_id}　生成时间：{report.generated_at}")
+    lines.append(f"> 阶段：{report.stage_label}　报告版本：{report.report_version}")
     if not report.doctor_confirmed:
-        lines.append(f"> ⚠️ **{AI_BADGE}**")
+        lines.append(f"> ⚠️ **{report.review_status_label}**")
     else:
-        lines.append("> ✅ 已由医生审核确认")
+        lines.append("> ✅ 已发布医生审核版")
     lines.append("")
     lines.append("---")
     lines.append("")

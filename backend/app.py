@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from services.ai_service import AIService
 from services.auth import (AuthService, AuthError, AuthRateLimitError, ROLE_DOCTOR, ROLE_GUEST, ROLE_PATIENT,
                            auth_required, extract_token)
-from services.case_flow import CaseFlow
+from services.case_flow import CaseFlow, patient_safe_mdt_screening
 from services.ask_service import MAX_ANSWER_ITEMS, MAX_ANSWER_KEY_LENGTH
 from services.config import read_int_env
 from services.intake import MAX_MAIN_ISSUE_LENGTH, MAX_TEXT_LENGTH, sanitized_payload
@@ -566,6 +566,15 @@ def get_case(case_id):
     session, case, error = _guard_case(case_id)
     if error:
         return error
+    if session and session.role == ROLE_PATIENT:
+        # 医生初筛保存在病例 payload 中，但患者只需要看到进度和下一步，
+        # 不应看到内部审核人账号或权限字段。
+        safe_case = dict(case)
+        safe_payload = dict(case.get('payload') or {})
+        safe_payload['mdt_screening'] = patient_safe_mdt_screening(
+            safe_payload.get('mdt_screening'))
+        safe_case['payload'] = safe_payload
+        case = safe_case
     return jsonify({'case': case, 'audit': _shared_store.list_audit(case_id, limit=50)})
 
 
@@ -667,6 +676,35 @@ def get_mdt(case_id):
     return jsonify(data)
 
 
+@app.route('/api/v2/case/<case_id>/mdt-screening', methods=['POST'])
+def submit_mdt_screening(case_id):
+    """医生提交 MDT 初筛决定；初筛是病例子状态，不改变 case_state。"""
+    session, error = _guard_doctor_case(case_id, 'decision')
+    if error:
+        return error
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        decision = string_field(data, 'decision', default='', max_length=64)
+        reason = string_field(data, 'reason', default='', max_length=2000)
+        purpose = string_field(data, 'purpose', default='', max_length=2000)
+        departments = string_list(data, 'departments', default=(), max_items=6)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    result = case_flow.submit_mdt_screening(
+        case_id,
+        decision=decision,
+        reason=reason,
+        purpose=purpose,
+        departments=departments,
+        reviewer_id=session.username,
+    )
+    if not result.get('ok'):
+        result.setdefault('code', 'invalid_request')
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
 @app.route('/api/v2/case/<case_id>/report', methods=['GET'])
 def get_report(case_id):
     """生成患者版一页摘要 + 医生审核版完整报告（P9）。"""
@@ -676,6 +714,9 @@ def get_report(case_id):
     reports = case_flow.build_reports(case_id)
     if not reports:
         return jsonify({'error': f'病例不存在：{case_id}'}), 404
+    if session and session.role == ROLE_PATIENT:
+        reports['mdt_screening'] = patient_safe_mdt_screening(
+            (case.get('payload') or {}).get('mdt_screening'))
     return jsonify(reports)
 
 
@@ -898,7 +939,9 @@ if __name__ == '__main__':
 
     print("=" * 60)
     print("[启动] 多学科就医智助系统")
-    print(f"[地址] http://{host}:{port}")
+    print(f"[首页] http://{host}:{port}/")
+    print(f"[患者端] http://{host}:{port}/patient")
+    print(f"[医生端] http://{host}:{port}/doctor")
     print(f"[模式] 调试={'开启（仅限本地开发）' if debug else '关闭'}")
     print(f"[模型] {os.getenv('AI_MODEL_NAME', 'qwen-max-latest')}")
     if not os.getenv('AI_API_KEY'):

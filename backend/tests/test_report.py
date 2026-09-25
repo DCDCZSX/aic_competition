@@ -208,10 +208,22 @@ class TestPatientSummary(unittest.TestCase):
         report = build_patient_summary(sample_case())
         self.assertEqual(report.to_dict()["badge"], AI_BADGE)
 
+    def test_unreviewed_report_has_explicit_patient_stage(self):
+        data = build_patient_summary(sample_case()).to_dict()
+        self.assertEqual(data["stage"], "ai_preparation")
+        self.assertEqual(data["stage_label"], "AI 就诊准备摘要")
+        self.assertEqual(data["review_status"], "ai_unreviewed")
+        self.assertEqual(data["report_version"], 1)
+        self.assertNotIn("医生审核版", data["stage_label"])
+
     def test_badge_cleared_after_doctor_confirmation(self):
         case = sample_case()
         case["case_state"] = "doctor_confirmed"
-        self.assertEqual(build_patient_summary(case).to_dict()["badge"], "")
+        data = build_patient_summary(case).to_dict()
+        self.assertEqual(data["badge"], "")
+        self.assertEqual(data["stage"], "doctor_reviewed")
+        self.assertEqual(data["stage_label"], "医生审核版摘要")
+        self.assertEqual(data["review_status"], "doctor_confirmed")
 
     def test_no_duplicate_consult_questions(self):
         case = sample_case()
@@ -359,8 +371,24 @@ class TestFullReport(unittest.TestCase):
         both = build_both(sample_case())
         self.assertIn("summary", both)
         self.assertIn("full", both)
-        self.assertIn("# 一页就医摘要", both["summary_markdown"])
-        self.assertIn("# 多学科就医辅助报告", both["full_markdown"])
+        self.assertIn("# AI 就诊准备摘要", both["summary_markdown"])
+        self.assertIn("# AI 就诊准备报告", both["full_markdown"])
+
+    def test_markdown_exposes_stage_and_version(self):
+        case = sample_case()
+        case["report_version"] = 3
+        markdown = render_markdown(build_patient_summary(case))
+        self.assertIn("AI 就诊准备摘要", markdown)
+        self.assertIn("报告版本：3", markdown)
+        self.assertNotIn("已由医生审核确认", markdown)
+
+    def test_confirmed_markdown_uses_doctor_reviewed_stage(self):
+        case = sample_case()
+        case["case_state"] = "doctor_confirmed"
+        case["report_version"] = 2
+        markdown = render_markdown(build_full_report(case))
+        self.assertIn("医生审核版报告", markdown)
+        self.assertIn("报告版本：2", markdown)
 
 
 class TestEndToEnd(unittest.TestCase):
