@@ -1679,6 +1679,7 @@ class CaseFlow:
             "case_state": case.get("case_state"),
             "case_state_label": CASE_STATE_LABELS.get(str(case.get("case_state")), case.get("case_state")),
             "mdt_screening": payload.get("mdt_screening") or None,
+            "mdt_preparation_packet": report_service.build_mdt_preparation_packet(case),
             "items": [i.to_dict() for i in items],
             "summary": summary,
             "pending_questions": review_service.pending_questions(items),

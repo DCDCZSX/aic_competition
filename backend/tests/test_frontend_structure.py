@@ -400,6 +400,20 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("请尽快前往急诊或拨打 120", patient)
         self.assertNotIn("reviewer_id", patient)
 
+    def test_doctor_mdt_preparation_packet_is_source_labeled_before_review(self):
+        _, html = self.get("/doctor")
+        for token in (
+            "mdt_preparation_packet", "会前资料包", "专科 AI 参考意见",
+            "来源类型", "信息缺口", "分歧与处理状态",
+        ):
+            self.assertIn(token, html, f"医生端会前资料包缺少：{token}")
+        self.assertIn("renderMdtPreparationPacket", html)
+        self.assertLess(
+            html.index("renderMdtPreparationPacket"),
+            html.index("function renderReview"),
+            "会前资料包应在逐条审核渲染函数之前定义并可被总览调用",
+        )
+
     def test_patient_stage3_uses_plain_direction_path_and_specialty_summary(self):
         """第三步只给患者方向、关联任务和通俗专科摘要，内部推理留在医生端。"""
         _, html = self.get("/patient")

@@ -22,6 +22,7 @@ from services.mdt_analyst import (  # noqa: E402
     METHOD_LLM,
     METHOD_LLM_REPAIRED,
     METHOD_SKIPPED,
+    SpecialtyAnalysis,
     aggregate,
     analyze_specialty,
     canonical_topic,
@@ -179,6 +180,12 @@ class TestSpecialtyCard(unittest.TestCase):
         "information_gaps": ["无既往眼底记录"],
         "referral": None,
     }, ensure_ascii=False)
+
+    def test_serialized_specialty_content_has_ai_source_marker(self):
+        result = SpecialtyAnalysis(department="眼科", method=METHOD_SKIPPED)
+        data = result.to_dict()
+        self.assertEqual(data["source_type"], "ai_reference")
+        self.assertEqual(data["source_label"], "专科 AI 参考意见")
 
     def test_analyze_ok(self):
         result = analyze_specialty(ai_service=FakeAI(reply=self.CARD_JSON),

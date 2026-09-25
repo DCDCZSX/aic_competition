@@ -70,6 +70,10 @@ SCOPE_LABELS: Dict[str, str] = {
 }
 LEVEL_LABELS: Dict[str, str] = {"direct": "直接引证", "indirect": "间接支持"}
 SOURCE_KIND_LABELS: Dict[str, str] = {"check": "检查类建议", "gap": "信息缺口"}
+SOURCE_TYPE_LABELS: Dict[str, str] = {
+    "ai_reference": "专科 AI 参考意见",
+    "human_reviewed": "医生审核内容",
+}
 DECISION_PATH_LABELS: Dict[str, str] = {
     "rule-dominant": "以规则为主（模型仅作补充）",
     "model-dominant": "以模型为主（规则未命中强项）",
@@ -305,9 +309,10 @@ def specialty_views_for_report(analyses: Any) -> List[Dict[str, Any]]:
     for analysis in analyses or []:
         dept = analysis.get("department") or "（未知科室）"
         if analysis.get("status") != "ok":
-            out.append({"科室": dept, "状态": "本版未生成（模型未配置或调用失败）"})
+            out.append({"科室": dept, "来源": SOURCE_TYPE_LABELS["ai_reference"],
+                        "状态": "本版未生成（模型未配置或调用失败）"})
             continue
-        row: Dict[str, Any] = {"科室": dept}
+        row: Dict[str, Any] = {"科室": dept, "来源": SOURCE_TYPE_LABELS["ai_reference"]}
         if analysis.get("focus"):
             row["关注点"] = analysis["focus"]
         row["客观事实"] = list(analysis.get("facts") or []) or ["（无）"]
@@ -318,6 +323,179 @@ def specialty_views_for_report(analyses: Any) -> List[Dict[str, Any]]:
             row["建议转诊协作"] = analysis["referral"]
         out.append(row)
     return out
+
+
+def build_mdt_preparation_packet(case: Dict[str, Any]) -> Dict[str, Any]:
+    """从现有结构化病例即时生成医生可读的 MDT 会前资料包。
+
+    资料包只组合已经脱敏和结构化的数据，不复制完整病史；它是审核接口的
+    派生视图，不落库。专科分析由系统生成时固定标记为 ``ai_reference``，
+    只有已验证的医生端线下意见才进入 ``human_reviewed`` 区域。
+    """
+    case = case or {}
+    payload = case.get("payload") or {}
+    profile = payload.get("profile") or {}
+    triage = payload.get("triage") or {}
+    path = payload.get("path") or {}
+    mdt = payload.get("mdt") or {}
+    aggregation = mdt.get("aggregation") or {}
+    screening_raw = payload.get("mdt_screening") or {}
+
+    screening = {
+        "status": screening_raw.get("status") or "pending",
+        "decision": screening_raw.get("decision") or "",
+        "decision_label": screening_raw.get("decision_label") or "待医生初筛",
+        "reason": screening_raw.get("reason") or "",
+        "purpose": screening_raw.get("purpose") or "",
+        "departments": list(screening_raw.get("departments") or []),
+        "mdt_queue_eligible": bool(screening_raw.get("mdt_queue_eligible")),
+    }
+
+    timeline_raw = build_timeline(profile)
+    timeline = timeline_for_report(timeline_raw)
+    evidence_cards = build_evidence_cards(profile, triage, mdt)
+    evidence = evidence_cards_for_report(evidence_cards)
+    evidence_refs = sorted({
+        str(ref)
+        for event in timeline_raw
+        for ref in (event.get("source_refs") or [])
+        if str(ref).strip()
+    })
+
+    specialty_opinions: List[Dict[str, Any]] = []
+    unavailable_departments: List[str] = []
+    for analysis in mdt.get("analyses") or []:
+        department = str(analysis.get("department") or "（未知科室）")
+        source_type = "ai_reference"
+        if analysis.get("status") != "ok":
+            unavailable_departments.append(department)
+            specialty_opinions.append({
+                "department": department,
+                "status": "unavailable",
+                "source_type": source_type,
+                "source_label": SOURCE_TYPE_LABELS[source_type],
+                "notice": "本专科参考意见暂未生成，不能按已完成意见使用。",
+            })
+            continue
+        specialty_opinions.append({
+            "department": department,
+            "status": "available",
+            "source_type": source_type,
+            "source_label": SOURCE_TYPE_LABELS[source_type],
+            "focus": str(analysis.get("focus") or ""),
+            "facts": [str(item) for item in (analysis.get("facts") or [])[:6]],
+            "inferences": [
+                {
+                    "text": str(item.get("text") or ""),
+                    "evidence_refs": [str(ref) for ref in (item.get("evidence_refs") or [])],
+                }
+                for item in (analysis.get("inferences") or [])[:4]
+            ],
+            "checks": [
+                {
+                    "priority": str(item.get("priority") or "medium"),
+                    "content": str(item.get("content") or ""),
+                }
+                for item in (analysis.get("checks") or [])[:5]
+            ],
+            "information_gaps": [
+                str(item) for item in (analysis.get("information_gaps") or [])[:6]
+            ],
+            "referral": str(analysis.get("referral") or ""),
+        })
+
+    human_reviewed: List[Dict[str, Any]] = []
+    unverified_opinion_count = 0
+    for opinion in payload.get("doctor_opinions") or []:
+        if not opinion.get("is_verified"):
+            unverified_opinion_count += 1
+            continue
+        human_reviewed.append({
+            "department": str(opinion.get("department") or "线下医生"),
+            "content": str(opinion.get("opinion") or ""),
+            "at": str(opinion.get("at") or ""),
+            "source_type": "human_reviewed",
+            "source_label": SOURCE_TYPE_LABELS["human_reviewed"],
+        })
+
+    consensus = consensus_for_report(aggregation.get("consensus"))
+    disagreements = disagreements_for_report(aggregation.get("disagreements"))
+    uncertainties = uncertainties_for_report(aggregation.get("uncertainties"))
+    handling = {
+        "disagreements": [
+            {
+                "topic": item.get("分歧主题") or "",
+                "status": "待医生裁决",
+                "next_step": item.get("如何收敛") or "需补充更明确的证据后再判断",
+            }
+            for item in disagreements
+        ],
+        "information_gaps": [
+            {"item": str(item), "status": "待补充资料"}
+            for item in (payload.get("gaps") or [])[:10]
+        ],
+        "unavailable_specialties": [
+            {"department": department, "status": "待补齐意见"}
+            for department in unavailable_departments
+        ],
+    }
+
+    primary = triage.get("primary") or {}
+    packet = {
+        "case_id": str(case.get("case_id") or ""),
+        "screening": screening,
+        "patient_summary": {
+            "chief_complaint": str(profile.get("chief_complaint") or case.get("main_issue") or ""),
+            "age": profile.get("age"),
+            "sex": profile.get("sex") or "",
+        },
+        "triage": {
+            "primary_department": str(primary.get("department") or ""),
+            "secondary_departments": [
+                str(item.get("department") or "")
+                for item in (triage.get("secondary") or [])
+                if item.get("department")
+            ],
+            "reliability": str((triage.get("reliability") or {}).get("level") or "—"),
+            "reliability_reasons": [
+                str(item) for item in ((triage.get("reliability") or {}).get("reasons") or [])[:4]
+            ],
+        },
+        "timeline": timeline,
+        "evidence_links": [
+            {"ref": ref, "source": "患者结构化资料"} for ref in evidence_refs
+        ],
+        "evidence": evidence,
+        "information_gaps": [str(item) for item in (payload.get("gaps") or [])[:10]],
+        "path": path_steps_for_report(path.get("steps")),
+        "tasks": [
+            {
+                "type": str(item.get("type") or ""),
+                "content": str(item.get("content") or ""),
+                "priority": str(item.get("priority") or ""),
+                "state": str(item.get("state") or ""),
+            }
+            for item in (payload.get("tasks") or path.get("tasks") or [])[:10]
+        ],
+        "specialty_opinions": specialty_opinions,
+        "human_reviewed": human_reviewed,
+        "unverified_opinion_count": unverified_opinion_count,
+        "consensus": consensus,
+        "disagreements": disagreements,
+        "uncertainties": uncertainties,
+        "open_questions": [str(item) for item in (aggregation.get("open_questions") or [])[:10]],
+        "handling": handling,
+        "notes": [
+            "以上专科内容均为 AI 参考意见，不是真实专科医生意见。",
+            "分歧、缺失证据和未生成的科室意见需由医生结合线下资料处理。",
+        ],
+        "status": {
+            "mdt_available": bool(specialty_opinions and not unavailable_departments),
+            "unavailable_departments": unavailable_departments,
+        },
+        "source_legend": dict(SOURCE_TYPE_LABELS),
+    }
+    return packet
 
 
 def consensus_for_report(items: Any) -> List[Dict[str, Any]]:
