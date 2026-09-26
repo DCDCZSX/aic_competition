@@ -115,6 +115,19 @@ class Store:
                     at         TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS report_versions (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    case_id         TEXT NOT NULL,
+                    version         INTEGER NOT NULL,
+                    published_by    TEXT NOT NULL,
+                    published_at    TEXT NOT NULL,
+                    review_summary  TEXT NOT NULL,
+                    report_json     TEXT NOT NULL,
+                    summary_markdown TEXT NOT NULL,
+                    full_markdown   TEXT NOT NULL,
+                    UNIQUE(case_id, version)
+                );
+
                 CREATE TABLE IF NOT EXISTS case_access (
                     case_id    TEXT NOT NULL,
                     reviewer_id TEXT NOT NULL,
@@ -129,6 +142,8 @@ class Store:
                     ON case_access(reviewer_id, case_id);
                 CREATE INDEX IF NOT EXISTS idx_cases_created
                     ON cases(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_report_versions_case
+                    ON report_versions(case_id, version ASC);
                 """
             )
             columns = {row[1] for row in self._conn.execute("PRAGMA table_info(cases)")}
@@ -322,7 +337,8 @@ class Store:
     def transition_case(self, case_id: str, to_state: str, *, actor: str = "system",
                         reason: str = "", status: Optional[str] = None,
                         report_version: Optional[int] = None,
-                        payload: Optional[Dict[str, Any]] = None) -> List[str]:
+                        payload: Optional[Dict[str, Any]] = None,
+                        report_version_snapshot: Optional[Dict[str, Any]] = None) -> List[str]:
         """校验并在一个事务中写入病例状态与逐跳流转记录。"""
         from services.case_state import TRANSITIONS, UnknownState, IllegalTransition
 
@@ -356,23 +372,29 @@ class Store:
                     raise IllegalTransition(f"无法从 {start} 转移到 {to_state}")
 
             new_payload = payload if payload is not None else case.get("payload") or {}
-            self._conn.execute(
-                """UPDATE cases SET status=?, case_state=?, report_version=?, updated_at=?, payload=?
-                   WHERE case_id=?""",
-                (status if status is not None else case.get("status") or "running", to_state,
-                 int(report_version if report_version is not None else case.get("report_version") or 1),
-                 _now(), json.dumps(new_payload, ensure_ascii=False), case_id),
-            )
-            current = start
-            for nxt in path:
+            try:
                 self._conn.execute(
-                    """INSERT INTO transitions (case_id, case_state, from_state, to_state,
-                       actor, reason, is_anomaly, at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)""",
-                    (case_id, nxt, current, nxt, actor, reason, _now()),
+                    """UPDATE cases SET status=?, case_state=?, report_version=?, updated_at=?, payload=?
+                       WHERE case_id=?""",
+                    (status if status is not None else case.get("status") or "running", to_state,
+                     int(report_version if report_version is not None else case.get("report_version") or 1),
+                     _now(), json.dumps(new_payload, ensure_ascii=False), case_id),
                 )
-                current = nxt
-            self._conn.commit()
-            return path
+                current = start
+                for nxt in path:
+                    self._conn.execute(
+                        """INSERT INTO transitions (case_id, case_state, from_state, to_state,
+                           actor, reason, is_anomaly, at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)""",
+                        (case_id, nxt, current, nxt, actor, reason, _now()),
+                    )
+                    current = nxt
+                if report_version_snapshot is not None:
+                    self._insert_report_version_locked(report_version_snapshot)
+                self._conn.commit()
+                return path
+            except Exception:
+                self._conn.rollback()
+                raise
 
     @staticmethod
     def _row_to_case(row: sqlite3.Row) -> Dict[str, Any]:
@@ -477,6 +499,87 @@ class Store:
                 except json.JSONDecodeError:
                     continue
         return out
+
+    # ------------------------------------------------------------------ 不可变报告版本
+    @staticmethod
+    def _report_version_payload(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        required = ("case_id", "version", "published_by", "published_at",
+                    "review_summary", "report_json", "summary_markdown", "full_markdown")
+        missing = [key for key in required if key not in snapshot]
+        if missing:
+            raise ValueError("报告版本缺少字段：" + "、".join(missing))
+        payload = dict(snapshot)
+        payload["case_id"] = str(payload["case_id"])
+        payload["version"] = int(payload["version"])
+        payload["published_by"] = str(payload["published_by"])
+        payload["published_at"] = str(payload["published_at"])
+        payload["review_summary"] = payload["review_summary"] or {}
+        payload["report_json"] = payload["report_json"] or {}
+        payload["summary_markdown"] = str(payload["summary_markdown"] or "")
+        payload["full_markdown"] = str(payload["full_markdown"] or "")
+        return payload
+
+    def _insert_report_version_locked(self, snapshot: Dict[str, Any]) -> None:
+        payload = self._report_version_payload(snapshot)
+        try:
+            self._conn.execute(
+                """INSERT INTO report_versions
+                   (case_id, version, published_by, published_at, review_summary,
+                    report_json, summary_markdown, full_markdown)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (payload["case_id"], payload["version"], payload["published_by"],
+                 payload["published_at"],
+                 json.dumps(payload["review_summary"], ensure_ascii=False),
+                 json.dumps(payload["report_json"], ensure_ascii=False),
+                 payload["summary_markdown"], payload["full_markdown"]),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("报告版本已存在且不可覆盖") from exc
+
+    def save_report_version(self, snapshot: Dict[str, Any]) -> None:
+        """保存一个不可变报告快照；相同病例/版本不会被更新。"""
+        with self._lock:
+            self._insert_report_version_locked(snapshot)
+            self._conn.commit()
+
+    @staticmethod
+    def _row_to_report_version(row: sqlite3.Row) -> Dict[str, Any]:
+        data = dict(row)
+        for key in ("review_summary", "report_json"):
+            try:
+                data[key] = json.loads(data.get(key) or "{}")
+            except json.JSONDecodeError:
+                data[key] = {}
+        # 便于调用方直接读取摘要/完整报告，同时保留原始组合 JSON 字段。
+        report_json = data.get("report_json") or {}
+        if isinstance(report_json, dict):
+            data.setdefault("summary", report_json.get("summary"))
+            data.setdefault("full", report_json.get("full"))
+        return data
+
+    def list_report_versions(self, case_id: str, *, include_reports: bool = True) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM report_versions WHERE case_id=? ORDER BY version ASC",
+                (case_id,),
+            ).fetchall()
+        versions = [self._row_to_report_version(row) for row in rows]
+        if not include_reports:
+            for version in versions:
+                version.pop("report_json", None)
+                version.pop("summary", None)
+                version.pop("full", None)
+                version.pop("summary_markdown", None)
+                version.pop("full_markdown", None)
+        return versions
+
+    def get_report_version(self, case_id: str, version: int) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM report_versions WHERE case_id=? AND version=?",
+                (case_id, int(version)),
+            ).fetchone()
+        return self._row_to_report_version(row) if row else None
 
     # ------------------------------------------------------------------ 状态流转
     def save_transition(self, case_id: str, from_state: str, to_state: str,

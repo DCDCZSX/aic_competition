@@ -570,7 +570,27 @@ function renderMdtPreparationPacket(){
     ? consensus.map(item=>`<div class="tiny">· ${esc(item['共识主题']||'')}（${esc(item['支持科室']||'')}）</div>`).join('')
     : '<div class="tiny">暂无可汇总的共识。</div>';
   const disagreementHtml = disagreements.length
-    ? disagreements.map(item=>`<div class="opcard"><strong>${esc(item.topic||'未命名分歧')}</strong><span class="pill warn">${esc(item.status||'待医生裁决')}</span><div class="tiny" style="margin-top:5px;">下一步：${esc(item.next_step||'需补充证据后再判断')}</div></div>`).join('')
+    ? disagreements.map(item=>{
+        const id = item['分歧编号'] || item.disagreement_id || '';
+        const topic = item['分歧主题'] || item.topic || '未命名分歧';
+        const status = item['处理状态'] || item.status || '待医生裁决';
+        const choice = item['牵头医生决定'] || item.choice || '';
+        const reason = item['处理理由'] || item.reason || '';
+        const next = item['下一步'] || item.next_step || '';
+        const statusCode = status==='已解决' ? 'resolved' : (status==='需要补充资料' ? 'need_more_info' : 'unresolved_with_followup');
+        const safeKey = String(id).replace(/[^A-Za-z0-9_-]/g,'');
+        return `<div class="opcard">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><strong>${esc(topic)}</strong><span class="pill ${status==='已解决'?'ok':'warn'}">${esc(status)}</span></div>
+          <div class="tiny" style="margin-top:5px;">${esc(id)}　下一步：${esc(next||'需补充证据后再判断')}</div>
+          <div class="field" style="margin-top:8px;"><label style="min-width:72px;">处理状态</label><select id="dis-status-${safeKey}" style="flex:1;">
+            <option value="resolved" ${statusCode==='resolved'?'selected':''}>已解决</option><option value="unresolved_with_followup" ${statusCode==='unresolved_with_followup'?'selected':''}>未解决，需后续跟进</option><option value="need_more_info" ${statusCode==='need_more_info'?'selected':''}>需要补充资料</option>
+          </select></div>
+          <div class="field"><label style="min-width:72px;">决定/结果</label><input id="dis-choice-${safeKey}" value="${esc(choice==='（未记录）'?'':choice)}" placeholder="已解决时填写牵头医生决定或修改结果" style="flex:1;"></div>
+          <div class="field"><label style="min-width:72px;">处理理由</label><textarea id="dis-reason-${safeKey}" placeholder="说明判断依据（必填）" style="flex:1;min-height:54px;">${esc(reason==='（未记录）'?'':reason)}</textarea></div>
+          <div class="field"><label style="min-width:72px;">下一步</label><textarea id="dis-next-${safeKey}" placeholder="未解决或需补资料时填写后续安排" style="flex:1;min-height:54px;">${esc(next)}</textarea></div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;align-items:center;"><span id="dis-msg-${safeKey}" class="tiny"></span><button class="mini" onclick="submitDisagreement('${esc(id)}','${safeKey}')">保存分歧处理</button></div>
+        </div>`;
+      }).join('')
     : '<div class="tiny">暂无方向性分歧。</div>';
   const gapHtml = gaps.length
     ? gaps.map((gap,i)=>`<div class="field"><div style="flex:1;">${esc(gap)}</div><span class="pill warn">${esc((((handling.information_gaps||[])[i]||{}).status)||'待补充资料')}</span></div>`).join('')
@@ -887,7 +907,8 @@ function renderReview(){
     + group('已完成审核', processed, false, 'processed', false)
     + group('自动处理', auto, false, 'auto', true);
 
-  const canPublish = sum.pending===0 && sum.total>0;
+  const pendingDisagreements = (r.pending_disagreements||[]).length;
+  const canPublish = sum.pending===0 && sum.total>0 && pendingDisagreements===0;
   /* 同一份面板渲染到两处：右轨（≥1440px 常驻）+ 屏 F 主区（窄屏时右轨被隐藏）。
      id 用前缀区分，避免重复 id 导致 getElementById 取错元素。 */
   $('rev-publish').innerHTML = publishPanelHtml(sum, canPublish, 'rail');
@@ -899,6 +920,7 @@ function renderReview(){
 function publishPanelHtml(sum, canPublish, pfx){
   sum = sum || {};
   const batchBlockedPending = Number(sum.batch_blocked_pending||0);
+  const pendingDisagreements = Number((S.review&&S.review.pending_disagreements||[]).length||0);
   const batchAllowed = !batchBlockedPending;
   return `
     <div class="card" style="margin-top:6px;">
@@ -906,6 +928,7 @@ function publishPanelHtml(sum, canPublish, pfx){
       <div class="tiny">审核进度：医生已处理 ${sum.doctor_reviewed||sum.human_touched||0}　免审（自动） ${sum.auto_processed||0}　待审 ${sum.pending||0}</div>
       <div class="tiny">规则：免审条目不会计入医生确认；批量处理只适用于已明确允许批量的条目，高风险、冲突、分析失败、科室选择和关键路径必须逐条处理。</div>
       ${batchBlockedPending?`<div class="tiny" style="color:var(--warn);">当前有 ${batchBlockedPending} 条必审项目必须逐条处理，批量入口已停用。</div>`:''}
+      ${pendingDisagreements?`<div class="tiny" style="color:var(--warn);">还有 ${pendingDisagreements} 条 MDT 分歧未记录处理状态，请先在会前资料包中保存牵头医生决定。</div>`:''}
       <div class="actions">
         <button class="mini" onclick="publish(false)" ${canPublish?'':'disabled'}>确认发布审核版（${sum.pending||0} 条待审）</button>
         <button class="primary mini" onclick="publish(true)" ${sum.total&&batchAllowed?'':'disabled'}>处理剩余必审并发布</button>
@@ -932,6 +955,21 @@ async function decide(itemId, action, after, reason){
   await refreshHeader();
   renderReview();
   return true;
+}
+async function submitDisagreement(disagreementId, key){
+  const status = String(($('dis-status-'+key)||{}).value||'');
+  const choice = String(($('dis-choice-'+key)||{}).value||'').trim();
+  const reason = String(($('dis-reason-'+key)||{}).value||'').trim();
+  const next = String(($('dis-next-'+key)||{}).value||'').trim();
+  const r = await api('/api/v2/case/'+S.caseId+'/disagreements', {method:'POST', body:JSON.stringify({
+    disagreement_id: disagreementId, status, choice, reason, next_step: next,
+    reviewer:(S.me&&S.me.label)||'模拟审核员'
+  })});
+  const box = $('dis-msg-'+key);
+  if(r.status!==200 || !r.data.ok){ if(box) box.textContent=r.data.error||'保存失败'; return; }
+  if(box) { box.textContent='已保存'; box.className='tiny ok'; }
+  await openCase(S.caseId);
+  go('overview');
 }
 function openModal(action, itemId){
   const labels = {modify:'修改条目', reject:'驳回条目', uncertain:'标记为暂不确定', request_more_info:'请求补充资料'};
@@ -986,9 +1024,14 @@ function renderHistory(){
   const decisions = h.decisions||[];
   const timeline = h.timeline||[];
   const items = h.items||[];
+  const versions = h.versions||[];
   $('hist-body').innerHTML = `
     <div class="ai-block">当前报告版本：<strong>v${esc(h.report_version||1)}</strong>　
       ${h.review&&h.review.published?('已由 '+esc(h.review.published_by||'医生')+' 于 '+esc(h.review.published_at||'')+' 发布'):'尚未发布审核版'}</div>
+    <h3>不可变报告版本</h3>
+    ${versions.length?versions.map(v=>`<div class="opcard"><strong>报告 v${esc(v.version)}</strong>　<span class="pill ok">${esc(v.published_by||'医生')} 发布</span>
+      <div class="tiny">${esc(v.published_at||'')}　分歧：${Number((v.review_summary||{}).disagreements||0)} 条，未处理 ${Number((v.review_summary||{}).disagreements_pending||0)} 条</div>
+      <div class="tiny">此版本内容来自发布时保存的快照，后续病例更新不会改写。</div></div>`).join(''):'<div class="tiny">暂无已发布报告快照；旧病例不会补造历史版本。</div>'}
     <h3>审核操作（逐条留痕）</h3>
     ${decisions.length?decisions.map(d=>`<div class="opcard">
       <strong>${esc(d.action_label)}</strong> ${esc(d.target_label||d.target_type)}｜${esc(d.target_id)}

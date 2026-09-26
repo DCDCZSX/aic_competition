@@ -358,6 +358,89 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         review = self.flow.get_review(self.case_id)
         return [i["item_id"] for i in review["items"]], review
 
+    def _accept_required_items(self):
+        for item in (self.flow.get_review(self.case_id) or {}).get("items", []):
+            if item["review_tier"] == rs.REQUIRED and item["state"] == rs.AWAITING:
+                result = self.flow.submit_decision(
+                    self.case_id, item["item_id"], "accept", reviewer_name="医学生")
+                self.assertTrue(result["ok"], result.get("error"))
+
+    def _use_sample_disagreement_case(self):
+        sample = sample_case()
+        self.flow.store.save_case(
+            self.case_id, owner_id="", patient_name="张*", main_issue=sample["main_issue"],
+            status="running", case_state=sample["case_state"], report_version=1,
+            payload=sample["payload"])
+
+    def test_disagreement_decision_validates_reason_and_followup(self):
+        self._use_sample_disagreement_case()
+        missing = self.flow.submit_disagreement_decision(
+            self.case_id, "X-01", "unresolved_with_followup",
+            reason="证据不足", reviewer_name="医学生")
+        self.assertFalse(missing["ok"])
+        self.assertIn("下一步", missing["error"])
+
+        recorded = self.flow.submit_disagreement_decision(
+            self.case_id, "X-01", "unresolved_with_followup",
+            reason="证据不足", next_step="补充眼底和肾功能检查后复核",
+            reviewer_name="医学生")
+        self.assertTrue(recorded["ok"], recorded.get("error"))
+        self.assertEqual(recorded["disagreement"]["status"], "unresolved_with_followup")
+        self.assertEqual(recorded["disagreement"]["reviewer_name"], "医学生")
+
+    def test_publish_requires_explicit_disagreement_status(self):
+        self._use_sample_disagreement_case()
+        self._accept_required_items()
+        blocked = self.flow.publish_review(self.case_id, reviewer_name="医学生")
+        self.assertFalse(blocked["ok"])
+        self.assertEqual(blocked["pending_disagreements"], ["X-01"])
+
+    def test_unresolved_disagreement_is_shown_in_published_snapshot(self):
+        self._use_sample_disagreement_case()
+        self._accept_required_items()
+        handled = self.flow.submit_disagreement_decision(
+            self.case_id, "X-01", "unresolved_with_followup",
+            reason="两种检查顺序都缺少直接证据", next_step="补齐检查结果后由牵头医生复核",
+            reviewer_name="医学生")
+        self.assertTrue(handled["ok"], handled.get("error"))
+        published = self.flow.publish_review(self.case_id, reviewer_name="医学生")
+        self.assertTrue(published["ok"], published.get("error"))
+
+        versions = self.flow.store.list_report_versions(self.case_id)
+        self.assertEqual([v["version"] for v in versions], [2])
+        disagreement = versions[0]["report_json"]["full"]["sections"]["分歧"][0]
+        self.assertEqual(disagreement["处理状态"], "未解决，需后续跟进")
+        self.assertIn("补齐检查结果", disagreement["下一步"])
+        self.assertEqual(disagreement["责任审核人"], "医学生")
+
+    def test_republished_snapshot_keeps_earlier_content_after_case_update(self):
+        self._use_sample_disagreement_case()
+        self._accept_required_items()
+        handled = self.flow.submit_disagreement_decision(
+            self.case_id, "X-01", "resolved", choice="先查眼底",
+            reason="眼科现有资料更直接", reviewer_name="医学生")
+        self.assertTrue(handled["ok"], handled.get("error"))
+        first = self.flow.publish_review(self.case_id, reviewer_name="医学生")
+        self.assertTrue(first["ok"], first.get("error"))
+
+        self.flow.store.mutate_case(
+            self.case_id,
+            lambda case: case.setdefault("payload", {}).setdefault("profile", {}).update(
+                {"chief_complaint": "更新后的主诉"}))
+        second = self.flow.publish_review(self.case_id, reviewer_name="医学生")
+        self.assertTrue(second["ok"], second.get("error"))
+
+        versions = self.flow.store.list_report_versions(self.case_id)
+        self.assertEqual([v["version"] for v in versions], [2, 3])
+        self.assertEqual(
+            versions[0]["report_json"]["summary"]["sections"]["主要问题"],
+            "视物模糊3月",
+        )
+        self.assertEqual(
+            versions[1]["report_json"]["summary"]["sections"]["主要问题"],
+            "更新后的主诉",
+        )
+
     def test_review_items_generated(self):
         ids, review = self._item_ids()
         self.assertTrue(ids, "应产生可审核条目")

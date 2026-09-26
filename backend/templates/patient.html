@@ -1441,6 +1441,7 @@ async function submitUpdate(){
 function renderChanges(){
   const cs = S.changeSummary || {};
   const affected = S.affected || {};
+  const reportVersions = cs.report_versions || [];
   let html='';
   if(!cs.has_changes){
     html += `<div class="banner ok">本次资料已录入，但未改变建议方向（说明原判断得到支持）。</div>`;
@@ -1455,6 +1456,12 @@ function renderChanges(){
   html += block('哪些未受影响', cs.unchanged, 'muted');
   html += block('任务变化', cs.task_changes);
   html += block('需要医生重新确认', cs.needs_doctor_review, 'muted');
+
+  if(reportVersions.length){
+    html += `<h3 style="margin-top:14px;">已保存的审核版本</h3>`;
+    html += reportVersions.map(v=>`<div class="field"><div style="flex:1;">报告 v${esc(v.version)} · ${esc(v.published_at||'')}</div><span class="pill ok">已保存</span></div>`).join('');
+    html += `<div class="tiny">以上版本来自发布时保存的报告快照；本次资料更新不会改写历史版本。</div>`;
+  }
 
   if(affected.departments && affected.departments.length){
     html += `<div class="ai-block" style="margin-top:12px;">

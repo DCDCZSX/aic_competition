@@ -109,6 +109,67 @@ class ReviewError(ValueError):
     """审核操作错误（条目不存在 / 非法动作 / 缺原因）。"""
 
 
+DISAGREEMENT_STATUSES = ("resolved", "unresolved_with_followup", "need_more_info")
+DISAGREEMENT_STATUS_LABELS: Dict[str, str] = {
+    "resolved": "已解决",
+    "unresolved_with_followup": "未解决，需后续跟进",
+    "need_more_info": "需要补充资料",
+}
+
+
+def disagreement_status_label(status: Any) -> str:
+    return DISAGREEMENT_STATUS_LABELS.get(str(status or ""), "待牵头医生处理")
+
+
+def latest_disagreement_decisions(records: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """按分歧编号保留最后一次牵头医生处理决定。"""
+    out: Dict[str, Dict[str, Any]] = {}
+    for record in records or []:
+        disagreement_id = str(record.get("disagreement_id") or "").strip()
+        if disagreement_id:
+            out[disagreement_id] = dict(record)
+    return out
+
+
+def make_disagreement_decision(*, disagreement_id: str, topic: str, status: str,
+                               choice: str = "", reason: str = "",
+                               next_step: str = "", reviewer_name: str = "",
+                               reviewer_dept: str = "", decided_at: str = "") -> Dict[str, Any]:
+    """校验并构造独立于 AI 聚合结果的分歧处理记录。"""
+    safe_id = str(disagreement_id or "").strip()
+    safe_topic = str(topic or "").strip()
+    safe_status = str(status or "").strip()
+    safe_choice = str(choice or "").strip()
+    safe_reason = str(reason or "").strip()
+    safe_next_step = str(next_step or "").strip()
+    safe_reviewer = str(reviewer_name or "").strip()
+    if not safe_id or not safe_topic:
+        raise ReviewError("分歧编号和主题不能为空")
+    if safe_status not in DISAGREEMENT_STATUSES:
+        raise ReviewError("不支持的分歧处理状态")
+    if not safe_reason:
+        raise ReviewError("分歧处理理由不能为空")
+    if safe_status == "resolved" and not safe_choice:
+        raise ReviewError("已解决的分歧必须填写牵头医生决定或修改结果")
+    if safe_status != "resolved" and not safe_next_step:
+        raise ReviewError("未解决分歧必须填写下一步处理方式")
+    if not safe_reviewer:
+        raise ReviewError("责任审核人不能为空")
+    return {
+        "disagreement_id": safe_id,
+        "topic": safe_topic,
+        "status": safe_status,
+        "status_label": disagreement_status_label(safe_status),
+        "choice": safe_choice,
+        "resolution": safe_choice,
+        "reason": safe_reason,
+        "next_step": safe_next_step,
+        "reviewer_name": safe_reviewer,
+        "reviewer_dept": str(reviewer_dept or "").strip(),
+        "decided_at": decided_at or _now(),
+    }
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 

@@ -892,6 +892,36 @@ def submit_decision(case_id):
     return jsonify(result), (200 if result.get('ok') else 400)
 
 
+@app.route('/api/v2/case/<case_id>/disagreements', methods=['POST'])
+@app.route('/api/v2/case/<case_id>/disagreement-decisions', methods=['POST'])
+def submit_disagreement_decision(case_id):
+    """记录牵头医生对单条 MDT 分歧的处理状态与后续安排。"""
+    session, error = _guard_doctor_case(case_id, 'decision')
+    if error:
+        return error
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        disagreement_id = string_field(data, 'disagreement_id', default='', max_length=40)
+        status = string_field(data, 'status', default='', max_length=80)
+        choice = string_field(data, 'choice', default='', max_length=4000)
+        resolution = string_field(data, 'resolution', default='', max_length=4000)
+        reason = string_field(data, 'reason', default='', max_length=2000)
+        next_step = string_field(data, 'next_step', default='', max_length=2000)
+        reviewer = string_field(data, 'reviewer', default='', max_length=128)
+        reviewer_dept = string_field(data, 'reviewer_dept', default='', max_length=120)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    result = case_flow.submit_disagreement_decision(
+        case_id, disagreement_id, status, choice=choice, resolution=resolution,
+        reason=reason, next_step=next_step,
+        reviewer_name=reviewer or (session.label if session else '模拟审核员'),
+        reviewer_dept=reviewer_dept,
+    )
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
 @app.route('/api/v2/case/<case_id>/publish', methods=['POST'])
 def publish_review(case_id):
     """屏 F 底部：发布审核版报告（状态→doctor_confirmed、版本+1、角标转绿）。"""
@@ -911,6 +941,19 @@ def publish_review(case_id):
         accept_all=data.get('accept_all') is True,
     )
     return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/versions', methods=['GET'])
+def get_report_versions(case_id):
+    """读取已发布的不可变报告版本；患者只获得版本元数据。"""
+    session, case, error = _guard_case(case_id)
+    if error:
+        return error
+    include_reports = bool(session and session.role == ROLE_DOCTOR)
+    data = case_flow.get_report_versions(case_id, include_reports=include_reports)
+    if data is None:
+        return jsonify({'error': f'病例不存在：{case_id}'}), 404
+    return jsonify(data)
 
 
 @app.route('/api/v2/case/<case_id>/audit', methods=['GET'])

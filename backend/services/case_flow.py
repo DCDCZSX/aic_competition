@@ -1473,8 +1473,11 @@ class CaseFlow:
                                  f"{kind}（{source}）→ 受影响科室：{affected['departments'] or '无'}"
                                  f"；变化摘要 {len(summary.changed)} 项")
 
+        change_payload = summary.to_dict()
+        change_payload["report_versions"] = self.store.list_report_versions(
+            case_id, include_reports=False) if self.store else []
         return {"ok": True, "update": update.to_dict(),
-                "change_summary": summary.to_dict(),
+                "change_summary": change_payload,
                 "triage": new_triage, "path": new_path,
                 "affected": affected}
 
@@ -1487,6 +1490,21 @@ class CaseFlow:
             "change_summary": payload.get("change_summary"),
             "updates": payload.get("updates") or [],
             "doctor_opinions": payload.get("doctor_opinions") or [],
+            # 患者端的版本变化只读取已保存的发布快照；旧病例没有快照时保持空列表，
+            # 不根据当前可变病例内容伪造历史版本。
+            "report_versions": self.store.list_report_versions(
+                case_id, include_reports=False) if self.store else [],
+        }
+
+    def get_report_versions(self, case_id: str, *, include_reports: bool = True) -> Optional[Dict[str, Any]]:
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return None
+        return {
+            "case_id": case_id,
+            "current_version": int(case.get("report_version") or 1),
+            "versions": self.store.list_report_versions(
+                case_id, include_reports=include_reports) if self.store else [],
         }
 
     # ------------------------------------------------------------------ 医生端审核台（4.1-4.5）
@@ -1566,6 +1584,16 @@ class CaseFlow:
             aggregation = (payload.get("mdt") or {}).get("aggregation") or {}
             conflict_count = len(aggregation.get("disagreements") or [])
             conflict_count += len(triage.get("conflicts") or [])
+            disagreement_map = review_service.latest_disagreement_decisions(
+                payload.get("disagreement_decisions") or [])
+            pending_disagreements = sum(
+                1 for index, _ in enumerate(aggregation.get("disagreements") or [], start=1)
+                if f"X-{index:02d}" not in disagreement_map
+                or disagreement_map[f"X-{index:02d}"].get("status")
+                not in review_service.DISAGREEMENT_STATUSES
+            )
+            summary["disagreements"] = len(aggregation.get("disagreements") or [])
+            summary["disagreements_pending"] = pending_disagreements
             gap_count = len(payload.get("gaps") or [])
             reliability = str((triage.get("reliability") or {}).get("level") or "")
             risk_level, risk_rank = self._queue_risk(
@@ -1594,6 +1622,7 @@ class CaseFlow:
                 "high_risk_items": int(summary.get("high_risk") or 0),
                 "conflict_items": int(summary.get("conflict") or 0),
                 "analysis_failed_items": int(summary.get("analysis_failed") or 0),
+                "pending_disagreements": pending_disagreements,
                 "conflict_count": conflict_count,
                 "gap_count": gap_count,
                 "risk_level": risk_level,
@@ -1624,12 +1653,16 @@ class CaseFlow:
             "high_risk": sum(int(r.get("high_risk_items") or 0) for r in rows),
             "conflict": sum(int(r.get("conflict_items") or 0) for r in rows),
             "analysis_failed": sum(int(r.get("analysis_failed_items") or 0) for r in rows),
+            "disagreements": sum(int((r.get("review") or {}).get("disagreements") or 0)
+                                 for r in rows),
+            "disagreements_pending": sum(int(r.get("pending_disagreements") or 0) for r in rows),
         }
         # 筛选计数使用当前状态/科室范围，但不受当前 filter_kind 影响，
         # 这样左轨可以告诉医生切换筛选后预计有多少病例，而不会把计数显示成误导性的 0。
         filter_counts = {
             "all": len(rows),
-            "doctor_pending": sum(1 for r in rows if r["pending_items"] > 0),
+            "doctor_pending": sum(1 for r in rows
+                                   if r["pending_items"] > 0 or r.get("pending_disagreements", 0) > 0),
             "conflict": sum(1 for r in rows if r["conflict_count"] > 0),
             "gaps": sum(1 for r in rows if r["gap_count"] > 0),
             "analysis_failed": sum(1 for r in rows if r["analysis_state"] in ("failed", "partial_failed")),
@@ -1638,7 +1671,8 @@ class CaseFlow:
             "exempt": sum(1 for r in rows if r["exempt_items"] > 0),
         }
         if filter_kind == "doctor_pending":
-            rows = [r for r in rows if r["pending_items"] > 0]
+            rows = [r for r in rows
+                    if r["pending_items"] > 0 or r.get("pending_disagreements", 0) > 0]
         elif filter_kind == "conflict":
             rows = [r for r in rows if r["conflict_count"] > 0]
         elif filter_kind == "gaps":
@@ -1691,6 +1725,25 @@ class CaseFlow:
         items = review_service.apply_decisions(review_service.build_items(case), decisions)
         summary = review_service.summarize(items)
         payload = case.get("payload") or {}
+        disagreement_decisions = review_service.latest_disagreement_decisions(
+            payload.get("disagreement_decisions") or [])
+        disagreements = report_service.disagreements_for_report(
+            ((payload.get("mdt") or {}).get("aggregation") or {}).get("disagreements") or [],
+            payload.get("disagreement_decisions") or [])
+        pending_disagreements = [
+            item.get("分歧编号") for item in disagreements
+            if item.get("分歧编号") not in disagreement_decisions
+            or disagreement_decisions[item.get("分歧编号")].get("status")
+            not in review_service.DISAGREEMENT_STATUSES
+        ]
+        summary["disagreements"] = len(disagreements)
+        summary["disagreements_pending"] = len(pending_disagreements)
+        summary["disagreements_resolved"] = sum(
+            1 for record in disagreement_decisions.values()
+            if record.get("status") == "resolved")
+        summary["disagreements_unresolved"] = sum(
+            1 for record in disagreement_decisions.values()
+            if record.get("status") in ("unresolved_with_followup", "need_more_info"))
         return {
             "case_id": case_id,
             "case_state": case.get("case_state"),
@@ -1704,6 +1757,9 @@ class CaseFlow:
             "review": payload.get("review") or {},
             "doctor_opinions": payload.get("doctor_opinions") or [],
             "change_summary": payload.get("change_summary"),
+            "disagreements": disagreements,
+            "disagreement_decisions": list(disagreement_decisions.values()),
+            "pending_disagreements": pending_disagreements,
             "published": bool((payload.get("review") or {}).get("published")),
         }
 
@@ -1773,6 +1829,73 @@ class CaseFlow:
                 "pending_questions": review.get("pending_questions") or []}
 
     @serialized_case
+    def submit_disagreement_decision(
+        self, case_id: str, disagreement_id: str, status: str, *, choice: str = "",
+        resolution: str = "", reason: str = "", next_step: str = "",
+        reviewer_name: str = "模拟审核员", reviewer_dept: str = ""
+    ) -> Dict[str, Any]:
+        """记录牵头医生对某条 MDT 分歧的独立处理决定。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+
+        payload = dict(case.get("payload") or {})
+        disagreements = (((payload.get("mdt") or {}).get("aggregation") or {})
+                         .get("disagreements") or [])
+        safe_id = str(disagreement_id or "").strip().upper()
+        if safe_id.isdigit():
+            safe_id = f"X-{int(safe_id):02d}"
+        index = None
+        for i, entry in enumerate(disagreements, start=1):
+            if safe_id == f"X-{i:02d}":
+                index = i
+                topic = str(entry.get("topic") or "")
+                break
+        if index is None:
+            return {"ok": False, "error": f"分歧不存在：{disagreement_id}"}
+
+        try:
+            safe_choice = update_service.sanitize_optional_content(
+                choice or resolution, field_name="牵头医生决定")
+            safe_reason = update_service.sanitize_optional_content(
+                reason, field_name="分歧处理理由")
+            safe_next_step = update_service.sanitize_optional_content(
+                next_step, field_name="下一步处理方式")
+            safe_reviewer = update_service.sanitize_optional_content(
+                reviewer_name, field_name="责任审核人") or "模拟审核员"
+            safe_reviewer_dept = update_service.sanitize_optional_content(
+                reviewer_dept, field_name="审核科室")
+            record = review_service.make_disagreement_decision(
+                disagreement_id=f"X-{index:02d}", topic=topic, status=status,
+                choice=safe_choice, reason=safe_reason, next_step=safe_next_step,
+                reviewer_name=safe_reviewer, reviewer_dept=safe_reviewer_dept,
+            )
+        except (ValueError, review_service.ReviewError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+        records = list(payload.get("disagreement_decisions") or [])
+        records.append(record)
+        payload["disagreement_decisions"] = records
+        if self.store:
+            self.store.save_case(
+                case_id, owner_id=case.get("owner_id") or "",
+                patient_name=case.get("patient_name") or "",
+                main_issue=case.get("main_issue") or "",
+                status=case.get("status") or "running",
+                case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
+                report_version=int(case.get("report_version") or 1), payload=payload)
+            self.store.add_audit(
+                case_id, "disagreement_decision_recorded",
+                f"{record['disagreement_id']}={record['status']}；责任审核人={safe_reviewer}")
+        review = self.get_review(case_id) or {}
+        return {
+            "ok": True,
+            "disagreement": record,
+            "disagreements": review.get("disagreements") or [],
+            "pending_disagreements": review.get("pending_disagreements") or [],
+        }
+
+    @serialized_case
     def publish_review(self, case_id: str, *, reviewer_name: str = "模拟审核员",
                        accept_all: bool = False) -> Dict[str, Any]:
         """发布审核版报告（屏 F 底部）：状态 → doctor_confirmed、版本 +1、角标转绿。
@@ -1840,11 +1963,37 @@ class CaseFlow:
                     "summary": summary}
 
         payload = dict(case.get("payload") or {})
+        disagreements = (((payload.get("mdt") or {}).get("aggregation") or {})
+                         .get("disagreements") or [])
+        disagreement_records = list(payload.get("disagreement_decisions") or [])
+        disagreement_map = review_service.latest_disagreement_decisions(disagreement_records)
+        pending_disagreements = [
+            f"X-{index:02d}" for index, _ in enumerate(disagreements, start=1)
+            if f"X-{index:02d}" not in disagreement_map
+            or disagreement_map[f"X-{index:02d}"].get("status")
+            not in review_service.DISAGREEMENT_STATUSES
+        ]
+        summary["disagreements"] = len(disagreements)
+        summary["disagreements_pending"] = len(pending_disagreements)
+        summary["disagreements_resolved"] = sum(
+            1 for record in disagreement_map.values() if record.get("status") == "resolved")
+        summary["disagreements_unresolved"] = sum(
+            1 for record in disagreement_map.values()
+            if record.get("status") in ("unresolved_with_followup", "need_more_info"))
+        if pending_disagreements:
+            return {
+                "ok": False,
+                "error": f"仍有 {len(pending_disagreements)} 条分歧未记录明确处理状态，不能发布审核版",
+                "pending_disagreements": pending_disagreements,
+                "summary": summary,
+            }
+
         new_version = int(case.get("report_version") or 1) + 1
+        published_at = _now()
         payload["review"] = {
             "published": True,
             "published_by": safe_reviewer,
-            "published_at": _now(),
+            "published_at": published_at,
             "version": new_version,
             "counts": summary["by_state"],
             "human_touched": summary["human_touched"],
@@ -1855,19 +2004,41 @@ class CaseFlow:
         }
         # "暂不确定"条目进入报告的待医生确认问题清单
         payload["review_pending_questions"] = review_service.pending_questions(items)
+        # 报告生成使用当前审核决定，但决定本身继续保存在 decisions 表中。
+        snapshot_payload = dict(payload)
+        snapshot_payload["decisions"] = self.store.list_decisions(case_id) if self.store else []
+        snapshot_case = dict(case)
+        snapshot_case["case_state"] = "doctor_confirmed"
+        snapshot_case["report_version"] = new_version
+        snapshot_case["payload"] = snapshot_payload
+        reports = report_service.build_both(snapshot_case)
+        snapshot = {
+            "case_id": case_id,
+            "version": new_version,
+            "published_by": safe_reviewer,
+            "published_at": published_at,
+            "review_summary": summary,
+            "report_json": {"summary": reports["summary"], "full": reports["full"]},
+            "summary_markdown": reports["summary_markdown"],
+            "full_markdown": reports["full_markdown"],
+        }
         if self.store:
             self.store.transition_case(
                 case_id, "doctor_confirmed", actor=safe_reviewer or "doctor",
                 reason="发布审核版报告", status="reviewed",
-                report_version=new_version, payload=payload)
+                report_version=new_version, payload=payload,
+                report_version_snapshot=snapshot)
             self.store.add_audit(
                 case_id, "report_published",
                 f"审核人={safe_reviewer} 版本={new_version} 医生处理={summary['doctor_reviewed']}/"
                 f"{summary['total']} 免审自动处理={summary['auto_processed']} "
-                f"批量接受={len(accepted_ids)}")
+                f"批量接受={len(accepted_ids)} 分歧={len(disagreements)}")
         return {"ok": True, "case_state": "doctor_confirmed", "report_version": new_version,
                 "summary": summary, "batch_accepted": accepted_ids,
-                "review": payload["review"]}
+                "review": payload["review"], "snapshot": {
+                    "version": new_version, "published_by": safe_reviewer,
+                    "published_at": published_at,
+                }}
 
     def get_review_history(self, case_id: str) -> Optional[Dict[str, Any]]:
         """屏 G 审核记录与版本：审计时间线 + 版本 + 条目状态快照。"""
@@ -1899,6 +2070,7 @@ class CaseFlow:
                 for d in decisions
             ],
             "items": [i.to_dict() for i in items],
+            "versions": self.store.list_report_versions(case_id) if self.store else [],
             "timeline": timeline,
         }
 
