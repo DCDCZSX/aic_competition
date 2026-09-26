@@ -115,6 +115,84 @@ class TestBuildItems(unittest.TestCase):
     def test_empty_case_yields_no_items(self):
         self.assertEqual(rs.build_items({"case_id": "C0", "payload": {}}), [])
 
+    def test_review_tiers_are_explicit_and_unknown_defaults_to_required(self):
+        items = rs.apply_decisions(rs.build_items(sample_case()), [])
+        by_id = {item.item_id: item for item in items}
+
+        self.assertEqual(by_id["path_step:S1"].review_tier, rs.AUTOMATIC)
+        self.assertIn("未要求医生决定", by_id["path_step:S1"].tier_reason)
+        self.assertEqual(by_id["path_step:S2"].review_tier, rs.REQUIRED)
+        self.assertIn("明确要求医生处理", by_id["path_step:S2"].tier_reason)
+        self.assertEqual(by_id["department_selection:内分泌科"].review_tier, rs.REQUIRED)
+        for item in items:
+            self.assertIn(item.review_tier, rs.REVIEW_TIERS)
+            self.assertTrue(item.tier_reason)
+
+        unknown = rs.ReviewItem(
+            item_id="new_type:1", target_type="new_type", target_id="1",
+            title="未知对象", ai_content="未知内容", review_tier="unclassified",
+        )
+        self.assertEqual(unknown.review_tier, rs.REQUIRED)
+        self.assertIn("默认必审", unknown.tier_reason)
+
+    def test_summary_counts_tiers_and_risk_flags(self):
+        items = [
+            rs.ReviewItem(
+                item_id="required:1", target_type="patient_advice", target_id="1",
+                title="必审", ai_content="内容", high_risk=True,
+                conflict=True, analysis_failed=True,
+            ),
+            rs.ReviewItem(
+                item_id="sample:1", target_type="patient_advice", target_id="2",
+                title="抽查", ai_content="内容", review_tier=rs.SAMPLE,
+                needs_doctor_review=False, tier_reason="经审核的抽查规则",
+            ),
+            rs.ReviewItem(
+                item_id="automatic:1", target_type="path_step", target_id="3",
+                title="自动", ai_content="内容", review_tier=rs.AUTOMATIC,
+                needs_doctor_review=False, tier_reason="明确规则自动处理",
+            ),
+        ]
+
+        summary = rs.summarize(rs.apply_decisions(items, []))
+
+        self.assertEqual(summary["tier_counts"], {"required": 1, "sample": 1, "automatic": 1})
+        self.assertEqual(summary["required"], 1)
+        self.assertEqual(summary["sample"], 1)
+        self.assertEqual(summary["automatic"], 1)
+        self.assertEqual(summary["sample_pending"], 1)
+        self.assertEqual(summary["auto_processed"], 1)
+        self.assertEqual(summary["doctor_reviewed"], 0)
+        self.assertEqual(summary["high_risk"], 1)
+        self.assertEqual(summary["conflict"], 1)
+        self.assertEqual(summary["analysis_failed"], 1)
+
+    def test_critical_flags_keep_an_explicit_automatic_step_required(self):
+        case = sample_case()
+        case["payload"]["triage"]["reliability"] = {"level": "低", "reasons": ["冲突未解决"]}
+        case["payload"]["analysis"] = {"mdt": {"state": "partial_failed", "failed": ["眼科"]}}
+
+        items = rs.build_items(case)
+        step = next(item for item in items if item.item_id == "path_step:S1")
+        department = next(item for item in items if item.item_id == "department_selection:眼科")
+
+        self.assertEqual(step.review_tier, rs.REQUIRED)
+        self.assertTrue(step.high_risk)
+        self.assertTrue(step.analysis_failed)
+        self.assertEqual(department.review_tier, rs.REQUIRED)
+        self.assertTrue(department.analysis_failed)
+        self.assertFalse(step.batch_eligible)
+
+    def test_matching_information_gap_keeps_path_step_in_required_tier(self):
+        case = sample_case()
+        case["payload"]["path"]["steps"][0]["title"] = "整理眼底检查资料"
+        case["payload"]["gaps"] = ["眼底检查：信息不足"]
+
+        step = next(item for item in rs.build_items(case) if item.item_id == "path_step:S1")
+
+        self.assertEqual(step.review_tier, rs.REQUIRED)
+        self.assertIn("资料缺口", step.tier_reason)
+
 
 class TestDecisions(unittest.TestCase):
     def setUp(self):
@@ -280,6 +358,89 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         review = self.flow.get_review(self.case_id)
         return [i["item_id"] for i in review["items"]], review
 
+    def _accept_required_items(self):
+        for item in (self.flow.get_review(self.case_id) or {}).get("items", []):
+            if item["review_tier"] == rs.REQUIRED and item["state"] == rs.AWAITING:
+                result = self.flow.submit_decision(
+                    self.case_id, item["item_id"], "accept", reviewer_name="医学生")
+                self.assertTrue(result["ok"], result.get("error"))
+
+    def _use_sample_disagreement_case(self):
+        sample = sample_case()
+        self.flow.store.save_case(
+            self.case_id, owner_id="", patient_name="张*", main_issue=sample["main_issue"],
+            status="running", case_state=sample["case_state"], report_version=1,
+            payload=sample["payload"])
+
+    def test_disagreement_decision_validates_reason_and_followup(self):
+        self._use_sample_disagreement_case()
+        missing = self.flow.submit_disagreement_decision(
+            self.case_id, "X-01", "unresolved_with_followup",
+            reason="证据不足", reviewer_name="医学生")
+        self.assertFalse(missing["ok"])
+        self.assertIn("下一步", missing["error"])
+
+        recorded = self.flow.submit_disagreement_decision(
+            self.case_id, "X-01", "unresolved_with_followup",
+            reason="证据不足", next_step="补充眼底和肾功能检查后复核",
+            reviewer_name="医学生")
+        self.assertTrue(recorded["ok"], recorded.get("error"))
+        self.assertEqual(recorded["disagreement"]["status"], "unresolved_with_followup")
+        self.assertEqual(recorded["disagreement"]["reviewer_name"], "医学生")
+
+    def test_publish_requires_explicit_disagreement_status(self):
+        self._use_sample_disagreement_case()
+        self._accept_required_items()
+        blocked = self.flow.publish_review(self.case_id, reviewer_name="医学生")
+        self.assertFalse(blocked["ok"])
+        self.assertEqual(blocked["pending_disagreements"], ["X-01"])
+
+    def test_unresolved_disagreement_is_shown_in_published_snapshot(self):
+        self._use_sample_disagreement_case()
+        self._accept_required_items()
+        handled = self.flow.submit_disagreement_decision(
+            self.case_id, "X-01", "unresolved_with_followup",
+            reason="两种检查顺序都缺少直接证据", next_step="补齐检查结果后由牵头医生复核",
+            reviewer_name="医学生")
+        self.assertTrue(handled["ok"], handled.get("error"))
+        published = self.flow.publish_review(self.case_id, reviewer_name="医学生")
+        self.assertTrue(published["ok"], published.get("error"))
+
+        versions = self.flow.store.list_report_versions(self.case_id)
+        self.assertEqual([v["version"] for v in versions], [2])
+        disagreement = versions[0]["report_json"]["full"]["sections"]["分歧"][0]
+        self.assertEqual(disagreement["处理状态"], "未解决，需后续跟进")
+        self.assertIn("补齐检查结果", disagreement["下一步"])
+        self.assertEqual(disagreement["责任审核人"], "医学生")
+
+    def test_republished_snapshot_keeps_earlier_content_after_case_update(self):
+        self._use_sample_disagreement_case()
+        self._accept_required_items()
+        handled = self.flow.submit_disagreement_decision(
+            self.case_id, "X-01", "resolved", choice="先查眼底",
+            reason="眼科现有资料更直接", reviewer_name="医学生")
+        self.assertTrue(handled["ok"], handled.get("error"))
+        first = self.flow.publish_review(self.case_id, reviewer_name="医学生")
+        self.assertTrue(first["ok"], first.get("error"))
+
+        self.flow.store.mutate_case(
+            self.case_id,
+            lambda case: case.setdefault("payload", {}).setdefault("profile", {}).update(
+                {"chief_complaint": "更新后的主诉"}))
+        second = self.flow.publish_review(self.case_id, reviewer_name="医学生")
+        self.assertTrue(second["ok"], second.get("error"))
+
+        versions = self.flow.store.list_report_versions(self.case_id)
+        self.assertEqual([v["version"] for v in versions], [2, 3])
+        self.assertEqual(
+            versions[0]["report_json"]["summary"]["sections"]["主要问题"],
+            "视物模糊3月",
+        )
+        self.assertEqual(
+            versions[1]["report_json"]["summary"]["sections"]["主要问题"],
+            "更新后的主诉",
+        )
+
     def test_review_items_generated(self):
         ids, review = self._item_ids()
         self.assertTrue(ids, "应产生可审核条目")
@@ -289,6 +450,9 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertEqual(review["summary"]["pending"], len(ids) - len(exempt))
         self.assertEqual(review["summary"]["auto_processed"], len(exempt))
         self.assertTrue(review["items"][0]["item_id"].startswith("department_selection:"))
+        self.assertIn("tier_counts", review["summary"])
+        self.assertIn("review_tier", review["items"][0])
+        self.assertIn("tier_reason", review["items"][0])
 
     def test_accept_decision_recorded(self):
         ids, review = self._item_ids()
@@ -325,11 +489,19 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
             self.case_id, ids[1], "modify", after="改为：建议向医生确认是否需要眼部评估",
             reason="改写为面向患者的中性表述", reviewer_name="医学生")
         self.assertTrue(modified["ok"], modified.get("error"))
-        result = self.flow.publish_review(self.case_id, reviewer_name="医学生", accept_all=True)
+        blocked = self.flow.publish_review(self.case_id, reviewer_name="医学生", accept_all=True)
+        self.assertFalse(blocked["ok"])
+        self.assertIn("逐条处理", blocked["error"])
+        for item in (self.flow.get_review(self.case_id) or {}).get("items", []):
+            if item["review_tier"] == rs.REQUIRED and item["state"] == rs.AWAITING:
+                decision = self.flow.submit_decision(
+                    self.case_id, item["item_id"], "accept", reviewer_name="医学生")
+                self.assertTrue(decision["ok"], decision.get("error"))
+        result = self.flow.publish_review(self.case_id, reviewer_name="医学生")
         self.assertTrue(result["ok"], result.get("error"))
         self.assertEqual(result["case_state"], "doctor_confirmed")
         self.assertEqual(result["report_version"], 2)
-        self.assertTrue(result["batch_accepted"], "批量接受应逐条留痕")
+        self.assertFalse(result["batch_accepted"], "关键条目不能通过批量操作接受")
         case = self.flow.get_case(self.case_id)
         self.assertEqual(case["case_state"], "doctor_confirmed")
         self.assertEqual(int(case["report_version"]), 2)
@@ -352,7 +524,13 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertEqual(case["case_state"], "need_more_info")
 
     def test_report_badge_turns_green_after_publish(self):
-        self.flow.publish_review(self.case_id, reviewer_name="医学生", accept_all=True)
+        for item in (self.flow.get_review(self.case_id) or {}).get("items", []):
+            if item["review_tier"] == rs.REQUIRED and item["state"] == rs.AWAITING:
+                decision = self.flow.submit_decision(
+                    self.case_id, item["item_id"], "accept", reviewer_name="医学生")
+                self.assertTrue(decision["ok"], decision.get("error"))
+        published = self.flow.publish_review(self.case_id, reviewer_name="医学生")
+        self.assertTrue(published["ok"], published.get("error"))
         reports = self.flow.build_reports(self.case_id)
         self.assertTrue(reports["summary"]["doctor_confirmed"])
         self.assertTrue(reports["full"]["doctor_confirmed"])
@@ -375,6 +553,12 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertGreater(row["pending_items"], 0)
         self.assertEqual(row["behavior_type"], "B")
         self.assertIn(row["case_state"], ("awaiting_doctor", "analyzing"))
+        for key in ("required_items", "sample_items", "automatic_items",
+                    "high_risk_items", "conflict_items", "analysis_failed_items"):
+            self.assertIn(key, row)
+        queue_summary = self.flow.list_review_cases()["review_summary"]
+        for key in ("required", "sample", "automatic", "high_risk", "conflict", "analysis_failed"):
+            self.assertIn(key, queue_summary)
 
     def test_list_cases_filter(self):
         self.assertEqual(self.flow.list_review_cases(state_filter="doctor_confirmed")["rows"], [])

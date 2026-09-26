@@ -28,7 +28,9 @@ from services.evidence_service import (  # noqa: E402
 )
 from services.review_service import (  # noqa: E402
     ACTION_LABELS as REVIEW_ACTION_LABELS,
+    DISAGREEMENT_STATUS_LABELS,
     TARGET_TYPE_LABELS,
+    latest_disagreement_decisions,
 )
 from services.department_domain import ALL_NAMES  # noqa: E402
 
@@ -419,14 +421,19 @@ def build_mdt_preparation_packet(case: Dict[str, Any]) -> Dict[str, Any]:
         })
 
     consensus = consensus_for_report(aggregation.get("consensus"))
-    disagreements = disagreements_for_report(aggregation.get("disagreements"))
+    disagreements = disagreements_for_report(
+        aggregation.get("disagreements"), payload.get("disagreement_decisions"))
     uncertainties = uncertainties_for_report(aggregation.get("uncertainties"))
     handling = {
         "disagreements": [
             {
+                "disagreement_id": item.get("分歧编号") or "",
                 "topic": item.get("分歧主题") or "",
-                "status": "待医生裁决",
-                "next_step": item.get("如何收敛") or "需补充更明确的证据后再判断",
+                "status": item.get("处理状态") or "待医生裁决",
+                "choice": item.get("牵头医生决定") or "",
+                "reason": item.get("处理理由") or "",
+                "next_step": item.get("下一步") or "需补充更明确的证据后再判断",
+                "reviewer": item.get("责任审核人") or "",
             }
             for item in disagreements
         ],
@@ -514,15 +521,26 @@ def consensus_for_report(items: Any) -> List[Dict[str, Any]]:
     return out
 
 
-def disagreements_for_report(items: Any) -> List[Dict[str, Any]]:
+def disagreements_for_report(items: Any, decisions: Any = None) -> List[Dict[str, Any]]:
+    decision_map = latest_disagreement_decisions(decisions or [])
     out: List[Dict[str, Any]] = []
-    for item in items or []:
+    for index, item in enumerate(items or [], start=1):
         positions = item.get("positions") or {}
+        disagreement_id = f"X-{index:02d}"
+        decision = decision_map.get(disagreement_id) or {}
+        status = str(decision.get("status") or "")
+        status_label = DISAGREEMENT_STATUS_LABELS.get(status, "待牵头医生处理")
         out.append({
+            "分歧编号": disagreement_id,
             "分歧主题": item.get("topic") or "",
             "各方立场": "；".join(f"{k}：{v}" for k, v in positions.items()) or "（未记录）",
             "分歧原因": item.get("reason") or "（未记录）",
-            "如何收敛": item.get("resolving_info") or "（未记录）",
+            "处理状态": status_label,
+            "牵头医生决定": decision.get("choice") or decision.get("resolution") or "（未记录）",
+            "处理理由": decision.get("reason") or "（未记录）",
+            "下一步": decision.get("next_step") or item.get("resolving_info") or "（未记录）",
+            "责任审核人": decision.get("reviewer_name") or "（未记录）",
+            "处理时间": decision.get("decided_at") or "",
             "证据状态": STATE_LABELS.get(str(item.get("evidence_state")), "—"),
         })
     return out
@@ -764,7 +782,8 @@ def build_full_report(case: Dict[str, Any]) -> Report:
         "就医路径": path_steps_for_report(path.get("steps")),
         "各专科 AI 视角": specialty_views_for_report(mdt.get("analyses")),
         "共识": consensus_for_report(aggregation.get("consensus")),
-        "分歧": disagreements_for_report(aggregation.get("disagreements")),
+        "分歧": disagreements_for_report(
+            aggregation.get("disagreements"), payload.get("disagreement_decisions")),
         "不确定性": uncertainties_for_report(aggregation.get("uncertainties")),
         "关键待解决问题": open_questions,
         "证据关联": {

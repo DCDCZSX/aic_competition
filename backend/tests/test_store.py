@@ -184,6 +184,51 @@ class TestDecisions(StoreTestBase):
         self.assertEqual(got[0]["action"], "reject")
 
 
+class TestReportVersions(StoreTestBase):
+    def test_report_version_snapshot_is_persisted_without_overwrite(self):
+        snapshot = {
+            "case_id": "C-VERSION",
+            "version": 2,
+            "published_by": "牵头医生",
+            "published_at": "2026-09-26T10:00:00",
+            "review_summary": {"pending": 0, "disagreements_unresolved": 1},
+            "report_json": {"summary": {"marker": "old"}, "full": {"marker": "old"}},
+            "summary_markdown": "# 旧摘要",
+            "full_markdown": "# 旧完整报告",
+        }
+        self.store.save_report_version(snapshot)
+
+        snapshot["report_json"]["full"]["marker"] = "changed in caller"
+        versions = self.store.list_report_versions("C-VERSION")
+        self.assertEqual(len(versions), 1)
+        self.assertEqual(versions[0]["version"], 2)
+        self.assertEqual(versions[0]["published_by"], "牵头医生")
+        self.assertEqual(versions[0]["report_json"]["full"]["marker"], "old")
+        self.assertEqual(self.store.get_report_version("C-VERSION", 2)["full_markdown"], "# 旧完整报告")
+
+        with self.assertRaises(ValueError):
+            self.store.save_report_version(snapshot)
+
+    def test_report_versions_table_is_created_for_legacy_database(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "legacy-report.db")
+            conn = sqlite3.connect(path)
+            conn.execute("""CREATE TABLE cases (
+                case_id TEXT PRIMARY KEY, patient_name TEXT, main_issue TEXT,
+                status TEXT, case_state TEXT, report_version INTEGER, created_at TEXT,
+                updated_at TEXT, payload TEXT)""")
+            conn.commit()
+            conn.close()
+
+            store = Store(path)
+            try:
+                tables = {row[0] for row in store._conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                self.assertIn("report_versions", tables)
+            finally:
+                store.close()
+
+
 class TestTransitions(StoreTestBase):
     def test_save_and_list_transitions(self):
         self.store.save_transition("C001", "pending_materials", "analyzing",
