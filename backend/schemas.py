@@ -472,6 +472,8 @@ class DoctorDecision:
     reviewer: Optional[Reviewer] = None
     evidence_refs: List[str] = field(default_factory=list)
     version: int = 1
+    # 审核决定针对的内容修订号；缺失的旧记录按第 1 版兼容读取。
+    content_revision: int = 1
     created_at: str = ""
 
     def validate(self) -> None:
@@ -479,6 +481,7 @@ class DoctorDecision:
         _require_enum(self.target_type, DECISION_TARGET_TYPES, "target_type")
         _require_enum(self.action, DOCTOR_ACTIONS, "action")
         _require(int(self.version) >= 1, "version 必须 ≥1")
+        _require(int(self.content_revision) >= 1, "content_revision 必须 ≥1")
         if self.reviewer:
             self.reviewer.validate()
         # 修改/驳回必须给出理由与前后内容（规格书 §5.6）

@@ -110,6 +110,12 @@ class TestUpdateService(unittest.TestCase):
         self.assertGreater(len(full["departments"]), 1, "检查结果类更新应波及多个参与科室")
         self.assertTrue(set(full["departments"]) <= {"眼科", "内分泌科", "肾内科", "骨科"})
 
+    def test_check_result_uses_content_specific_dependencies(self):
+        """眼底资料只影响矩阵中真正依赖眼底的当前科室。"""
+        affected = us.determine_affected(
+            "检查结果", "眼底检查：视网膜病变", ["眼科", "内分泌科", "肾内科"])
+        self.assertEqual(affected["departments"], ["眼科", "内分泌科"])
+
     def test_gaps_filled_by_keywords(self):
         filled = us.gaps_filled_by("检查结果：新增眼底检查，视网膜可见病变")
         self.assertIn("眼底检查", filled)
@@ -245,6 +251,76 @@ class TestUpdateFlowEndToEnd(unittest.TestCase):
         data = self.flow.get_change_summary(self.case.case_id)
         self.assertIsNotNone(data)
         self.assertTrue(data["updates"])
+
+    def test_update_reopens_only_affected_review_items(self):
+        """眼底资料更新后只重开眼科/内分泌科决定，旧决定仍留在历史。"""
+        review = self.flow.get_review(self.case.case_id)
+        department_items = {
+            item["target_id"]: item for item in review["items"]
+            if item["target_type"] == "department_selection"
+        }
+        for department in ("眼科", "内分泌科", "肾内科"):
+            item = department_items.get(department)
+            if item:
+                result = self.flow.submit_decision(
+                    self.case.case_id, item["item_id"], "accept", reviewer_name="医生")
+                self.assertTrue(result["ok"], result.get("error"))
+
+        result = self.flow.add_update(
+            self.case.case_id, kind="检查结果", content="眼底检查：视网膜病变")
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertEqual(result["affected"]["departments"], ["眼科", "内分泌科"])
+        self.assertEqual(result["affected"]["affected_departments"], ["眼科", "内分泌科"])
+        self.assertIn("reopened_item_ids", result["change_summary"])
+        self.assertTrue(any("眼科" in label
+                            for label in result["change_summary"].get("reopened_item_labels", [])))
+
+        refreshed = self.flow.get_review(self.case.case_id)
+        by_department = {
+            item["target_id"]: item for item in refreshed["items"]
+            if item["target_type"] == "department_selection"
+        }
+        for department in ("眼科", "内分泌科"):
+            self.assertEqual(by_department[department]["state"], "awaiting")
+            self.assertEqual(by_department[department]["content_revision"], 2)
+        if "肾内科" in by_department:
+            self.assertEqual(by_department["肾内科"]["state"], "confirmed")
+            self.assertEqual(by_department["肾内科"]["content_revision"], 1)
+
+        stale = refreshed["stale_decisions"]
+        self.assertTrue(stale)
+        self.assertTrue(all(int(item.get("content_revision") or 1) == 1 for item in stale))
+
+        history = self.flow.get_review_history(self.case.case_id)
+        self.assertTrue(history["decisions"])
+        self.assertTrue(all("content_revision" in item
+                            and int(item["content_revision"]) == 1
+                            for item in history["decisions"]))
+
+    def test_refresh_mdt_only_replaces_targets_and_adds_new_department(self):
+        """局部 MDT 更新只替换目标卡，并为新入选科室建立待分析卡。"""
+        payload = {
+            "profile": {"chief_complaint": "视物模糊"},
+            "answers": {},
+            "mdt": {
+                "departments": ["眼科", "肾内科"],
+                "analyses": [
+                    {"department": "眼科", "status": "ok", "facts": ["旧眼科资料"]},
+                    {"department": "肾内科", "status": "ok", "facts": ["保留肾科资料"]},
+                ],
+                "aggregation": {"consensus": [], "disagreements": [],
+                                "uncertainties": [], "open_questions": []},
+            },
+        }
+        updated, refreshed = self.flow._refresh_affected_mdt(
+            payload=payload, text="新增眼底检查", departments=["眼科", "内分泌科"],
+            case_id=self.case.case_id,
+        )
+        self.assertEqual(refreshed, ["眼科", "内分泌科"])
+        analyses = {item["department"]: item for item in updated["analyses"]}
+        self.assertEqual(analyses["眼科"]["status"], "stale")
+        self.assertEqual(analyses["肾内科"]["facts"], ["保留肾科资料"])
+        self.assertEqual(analyses["内分泌科"]["status"], "stale")
 
 
 if __name__ == "__main__":

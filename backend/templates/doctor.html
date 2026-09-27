@@ -405,7 +405,7 @@ async function loadList(options){
   if($('f-page-size')) $('f-page-size').value=String(pageSize);
   const queueSummary=S.queueMeta.reviewSummary||{};
   const tierNote = S.queue.total
-    ? `必审 ${Number(queueSummary.required||0)} · 建议抽查 ${Number(queueSummary.sample||0)} · 自动处理 ${Number(queueSummary.automatic||0)} · 高风险 ${Number(queueSummary.high_risk||0)} · 冲突 ${Number(queueSummary.conflict||0)} · 分析失败 ${Number(queueSummary.analysis_failed||0)}`
+    ? `必审 ${Number(queueSummary.required||0)} · 建议抽查 ${Number(queueSummary.sample||0)} · 自动处理 ${Number(queueSummary.automatic||0)} · 高风险 ${Number(queueSummary.high_risk||0)} · 冲突 ${Number(queueSummary.conflict||0)} · 分析失败 ${Number(queueSummary.analysis_failed||0)} · 重开 ${Number(queueSummary.reopened_items||0)}`
     : '';
   $('list-note').textContent = S.queue.total
     ? `第 ${S.queue.page} 页 · 风险优先展示高风险和待医生处理项 · ${tierNote}`
@@ -420,6 +420,8 @@ async function loadList(options){
     const pending=Number(c.pending_items||0), exempt=Number(c.exempt_items||0);
     const required=Number(c.required_items||0), sample=Number(c.sample_items||0), automatic=Number(c.automatic_items||0);
     const highRisk=Number(c.high_risk_items||0), conflicts=Number(c.conflict_items||0), analysisFailed=Number(c.analysis_failed_items||0);
+    const reopened=Array.isArray(c.reopened_item_ids)?c.reopened_item_ids.length:0;
+    const reopenedLabels=Array.isArray(c.reopened_item_labels)?c.reopened_item_labels:[];
     return `<div class="queue-row" tabindex="0" role="button" onclick="openCase('${esc(c.case_id)}')" onkeydown="if(event.key==='Enter'||event.key===' ')openCase('${esc(c.case_id)}')">
       <div class="q-id">#${esc(c.case_id)}<div class="tiny">${esc(c.sex||'—')} · ${esc(c.age||'—')}</div></div>
       <div class="q-main"><strong>${esc(c.primary_department||'待分诊')}</strong><div class="muted" title="${esc(c.chief_complaint||'')}">${esc(c.chief_complaint||'（未提供主诉）')}</div></div>
@@ -429,7 +431,8 @@ async function loadList(options){
       <div>${pending?`<span class="pill danger"><span class="dot"></span>必审 ${pending}</span>`:`<span class="pill ok">已处理</span>`}
         <div class="tiny">必审 ${required} · 建议抽查 ${sample} · 自动处理 ${automatic}</div>
         ${(highRisk||conflicts||analysisFailed)?`<div class="tiny">${highRisk?`高风险 ${highRisk}　`:''}${conflicts?`冲突 ${conflicts}　`:''}${analysisFailed?`分析失败 ${analysisFailed}`:''}</div>`:''}
-        ${exempt?`<div class="tiny">免审 ${exempt}</div>`:''}</div>
+        ${exempt?`<div class="tiny">免审 ${exempt}</div>`:''}
+        ${reopened?`<div class="tiny" style="color:var(--warn);">资料更新重开 ${reopened} 项：${esc(reopenedLabels.join('、'))}</div>`:''}</div>
       <div class="tiny">${esc(c.updated_at||c.created_at||'—')}<div>${esc(c.case_state_label||c.case_state||'')}</div></div>
     </div>`;
   }).join('');
@@ -832,6 +835,10 @@ function renderReview(){
   const r = S.review||{};
   const items = r.items||[];
   const sum = r.summary||{};
+  const stale_decisions = r.stale_decisions||[];
+  const review_item_changes = r.review_item_changes||{};
+  const reopened_item_ids = review_item_changes.reopened_item_ids||[];
+  const reopened_item_labels = review_item_changes.reopened_item_labels||[];
   const stateCls = {'awaiting':'st-awaiting','confirmed':'st-confirmed','modified':'st-modified','rejected':'st-rejected','uncertain':'st-uncertain','auto_processed':'st-auto'};
   const byState = sum.by_state||{};
   const tierCounts = sum.tier_counts||{};
@@ -854,7 +861,9 @@ function renderReview(){
       ${S.extraQuestion?`<div class="tiny">已从 MDT 审阅台加入待确认问题：${esc(S.extraQuestion)}（可在下方对应分歧条目上操作）</div>`:''}
     </div>
     <div class="tiny" style="margin-top:8px;">审核分级：必审 ${Number(tierCounts.required||sum.required||0)} · 建议抽查 ${Number(tierCounts.sample||sum.sample||0)} · 自动处理 ${Number(tierCounts.automatic||sum.automatic||0)}</div>
-    <div class="tiny">风险提示：高风险 ${Number(sum.high_risk||0)} · 冲突 ${Number(sum.conflict||0)} · 分析失败 ${Number(sum.analysis_failed||0)}</div>`;
+    <div class="tiny">风险提示：高风险 ${Number(sum.high_risk||0)} · 冲突 ${Number(sum.conflict||0)} · 分析失败 ${Number(sum.analysis_failed||0)}</div>
+    ${reopened_item_ids.length?`<div class="banner warn" style="margin-top:8px;">资料更新后重新打开 ${reopened_item_ids.length} 条审核项：${esc(reopened_item_labels.join('、'))}；旧决定仍保留在历史中，但不会套用到新修订内容。</div>`:''}
+    ${stale_decisions.length?`<div class="tiny" style="color:var(--warn);">有 ${stale_decisions.length} 条历史决定已过期，需按当前内容重新审核。</div>`:''}`;
   if(!items.length){
     $('rev-body').innerHTML = '<div class="banner warn">该病例暂无决策条目（需先完成分诊与路径生成）。</div>';
     $('rev-publish').innerHTML = '';
@@ -883,6 +892,7 @@ function renderReview(){
         <span class="pill ${tier==='required'?'danger':(tier==='sample'?'warn':'info')}">${esc(it.review_tier_label||tierLabel[tier]||tier||'必审')}</span>
         <span class="pill ${tone}">${esc(it.state_label)}</span>
         ${it.changed_by_doctor?'<span class="pill ok">医生已改写</span>':''}
+        <span class="pill gray">内容修订 v${esc(it.content_revision||1)}</span>
       </div><div class="tiny mono">${esc(it.item_id)}</div></div>
       <div class="body">
         <div class="field"><div class="muted" style="min-width:66px;">AI 原稿</div><div style="flex:1;" class="${it.changed_by_doctor?'old':''}">${esc(it.ai_content)}</div></div>
@@ -1035,6 +1045,8 @@ function renderHistory(){
     <h3>审核操作（逐条留痕）</h3>
     ${decisions.length?decisions.map(d=>`<div class="opcard">
       <strong>${esc(d.action_label)}</strong> ${esc(d.target_label||d.target_type)}｜${esc(d.target_id)}
+      <span class="pill gray">内容修订 v${esc(d.content_revision||1)}</span>
+      ${d.stale?'<span class="pill warn">已过期</span>':''}
       <span class="tiny">${esc(d.created_at||'')}　${esc(d.reviewer||'')}</span>
       ${d.before?`<div class="tiny old">AI 原稿：${esc(String(d.before).slice(0,120))}</div>`:''}
       ${d.after?`<div class="tiny">医生版：${esc(String(d.after).slice(0,120))}</div>`:''}

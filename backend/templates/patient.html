@@ -1441,6 +1441,13 @@ async function submitUpdate(){
 function renderChanges(){
   const cs = S.changeSummary || {};
   const affected = S.affected || {};
+  const review_item_changes = cs.review_item_changes || affected || {};
+  const affected_item_ids = review_item_changes.affected_item_ids || [];
+  const affected_item_labels = review_item_changes.affected_item_labels || [];
+  const reopened_item_ids = review_item_changes.reopened_item_ids || [];
+  const reopened_item_labels = review_item_changes.reopened_item_labels || [];
+  const affected_departments = review_item_changes.affected_departments || affected.departments || [];
+  const unaffected_departments = review_item_changes.unaffected_departments || [];
   const reportVersions = cs.report_versions || [];
   let html='';
   if(!cs.has_changes){
@@ -1456,6 +1463,17 @@ function renderChanges(){
   html += block('哪些未受影响', cs.unchanged, 'muted');
   html += block('任务变化', cs.task_changes);
   html += block('需要医生重新确认', cs.needs_doctor_review, 'muted');
+
+  if(affected_item_ids.length || reopened_item_ids.length || unaffected_departments.length){
+    html += `<div class="ai-block" style="margin-top:12px;">
+      <strong>本次审核增量变化</strong>
+      ${reopened_item_ids.length?`<div class="tiny">需要医生重新确认：${reopened_item_ids.length} 项${reopened_item_labels.length?`（${esc(reopened_item_labels.join('、'))}）`:''}</div>`:''}
+      ${affected_item_ids.length?`<div class="tiny">受影响审核内容：${affected_item_ids.length} 项${affected_item_labels.length?`（${esc(affected_item_labels.join('、'))}）`:''}</div>`:''}
+      ${affected_departments.length?`<div class="tiny">受影响科室：${esc(affected_departments.join('、'))}</div>`:''}
+      ${unaffected_departments.length?`<div class="tiny">未受影响科室：${esc(unaffected_departments.join('、'))}</div>`:''}
+      <div class="tiny">旧的医生审核记录仍会保留，但不会自动批准更新后的内容。</div>
+    </div>`;
+  }
 
   if(reportVersions.length){
     html += `<h3 style="margin-top:14px;">已保存的审核版本</h3>`;
