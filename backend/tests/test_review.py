@@ -69,6 +69,53 @@ class TestBuildItems(unittest.TestCase):
         for target in ("department_selection", "path_step", "consensus_item", "patient_advice"):
             self.assertIn(target, self.by_type, f"缺少 {target} 条目")
 
+    def test_item_content_revision_is_read_from_case_payload(self):
+        case = sample_case()
+        case["payload"]["review_item_revisions"] = {
+            "department_selection:内分泌科": 3,
+        }
+        items = rs.build_items(case)
+        item = next(i for i in items if i.item_id == "department_selection:内分泌科")
+        self.assertEqual(item.content_revision, 3)
+
+    def test_old_decision_does_not_apply_to_new_content_revision(self):
+        case = sample_case()
+        case["payload"]["review_item_revisions"] = {
+            "department_selection:内分泌科": 2,
+        }
+        item = next(i for i in rs.build_items(case)
+                    if i.item_id == "department_selection:内分泌科")
+        decision = {
+            "decision_id": "old-1", "target_type": item.target_type,
+            "target_id": item.target_id, "action": "accept", "after": item.ai_content,
+            "reason": "旧版本已核对", "content_revision": 1,
+            "reviewer": {"role": "医生"}, "created_at": "2026-09-27T00:00:00",
+        }
+        applied = rs.apply_decisions([item], [decision])[0]
+        self.assertEqual(applied.state, rs.AWAITING)
+        self.assertEqual(applied.decision_id, "")
+        stale = rs.stale_decisions([item], [decision])
+        self.assertEqual([row["decision_id"] for row in stale], ["old-1"])
+
+    def test_current_revision_decision_survives_later_stale_record(self):
+        """历史记录排序异常时，当前修订的决定仍应覆盖过期决定。"""
+        case = sample_case()
+        case["payload"]["review_item_revisions"] = {
+            "department_selection:内分泌科": 2,
+        }
+        item = next(i for i in rs.build_items(case)
+                    if i.item_id == "department_selection:内分泌科")
+        current = {
+            "decision_id": "current-2", "target_type": item.target_type,
+            "target_id": item.target_id, "action": "accept", "after": item.ai_content,
+            "reason": "当前版本已核对", "content_revision": 2,
+            "reviewer": {"role": "医生"}, "created_at": "2026-09-27T00:00:00",
+        }
+        stale = dict(current, decision_id="stale-1", content_revision=1)
+        applied = rs.apply_decisions([item], [current, stale])[0]
+        self.assertEqual(applied.state, rs.CONFIRMED)
+        self.assertEqual(applied.decision_id, "current-2")
+
     def test_department_items_include_lead(self):
         titles = [i.title for i in self.by_type["department_selection"]]
         self.assertTrue(any("牵头 内分泌科" in t for t in titles), titles)

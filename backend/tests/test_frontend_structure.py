@@ -276,6 +276,17 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("review_tier==='sample'", html)
         self.assertIn("review_tier==='automatic'", html)
 
+    def test_revision_reopen_state_is_visible_on_both_workbenches(self):
+        _, doctor = self.get("/doctor")
+        _, patient = self.get("/patient")
+        for token in ("content_revision", "stale_decisions", "reopened_item_ids",
+                      "reopened_item_labels"):
+            self.assertIn(token, doctor, f"医生端缺少修订追踪字段：{token}")
+        for token in ("affected_item_ids", "reopened_item_ids", "affected_departments",
+                      "reopened_item_labels",
+                      "unaffected_departments"):
+            self.assertIn(token, patient, f"患者端变化摘要缺少增量更新字段：{token}")
+
     # ------------------------------------------------------------------ 4. 合规
     def test_login_pages_are_full_bleed_two_column(self):
         """登录页必须铺满视口并分两栏（左进入方式 / 右产品说明）。

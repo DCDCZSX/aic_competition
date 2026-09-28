@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.privacy import desensitize  # noqa: E402
-from services.dependency_matrix import departments_for_field  # noqa: E402
+from services.dependency_matrix import BY_LABEL, departments_for_field  # noqa: E402
 
 # 来源分级（主文档 §14）
 SOURCE_PATIENT = "患者上传"
@@ -144,7 +144,7 @@ class ChangeSummary:
 def determine_affected(kind: str, content: str,
                        current_departments: Sequence[str]) -> Dict[str, List[str]]:
     """用依赖矩阵判断：这次更新影响哪些字段与专科模块。"""
-    fields: List[str] = list(UPDATE_KIND_FIELDS.get(kind, ()))
+    fields: List[str] = _fields_for_update(kind, content)
     if not fields:
         return {"fields": [], "departments": [], "modules": []}
 
@@ -161,6 +161,30 @@ def determine_affected(kind: str, content: str,
         modules.append("分诊与路径")
         modules.append("多专科分析（受影响科室：" + "、".join(affected) + "）")
     return {"fields": fields, "departments": affected, "modules": modules}
+
+
+def _fields_for_update(kind: str, content: str) -> List[str]:
+    """把更新类别和内容映射到依赖矩阵字段。
+
+    ``检查结果`` 是一个大类，但具体检查只应影响依赖它的科室。能识别出
+    缺口/检查关键词时使用这些字段；无法识别时才回退到该类别的全量字段，
+    继续保持旧版本的保守审核口径。
+    """
+    default_fields = list(UPDATE_KIND_FIELDS.get(kind, ()))
+    if kind != "检查结果":
+        return default_fields
+
+    text = str(content or "").lower()
+    matched: List[str] = []
+    for label, keywords in GAP_FILL_KEYWORDS.items():
+        field = BY_LABEL.get(label)
+        if not field:
+            continue
+        candidates = (label, *keywords)
+        if any(str(keyword).lower() in text for keyword in candidates if keyword):
+            if field not in matched:
+                matched.append(field)
+    return matched or default_fields
 
 
 def build_change_summary(

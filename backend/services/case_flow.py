@@ -50,8 +50,8 @@ from services.rule_engine import evaluate as evaluate_rules  # noqa: E402
 from services.s2_analyst import analyze as s2_analyze  # noqa: E402
 from services.store import Store  # noqa: E402
 from services.triage import orchestrate  # noqa: E402
-from schemas import (CASE_STATE_LABELS, MDT_SCREENING_DECISIONS,
-                     MDT_SCREENING_LABELS)  # noqa: E402
+from schemas import (CASE_STATE_LABELS, CheckItem, Inference, MDT_SCREENING_DECISIONS,
+                     MDT_SCREENING_LABELS, SpecialistOpinionCard)  # noqa: E402
 
 # 耗时控制：多专科分析最多取前 3 个科室
 MAX_MDT_DEPARTMENTS = 3
@@ -1362,6 +1362,118 @@ class CaseFlow:
                 "tasks_summary": task_service.summarize(tasks)}
 
     # ------------------------------------------------------------------ 就诊后更新（3.6）
+    @staticmethod
+    def _card_from_analysis(data: Dict[str, Any]) -> Optional[SpecialistOpinionCard]:
+        """把已保存的专科意见卡还原成聚合器可读取的结构。"""
+        if not isinstance(data, dict) or data.get("status") not in (None, "ok"):
+            return None
+        department = str(data.get("department") or "").strip()
+        if not department:
+            return None
+        inferences = []
+        for raw in data.get("inferences") or []:
+            if not isinstance(raw, dict) or not str(raw.get("text") or "").strip():
+                continue
+            confidence = str(raw.get("confidence") or "medium").lower()
+            inferences.append(Inference(
+                text=str(raw.get("text") or "").strip(),
+                confidence=confidence if confidence in ("high", "medium", "low") else "medium",
+                evidence_refs=[str(ref) for ref in raw.get("evidence_refs") or []],
+            ))
+        checks = []
+        for raw in data.get("checks") or []:
+            if not isinstance(raw, dict) or not str(raw.get("content") or "").strip():
+                continue
+            priority = str(raw.get("priority") or "medium").lower()
+            checks.append(CheckItem(
+                priority=priority if priority in ("high", "medium", "low") else "medium",
+                content=str(raw.get("content") or "").strip(),
+            ))
+        return SpecialistOpinionCard(
+            case_id="",
+            specialty_code=department,
+            specialty_name=department,
+            focus=str(data.get("focus") or ""),
+            facts=[str(value) for value in data.get("facts") or []],
+            inferences=inferences,
+            checks=checks,
+            information_gaps=[str(value) for value in data.get("information_gaps") or []],
+            referral=data.get("referral"),
+        )
+
+    def _refresh_affected_mdt(self, *, payload: Dict[str, Any], text: str,
+                              departments: Sequence[str], case_id: str) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+        """只刷新受影响的专科意见卡，保留其他科室的原始卡片。"""
+        existing = payload.get("mdt") or {}
+        if not existing or not departments:
+            return existing or None, []
+        analyses = [dict(item) for item in existing.get("analyses") or []
+                     if isinstance(item, dict)]
+        known_order = [str(item.get("department") or "") for item in analyses
+                       if str(item.get("department") or "")]
+        known = set(known_order)
+        targets: List[str] = []
+        for department in departments:
+            department = str(department).strip()
+            if not department or department in targets:
+                continue
+            # 保持 MDT 的既有最多 3 个科室上限；已有卡一定优先刷新，
+            # 新入选科室只在还有分析名额时追加。
+            if department not in known and len(known_order) + sum(
+                    1 for target in targets if target not in known) >= MAX_MDT_DEPARTMENTS:
+                continue
+            targets.append(department)
+        if not targets:
+            return existing, []
+
+        profile = payload.get("profile") or {}
+        answers = payload.get("answers") or {}
+        refreshed: Dict[str, Dict[str, Any]] = {}
+        for department in targets:
+            if self.use_llm and self.ai_service is not None:
+                result = analyze_specialty(
+                    ai_service=self.ai_service, department=department, text=text,
+                    profile=profile, case_id=case_id, answers=answers,
+                )
+                refreshed[department] = result.to_dict()
+            else:
+                refreshed[department] = {
+                    "department": department,
+                    "status": "stale",
+                    "method": "skipped",
+                    "error": "新资料已进入，等待受影响科室重新分析",
+                    "source_type": "ai_reference",
+                    "source_label": "专科 AI 参考意见",
+                }
+
+        merged = []
+        for item in analyses:
+            department = str(item.get("department") or "")
+            merged.append(refreshed.get(department, item))
+        for department in targets:
+            if department not in known:
+                merged.append(refreshed[department])
+
+        cards = [card for card in (self._card_from_analysis(item) for item in merged)
+                 if card is not None]
+        aggregation = aggregate(cards).to_dict() if cards else {
+            "consensus": [], "disagreements": [], "uncertainties": [],
+            "open_questions": [], "notes": ["受影响专科意见卡等待重新分析"],
+        }
+        notes = list(aggregation.get("notes") or [])
+        if any(item.get("status") == "stale" for item in refreshed.values()):
+            notes.append("部分受影响专科意见卡因模型不可用，等待重新分析")
+        aggregation["notes"] = list(dict.fromkeys(notes))
+        updated = dict(existing)
+        updated["analyses"] = merged
+        updated["aggregation"] = aggregation
+        updated["departments"] = list(existing.get("departments") or known_order)
+        for department in targets:
+            if department not in updated["departments"]:
+                updated["departments"].append(department)
+        updated["affected_departments"] = targets
+        return updated, targets
+
     @serialized_case
     def add_update(self, case_id: str, *, kind: str, content: str,
                    source: str = update_service.SOURCE_PATIENT,
@@ -1387,6 +1499,7 @@ class CaseFlow:
         old_triage = payload.get("triage") or {}
         old_path = payload.get("path") or {}
         current_departments = list(old_triage.get("selected") or [])
+        old_review_items = review_service.build_items(case)
 
         # 依赖矩阵：确定受影响模块（只重算受影响部分）
         affected = update_service.determine_affected(kind, content, current_departments)
@@ -1439,6 +1552,17 @@ class CaseFlow:
         new_triage = outcome.to_dict()
         new_path = care_path.to_dict()
 
+        # 只重跑受影响的专科卡；更新后新出现的就医方向也需要首次生成意见卡。
+        new_departments = list(new_triage.get("selected") or [])
+        mdt_departments = list(dict.fromkeys(
+            list(affected.get("departments") or []) +
+            [department for department in new_departments if department not in current_departments]
+        ))
+        refreshed_mdt, refreshed_departments = self._refresh_affected_mdt(
+            payload=dict(payload, triage=new_triage, path=new_path, gaps=remaining_gaps),
+            text=merged_text, departments=mdt_departments, case_id=case_id,
+        )
+
         # ---- 变化摘要 ----
         summary = update_service.build_change_summary(
             case_id=case_id, old_triage=old_triage, new_triage=new_triage,
@@ -1452,7 +1576,8 @@ class CaseFlow:
 
         updates = list(payload.get("updates") or [])
         updates.append(update.to_dict())
-        payload.update({
+        candidate_payload = dict(payload)
+        candidate_payload.update({
             "updates": updates,
             "gaps": remaining_gaps,
             # 这是后续分析使用的完整脱敏正文，不能再截断成前端预览长度。
@@ -1460,8 +1585,64 @@ class CaseFlow:
             "triage": new_triage,
             "path": new_path,
             "tasks": new_path.get("tasks", []),
-            "change_summary": summary.to_dict(),
         })
+        if refreshed_mdt is not None and refreshed_departments:
+            candidate_payload["mdt"] = refreshed_mdt
+
+        candidate_case = dict(case)
+        candidate_case["payload"] = candidate_payload
+        new_review_items = review_service.build_items(candidate_case)
+        old_item_map = {item.item_id: item for item in old_review_items}
+        new_item_map = {item.item_id: item for item in new_review_items}
+        added_item_ids = sorted(set(new_item_map) - set(old_item_map))
+        removed_item_ids = sorted(set(old_item_map) - set(new_item_map))
+        changed_item_ids = review_service.affected_item_ids(
+            old_review_items, new_review_items, affected.get("departments") or [],
+            f"{kind}：{safe_content}")
+        reopened_item_ids = sorted(
+            item_id for item_id in changed_item_ids
+            if item_id in old_item_map and item_id in new_item_map
+        )
+        item_labels = {item.item_id: item.title for item in new_review_items}
+        affected_item_labels = [item_labels[item_id] for item_id in changed_item_ids
+                                if item_id in item_labels]
+        reopened_item_labels = [item_labels[item_id] for item_id in reopened_item_ids
+                                if item_id in item_labels]
+        revisions = dict(payload.get("review_item_revisions") or {})
+        for item_id in set(old_item_map) | set(new_item_map):
+            try:
+                revisions[item_id] = max(1, int(revisions.get(item_id, 1) or 1))
+            except (TypeError, ValueError):
+                revisions[item_id] = 1
+        for item_id in reopened_item_ids:
+            revisions[item_id] = revisions.get(item_id, 1) + 1
+        candidate_payload["review_item_revisions"] = revisions
+
+        unaffected_departments = [
+            department for department in current_departments
+            if department not in (affected.get("departments") or [])
+        ]
+        recomputed_phases = ["triage", "path"] if affected.get("departments") else []
+        if refreshed_departments:
+            recomputed_phases.append("mdt")
+        review_item_changes = {
+            "affected_item_ids": changed_item_ids,
+            "affected_item_labels": affected_item_labels,
+            "reopened_item_ids": reopened_item_ids,
+            "reopened_item_labels": reopened_item_labels,
+            "added_item_ids": added_item_ids,
+            "removed_item_ids": removed_item_ids,
+            "affected_departments": list(affected.get("departments") or []),
+            "unaffected_departments": unaffected_departments,
+            "recomputed_phases": recomputed_phases,
+        }
+        summary_payload = summary.to_dict()
+        summary_payload.update(review_item_changes)
+        candidate_payload["review_item_changes"] = review_item_changes
+        candidate_payload["change_summary"] = summary_payload
+        payload = candidate_payload
+        affected = dict(affected)
+        affected.update(review_item_changes)
         # 新资料进入后待复核（状态机）
         if self.store:
             current_state = str(case.get("case_state") or STATE_AWAITING_DOCTOR)
@@ -1473,7 +1654,7 @@ class CaseFlow:
                                  f"{kind}（{source}）→ 受影响科室：{affected['departments'] or '无'}"
                                  f"；变化摘要 {len(summary.changed)} 项")
 
-        change_payload = summary.to_dict()
+        change_payload = dict(summary_payload)
         change_payload["report_versions"] = self.store.list_report_versions(
             case_id, include_reports=False) if self.store else []
         return {"ok": True, "update": update.to_dict(),
@@ -1555,7 +1736,8 @@ class CaseFlow:
             return {"rows": [], "total": 0, "has_more": False,
                     "filters": {}, "sorts": list(self.QUEUE_SORTS),
                     "review_summary": {"required": 0, "sample": 0, "automatic": 0,
-                                       "high_risk": 0, "conflict": 0, "analysis_failed": 0}}
+                                       "high_risk": 0, "conflict": 0, "analysis_failed": 0,
+                                       "reopened_items": 0, "stale_decisions": 0}}
 
         rows: List[Dict[str, Any]] = []
         # 授权筛选尽量下推到 SQLite，避免审核员每次打开队列都读取全库病例。
@@ -1573,11 +1755,14 @@ class CaseFlow:
             if screening.get("decision") == "urgent_care":
                 continue
             triage = payload.get("triage") or {}
-            items = review_service.apply_decisions(
-                review_service.build_items(case),
-                decision_map.get(str(case.get("case_id") or ""), []),
-            )
+            raw_items = review_service.build_items(case)
+            case_decisions = decision_map.get(str(case.get("case_id") or ""), [])
+            stale = review_service.stale_decisions(raw_items, case_decisions)
+            items = review_service.apply_decisions(raw_items, case_decisions)
             summary = review_service.summarize(items)
+            item_changes = payload.get("review_item_changes") or {}
+            summary["stale_decisions"] = len(stale)
+            summary["reopened_items"] = len(item_changes.get("reopened_item_ids") or [])
             primary = triage.get("primary") or {}
             profile = payload.get("profile") or {}
             analysis_state = self._effective_analysis_state(payload)
@@ -1622,6 +1807,9 @@ class CaseFlow:
                 "high_risk_items": int(summary.get("high_risk") or 0),
                 "conflict_items": int(summary.get("conflict") or 0),
                 "analysis_failed_items": int(summary.get("analysis_failed") or 0),
+                "reopened_item_ids": list(item_changes.get("reopened_item_ids") or []),
+                "reopened_item_labels": list(item_changes.get("reopened_item_labels") or []),
+                "stale_decisions": len(stale),
                 "pending_disagreements": pending_disagreements,
                 "conflict_count": conflict_count,
                 "gap_count": gap_count,
@@ -1653,6 +1841,8 @@ class CaseFlow:
             "high_risk": sum(int(r.get("high_risk_items") or 0) for r in rows),
             "conflict": sum(int(r.get("conflict_items") or 0) for r in rows),
             "analysis_failed": sum(int(r.get("analysis_failed_items") or 0) for r in rows),
+            "reopened_items": sum(len(r.get("reopened_item_ids") or []) for r in rows),
+            "stale_decisions": sum(int(r.get("stale_decisions") or 0) for r in rows),
             "disagreements": sum(int((r.get("review") or {}).get("disagreements") or 0)
                                  for r in rows),
             "disagreements_pending": sum(int(r.get("pending_disagreements") or 0) for r in rows),
@@ -1722,9 +1912,14 @@ class CaseFlow:
         if not case:
             return None
         decisions = self.store.list_decisions(case_id) if self.store else []
-        items = review_service.apply_decisions(review_service.build_items(case), decisions)
+        raw_items = review_service.build_items(case)
+        stale = review_service.stale_decisions(raw_items, decisions)
+        items = review_service.apply_decisions(raw_items, decisions)
         summary = review_service.summarize(items)
         payload = case.get("payload") or {}
+        item_changes = payload.get("review_item_changes") or {}
+        summary["stale_decisions"] = len(stale)
+        summary["reopened_items"] = len(item_changes.get("reopened_item_ids") or [])
         disagreement_decisions = review_service.latest_disagreement_decisions(
             payload.get("disagreement_decisions") or [])
         disagreements = report_service.disagreements_for_report(
@@ -1757,6 +1952,8 @@ class CaseFlow:
             "review": payload.get("review") or {},
             "doctor_opinions": payload.get("doctor_opinions") or [],
             "change_summary": payload.get("change_summary"),
+            "stale_decisions": stale,
+            "review_item_changes": payload.get("review_item_changes") or {},
             "disagreements": disagreements,
             "disagreement_decisions": list(disagreement_decisions.values()),
             "pending_disagreements": pending_disagreements,
@@ -1794,6 +1991,7 @@ class CaseFlow:
                 case_id=case_id, item=item, action=action, after=safe_after, reason=safe_reason,
                 reviewer_name=safe_reviewer, reviewer_dept=safe_reviewer_dept,
                 version=int(case.get("report_version") or 1),
+                content_revision=item.content_revision,
                 decision_id=f"{case_id}-{item.target_type}-{item.target_id}-{len(decisions) + 1}",
             )
         except review_service.ReviewError as exc:
@@ -2046,7 +2244,9 @@ class CaseFlow:
         if not case:
             return None
         decisions = self.store.list_decisions(case_id) if self.store else []
-        items = review_service.apply_decisions(review_service.build_items(case), decisions)
+        raw_items = review_service.build_items(case)
+        current_revisions = {item.item_id: item.content_revision for item in raw_items}
+        items = review_service.apply_decisions(raw_items, decisions)
         payload = case.get("payload") or {}
         timeline: List[Dict[str, Any]] = []
         for row in self.store.list_audit(case_id, limit=200) if self.store else []:
@@ -2066,7 +2266,13 @@ class CaseFlow:
                  "before": d.get("before"), "after": d.get("after"),
                  "reason": d.get("reason"),
                  "reviewer": (d.get("reviewer") or {}).get("role"),
-                 "created_at": d.get("created_at"), "version": d.get("version")}
+                 "created_at": d.get("created_at"), "version": d.get("version"),
+                 "content_revision": review_service._decision_revision(d),
+                 "current_content_revision": current_revisions.get(
+                     f"{d.get('target_type')}:{d.get('target_id')}"),
+                 "stale": f"{d.get('target_type')}:{d.get('target_id')}" not in current_revisions
+                 or review_service._decision_revision(d) != current_revisions.get(
+                     f"{d.get('target_type')}:{d.get('target_id')}"),}
                 for d in decisions
             ],
             "items": [i.to_dict() for i in items],

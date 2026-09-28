@@ -203,9 +203,15 @@ class ReviewItem:
     high_risk: bool = False
     conflict: bool = False
     analysis_failed: bool = False
+    # 同一稳定 item_id 的内容发生变化时递增；旧决定仍保留但不再覆盖新内容。
+    content_revision: int = 1
 
     def __post_init__(self) -> None:
         """规范化分级；未知值必须回到必审，避免静默放行。"""
+        try:
+            self.content_revision = max(1, int(self.content_revision or 1))
+        except (TypeError, ValueError):
+            self.content_revision = 1
         tier = str(self.review_tier or REQUIRED)
         if tier not in REVIEW_TIERS:
             tier = REQUIRED
@@ -291,6 +297,7 @@ class ReviewItem:
             "high_risk": self.high_risk,
             "conflict": self.conflict,
             "analysis_failed": self.analysis_failed,
+            "content_revision": self.content_revision,
             "batch_eligible": self.batch_eligible,
             "batch_block_reason": _clean(self.batch_block_reason),
         }
@@ -426,6 +433,12 @@ def build_items(case: Any) -> List[ReviewItem]:
             ))
 
     _annotate_item_flags(items, payload)
+    revisions = payload.get("review_item_revisions") or {}
+    for item in items:
+        try:
+            item.content_revision = max(1, int(revisions.get(item.item_id, 1) or 1))
+        except (TypeError, ValueError):
+            item.content_revision = 1
     return items
 
 
@@ -548,6 +561,66 @@ def latest_decisions(decisions: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str,
     return out
 
 
+def _decision_revision(decision: Dict[str, Any]) -> int:
+    """读取决定绑定的内容修订号；旧决定缺字段时兼容为第 1 版。"""
+    try:
+        return max(1, int(decision.get("content_revision") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def stale_decisions(items: Sequence[ReviewItem],
+                    decisions: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """返回不再针对当前审核项内容的历史决定。"""
+    current = {item.item_id: item.content_revision for item in items or []}
+    out: List[Dict[str, Any]] = []
+    for decision in decisions or []:
+        item_id = f"{decision.get('target_type')}:{decision.get('target_id')}"
+        expected = current.get(item_id)
+        if expected is None or _decision_revision(decision) != expected:
+            row = dict(decision)
+            row["item_id"] = item_id
+            row["content_revision"] = _decision_revision(decision)
+            row["current_content_revision"] = expected
+            row["stale"] = True
+            out.append(row)
+    return out
+
+
+def affected_item_ids(old_items: Sequence[ReviewItem], new_items: Sequence[ReviewItem],
+                      affected_departments: Sequence[str] = (),
+                      update_content: str = "") -> List[str]:
+    """按稳定条目 id 找出资料更新后需要重新确认的审核项。
+
+    科室入选项按依赖矩阵命中的科室定位；路径、共识和患者建议项按受影响科室
+    或本次资料中的可见主题定位。条目内容本身发生变化、或新出现的条目也会被
+    纳入，未命中的现有条目保持原决定。
+    """
+    old_map = {item.item_id: item for item in old_items or []}
+    new_map = {item.item_id: item for item in new_items or []}
+    departments = {str(dep).strip() for dep in affected_departments or [] if str(dep).strip()}
+    update_text = str(update_content or "").strip()
+    tokens = [dep for dep in departments if len(dep) >= 2]
+    # 中文更新没有可靠的空格分词，保留两个字以上的连续片段作为主题线索。
+    tokens.extend(token for token in re.findall(r"[\u4e00-\u9fff]{2,}", update_text)
+                  if token not in tokens)
+
+    out = set()
+    for item_id, item in new_map.items():
+        old = old_map.get(item_id)
+        text = " ".join((item.title, item.ai_content, item.reason_hint))
+        department_match = item.target_type == "department_selection" and item.target_id in departments
+        topic_match = any(token in text for token in tokens)
+        content_changed = bool(old and (
+            old.ai_content != item.ai_content or old.reason_hint != item.reason_hint
+            or old.title != item.title
+        ))
+        if item_id not in old_map or department_match or topic_match or content_changed:
+            out.add(item_id)
+
+    return sorted(out)
+
+
 def apply_decisions(items: Sequence[ReviewItem],
                     decisions: Sequence[Dict[str, Any]]) -> List[ReviewItem]:
     """把医生决策覆盖到条目上（就地更新并返回），并派生"免审"状态。
@@ -558,7 +631,17 @@ def apply_decisions(items: Sequence[ReviewItem],
        导致"理论上免审"的条目照样计入待审、照样阻塞发布；
     2. 医生没干预过、且规则判定免审的条目 → 派生为 `auto_processed`（**不落库、不计入医生处理**）。
     """
-    by_id = latest_decisions(decisions)
+    current_revisions = {item.item_id: item.content_revision for item in items or []}
+    # 只在同一内容修订内取最后一条决定。这样即使历史数据的写入顺序异常，
+    # 当前修订的有效决定也不会被较晚写入的过期决定遮掉。
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for decision in decisions or []:
+        item_id = f"{decision.get('target_type')}:{decision.get('target_id')}"
+        if item_id not in current_revisions:
+            continue
+        if _decision_revision(decision) != current_revisions[item_id]:
+            continue
+        by_id[item_id] = decision
     for item in items:
         item.auto_reason = ""
         decision = by_id.get(item.item_id)
@@ -646,6 +729,7 @@ def summarize(items: Sequence[ReviewItem]) -> Dict[str, Any]:
 def make_decision(*, case_id: str, item: ReviewItem, action: str, after: str = "",
                   reason: str = "", reviewer_name: str = "模拟审核员",
                   reviewer_dept: str = "", version: int = 1,
+                  content_revision: Optional[int] = None,
                   decision_id: str = "") -> DoctorDecision:
     """构造并校验一条医生决策（原因必填等红线由 `DoctorDecision.validate` 强制）。"""
     if action not in DOCTOR_ACTIONS:
@@ -667,6 +751,7 @@ def make_decision(*, case_id: str, item: ReviewItem, action: str, after: str = "
         reviewer=Reviewer(role=reviewer_name or "模拟审核员", dept=reviewer_dept),
         evidence_refs=list(item.evidence_refs),
         version=int(version),
+        content_revision=int(content_revision or item.content_revision or 1),
         created_at=_now(),
     )
     try:
