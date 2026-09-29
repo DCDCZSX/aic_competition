@@ -173,6 +173,8 @@ def _guard_case(case_id, required_scope=None):
     if not case:
         return session, None, (jsonify({'error': f'病例不存在：{case_id}'}), 404)
     if session and session.role == ROLE_DOCTOR and auth_service.has_scope(session, 'case:authorized'):
+        if auth_service.has_global_case_access(session):
+            return session, case, None
         if _shared_store.has_case_access(case_id, session.username):
             return session, case, None
         return session, None, (jsonify({'error': '病例不存在或未授权给当前审核账号'}), 404)
@@ -214,6 +216,8 @@ def _guard_doctor_case(case_id, required_scope='review'):
     session, error = _guard_doctor(required_scope)
     if error:
         return session, error
+    if auth_service.has_global_case_access(session):
+        return session, None
     if not _shared_store.has_case_access(case_id, session.username):
         return session, (jsonify({'error': '病例不存在或未授权给当前审核账号'}), 404)
     return session, None
@@ -810,7 +814,9 @@ def analyze_pending_cases():
         return jsonify({'error': 'limit 必须是 1 到 10 之间的整数',
                         'code': 'invalid_request'}), 400
     result = case_flow.analyze_pending_cases(
-        limit=max(1, min(limit, 10)), reviewer_id=session.username
+        limit=max(1, min(limit, 10)),
+        reviewer_id=("" if auth_service.has_global_case_access(session)
+                     else session.username),
     )
     return jsonify(result), (200 if result.get('ok') else 400)
 
@@ -1005,7 +1011,8 @@ def list_review_cases():
         filter_kind=filter_kind,
         sort=sort,
         department=request.args.get('department') or '',
-        reviewer_id=session.username,
+        reviewer_id=("" if auth_service.has_global_case_access(session)
+                     else session.username),
     )
     return jsonify({
         'cases': page['rows'],

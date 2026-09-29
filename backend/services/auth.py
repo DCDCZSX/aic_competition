@@ -36,6 +36,9 @@ ROLE_PATIENT = "patient"
 ROLE_DOCTOR = "doctor"
 ROLE_GUEST = "guest"
 VALID_ROLES = (ROLE_PATIENT, ROLE_DOCTOR)
+DEPARTMENT_REVIEW_SCOPE = "department"
+GLOBAL_REVIEW_SCOPE = "all"
+GLOBAL_DEPARTMENT_CODE = "*"
 
 # 角色可访问的能力范围（后台鉴权依据，而非前端约定）
 ROLE_SCOPES: Dict[str, List[str]] = {
@@ -65,6 +68,9 @@ def _configured_accounts() -> Dict[str, Dict[str, str]]:
             "role": ROLE_DOCTOR,
             "label": reviewer_label,
             "department_code": os.getenv("APP_DOCTOR_DEPARTMENT", "").strip(),
+            "access_scope": os.getenv(
+                "APP_DOCTOR_ACCESS_SCOPE", DEPARTMENT_REVIEW_SCOPE
+            ).strip().lower(),
         },
     }
     raw_doctors = os.getenv("APP_DOCTOR_ACCOUNTS_JSON", "").strip()
@@ -81,12 +87,24 @@ def _configured_accounts() -> Dict[str, Dict[str, str]]:
             username = str(item.get("username") or "").strip()
             if not username:
                 raise ValueError("APP_DOCTOR_ACCOUNTS_JSON 的医生账号不能为空")
+            access_scope = str(
+                item.get("access_scope") or DEPARTMENT_REVIEW_SCOPE
+            ).strip().lower()
+            if access_scope not in (DEPARTMENT_REVIEW_SCOPE, GLOBAL_REVIEW_SCOPE):
+                raise ValueError(
+                    "APP_DOCTOR_ACCOUNTS_JSON 的 access_scope 必须是 department 或 all"
+                )
             accounts[username] = {
                 "password": str(item.get("password") or ""),
                 "password_hash": str(item.get("password_hash") or ""),
                 "role": ROLE_DOCTOR,
                 "label": str(item.get("label") or "审核医生"),
-                "department_code": str(item.get("department_code") or "").strip(),
+                "department_code": (
+                    GLOBAL_DEPARTMENT_CODE
+                    if access_scope == GLOBAL_REVIEW_SCOPE
+                    else str(item.get("department_code") or "").strip()
+                ),
+                "access_scope": access_scope,
             }
     return accounts
 
@@ -100,6 +118,7 @@ class Session:
     label: str = ""
     department_code: str = ""
     department_name: str = ""
+    access_scope: str = DEPARTMENT_REVIEW_SCOPE
     created_at: str = ""
     expires_at: str = ""
     usage: Dict[str, int] = field(default_factory=dict, repr=False)
@@ -110,6 +129,8 @@ class Session:
             data["department_code"] = self.department_code
         if self.department_name:
             data["department_name"] = self.department_name
+        if self.access_scope == GLOBAL_REVIEW_SCOPE:
+            data["access_scope"] = GLOBAL_REVIEW_SCOPE
         if include_token:
             data["token"] = self.token
         return data
@@ -254,6 +275,7 @@ class AuthService:
                 account["role"],
                 account.get("label") or "",
                 department_code=account.get("department_code") or "",
+                access_scope=self._account_access_scope(account),
             )
 
         if role:
@@ -265,9 +287,13 @@ class AuthService:
 
     def _create_session(self, username: str, role: str, label: str,
                         ttl: Optional[timedelta] = None,
-                        department_code: str = "") -> Session:
+                        department_code: str = "",
+                        access_scope: str = DEPARTMENT_REVIEW_SCOPE) -> Session:
         now = datetime.now()
         session_ttl = ttl or self.ttl
+        normalized_scope = self._normalize_access_scope(access_scope, department_code)
+        if normalized_scope == GLOBAL_REVIEW_SCOPE:
+            department_code = ""
         department_name = self._department_name(department_code)
         session = Session(
             token=secrets.token_urlsafe(24),
@@ -276,6 +302,7 @@ class AuthService:
             label=label,
             department_code=department_code,
             department_name=department_name,
+            access_scope=normalized_scope,
             created_at=now.isoformat(timespec="seconds"),
             expires_at=(now + session_ttl).isoformat(timespec="seconds"),
         )
@@ -323,6 +350,11 @@ class AuthService:
         return bool(account) and account.get("role") == ROLE_DOCTOR \
             and account.get("status", "active") == "active"
 
+    def has_global_case_access(self, session: Optional[Session]) -> bool:
+        """Return whether a doctor session is explicitly configured for all cases."""
+        return bool(session and session.role == ROLE_DOCTOR
+                    and session.access_scope == GLOBAL_REVIEW_SCOPE)
+
     def register_patient(self, username: str, password: str, *, label: str = "") -> Session:
         """创建患者账号并返回登录会话；医生角色不能通过此入口创建。"""
         normalized = str(username or "").strip()
@@ -351,28 +383,48 @@ class AuthService:
         return self._create_session(normalized, ROLE_PATIENT, safe_label)
 
     def list_reviewer_accounts(self, department_code: str) -> List[Dict[str, str]]:
-        """返回指定标准科室的 active 医生账号安全字段。"""
+        """返回指定科室的 active 医生，并包含显式配置的全量审核账号。"""
         code = str(department_code or "").strip()
         if self.store is not None:
             records = self.store.list_users(
-                role=ROLE_DOCTOR, department_code=code, status="active"
+                role=ROLE_DOCTOR, status="active"
             )
         else:
             records = [
                 {"username": username, **account}
                 for username, account in self.accounts.items()
                 if account.get("role") == ROLE_DOCTOR
-                and account.get("department_code", "") == code
                 and account.get("status", "active") == "active"
             ]
+        records = [
+            item for item in records
+            if self._account_access_scope(item) == GLOBAL_REVIEW_SCOPE
+            or item.get("department_code", "") == code
+        ]
         return [
             {
                 "username": str(item.get("username") or ""),
                 "label": str(item.get("label") or "审核医生"),
                 "department_code": str(item.get("department_code") or ""),
+                "access_scope": self._account_access_scope(item),
             }
             for item in records
         ]
+
+    @staticmethod
+    def _normalize_access_scope(scope: Any, department_code: str = "") -> str:
+        value = str(scope or "").strip().lower()
+        if value == GLOBAL_REVIEW_SCOPE or str(department_code or "").strip() == GLOBAL_DEPARTMENT_CODE:
+            return GLOBAL_REVIEW_SCOPE
+        return DEPARTMENT_REVIEW_SCOPE
+
+    @classmethod
+    def _account_access_scope(cls, account: Optional[Dict[str, Any]]) -> str:
+        if not account:
+            return DEPARTMENT_REVIEW_SCOPE
+        return cls._normalize_access_scope(
+            account.get("access_scope"), account.get("department_code") or ""
+        )
 
     def _lookup_account(self, username: str) -> Optional[Dict[str, Any]]:
         account = self.accounts.get(username)
@@ -394,7 +446,11 @@ class AuthService:
                 password_hash,
                 role=account.get("role") or ROLE_PATIENT,
                 label=account.get("label") or "就诊者",
-                department_code=account.get("department_code") or "",
+                department_code=(
+                    GLOBAL_DEPARTMENT_CODE
+                    if self._account_access_scope(account) == GLOBAL_REVIEW_SCOPE
+                    else account.get("department_code") or ""
+                ),
                 status=account.get("status") or "active",
             )
 

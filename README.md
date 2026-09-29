@@ -60,15 +60,15 @@ Set-Location backend
 注册接口只会创建 `patient` 角色，不能通过请求体创建医生账号。代码中没有默认密码。
 
 医生账号由部署者预置，并绑定一个主责科室。单医生兼容账号使用 `APP_DOCTOR_DEPARTMENT`；多医生使用
-`APP_DOCTOR_ACCOUNTS_JSON`，例如：
+`APP_DOCTOR_ACCOUNTS_JSON`。配置 `access_scope=all` 的总审账号可以查看所有病例，其余医生按科室隔离，例如：
 
 ```dotenv
 APP_DOCTOR_DEPARTMENT=endocrinology
-APP_DOCTOR_ACCOUNTS_JSON=[{"username":"doctor_eye","password":"replace-with-a-strong-password","label":"眼科医生","department_code":"ophthalmology"}]
+APP_DOCTOR_ACCOUNTS_JSON=[{"username":"chief_doctor","password":"replace-with-a-strong-password","label":"总审医生","access_scope":"all"},{"username":"doctor_eye","password":"replace-with-a-strong-password","label":"眼科医生","department_code":"ophthalmology"}]
 ```
 
-`department_code` 必须来自系统科室域。患者确认主责科室并提交后，病例只进入该科室医生的授权队列；
-医生端的队列和详情接口仍以逐病例 `case_access` 为后端权限边界，页面上的科室提示只是可见范围说明。
+`department_code` 必须来自系统科室域。患者确认主责科室并提交后，病例进入该科室医生和总审账号的授权范围；
+总审账号通过显式的全量审核范围读取所有病例，科室医生仍以逐病例 `case_access` 为后端权限边界，页面上的科室提示只是可见范围说明。
 完整病例接口始终需要账号会话。
 
 游客可通过 `POST /api/guest/session` 获取短期匿名令牌，再使用
