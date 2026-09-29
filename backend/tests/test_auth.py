@@ -21,6 +21,7 @@ from services.auth import (  # noqa: E402
     extract_token,
     hash_password,
 )
+from services.store import Store  # noqa: E402
 
 TEST_ACCOUNTS = {
     "patient": {"password": "patient-test-password", "role": ROLE_PATIENT, "label": "就诊者"},
@@ -155,6 +156,43 @@ class TestScopes(unittest.TestCase):
 
     def test_none_session_has_no_scope(self):
         self.assertFalse(self.auth.has_scope(None, "intake"))
+
+
+class TestStoreBackedAccounts(unittest.TestCase):
+    def setUp(self):
+        self.store = Store(":memory:")
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_registration_persists_hashed_patient_and_new_service_can_login(self):
+        auth = AuthService(accounts={}, store=self.store)
+        session = auth.register_patient("alice_01", "a-strong-password", label="患者 A")
+        self.assertEqual(session.role, ROLE_PATIENT)
+        record = self.store.load_user("alice_01")
+        self.assertEqual(record["role"], ROLE_PATIENT)
+        self.assertNotEqual(record["password_hash"], "a-strong-password")
+
+        restarted = AuthService(accounts={}, store=self.store)
+        logged_in = restarted.login(username="alice_01", password="a-strong-password")
+        self.assertEqual(logged_in.username, "alice_01")
+
+    def test_doctor_session_and_reviewer_lookup_include_department(self):
+        self.store.create_user(
+            "doctor_eye", hash_password("doctor-password"), role=ROLE_DOCTOR,
+            label="眼科医生", department_code="ophthalmology")
+        self.store.create_user(
+            "doctor_endocrine", hash_password("doctor-password"), role=ROLE_DOCTOR,
+            label="内分泌科医生", department_code="endocrinology")
+        auth = AuthService(accounts={}, store=self.store)
+
+        session = auth.login(username="doctor_eye", password="doctor-password")
+        self.assertEqual(session.department_code, "ophthalmology")
+        self.assertEqual(session.department_name, "眼科")
+        self.assertEqual(
+            [item["username"] for item in auth.list_reviewer_accounts("ophthalmology")],
+            ["doctor_eye"],
+        )
 
 
 class TestTokenExtraction(unittest.TestCase):

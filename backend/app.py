@@ -100,7 +100,6 @@ def _api_unhandled_error(exc):
                         'code': 'internal_error'}), 500
     raise exc
 
-auth_service = AuthService()
 PREVIEW_TTL_MINUTES = read_int_env(
     'APP_PREVIEW_TTL_MINUTES', 10, minimum=1, maximum=30
 )
@@ -131,6 +130,7 @@ _guest_issues = defaultdict(deque)
 # 患者端链路（接线层）。旧 MDTService 不再挂载到 HTTP，避免绕过脱敏与安全约束。
 # use_llm=True 时启用 S2 受限发言与多专科分析；未配置 Key 会自动降级为纯规则分诊。
 _shared_store = Store()
+auth_service = AuthService(store=_shared_store)
 case_flow = CaseFlow(
     store=_shared_store,
     ai_service=AIService(),
