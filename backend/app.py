@@ -25,6 +25,7 @@ from services.auth import (AuthService, AuthError, AuthRateLimitError, ROLE_DOCT
 from services.case_flow import CaseFlow, patient_safe_mdt_screening
 from services.ask_service import MAX_ANSWER_ITEMS, MAX_ANSWER_KEY_LENGTH
 from services.config import read_int_env
+from services import department_domain
 from services.intake import MAX_MAIN_ISSUE_LENGTH, MAX_TEXT_LENGTH, sanitized_payload
 from services.preview_tokens import PreviewTokenService
 from services.store import Store
@@ -178,6 +179,19 @@ def _guard_case(case_id, required_scope=None):
     if not session or session.role != ROLE_PATIENT or case.get('owner_id') != session.username:
         return session, None, (jsonify({'error': '病例不存在或无权访问'}), 404)
     return session, case, None
+
+
+def _resolve_primary_department(raw_value):
+    """把患者提交的科室 code/名称/别名归一为可牵头科室 code。"""
+    raw = str(raw_value or '').strip()
+    if not raw:
+        return None
+    name = department_domain.to_name(raw)
+    if name is None:
+        name = department_domain.resolve(raw).name
+    if not name or not department_domain.can_be_primary(name):
+        return None
+    return department_domain.to_code(name)
 
 
 def _guard_doctor(required_scope='review'):
@@ -492,6 +506,22 @@ def guest_triage():
     return jsonify(response), (200 if payload.get('ok') else 400)
 
 
+@app.route('/api/departments', methods=['GET'])
+def list_departments():
+    """返回患者可确认的主责科室目录；辅助科室不允许作为牵头科室。"""
+    departments = []
+    for name in department_domain.PRIMARY_ELIGIBLE_NAMES:
+        code = department_domain.to_code(name)
+        if not code:
+            continue
+        departments.append({
+            'code': code,
+            'name': name,
+            'group': department_domain.group_of(name),
+        })
+    return jsonify({'departments': departments})
+
+
 @app.route('/api/v2/case', methods=['POST'])
 def create_case():
     """创建病例：返回脱敏预览、画像卡、信息缺口与追问列表。
@@ -539,10 +569,18 @@ def create_case():
         )
         if result.ok and result.case_id and os.getenv(
                 'APP_AUTO_ASSIGN_REVIEWER', 'false').lower() in ('1', 'true', 'yes'):
-            reviewer_id = os.getenv('APP_DOCTOR_USERNAME', 'doctor').strip()
-            if auth_service.is_reviewer_account(reviewer_id):
-                _shared_store.grant_case_access(
-                    result.case_id, reviewer_id, granted_by=session.username
+            result_payload = result.to_dict()
+            triage_primary = ((result_payload.get('triage') or {}).get('primary') or {})
+            department_code = _resolve_primary_department(
+                triage_primary.get('department')
+            )
+            reviewers = auth_service.list_reviewer_accounts(department_code or '')
+            if department_code and reviewers:
+                case_flow.submit_case_for_review(
+                    result.case_id,
+                    department_code=department_code,
+                    actor=session.username,
+                    reviewer_ids=[item['username'] for item in reviewers],
                 )
         return result
 
@@ -593,6 +631,66 @@ def create_case():
             'Connection': 'close',
         },
     )
+
+
+@app.route('/api/v2/case/<case_id>/submit-review', methods=['POST'])
+def submit_case_for_review(case_id):
+    """患者确认主责科室后提交，病例只授权给该科室的医生。"""
+    session, case, error = _guard_case(case_id, 'case:own')
+    if error:
+        return error
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        requested_department = string_field(
+            data, 'department_code', default='', max_length=128
+        ).strip()
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+
+    payload = case.get('payload') or {}
+    if not requested_department:
+        requested_department = (
+            ((payload.get('triage') or {}).get('primary') or {}).get('department') or ''
+        )
+    department_code = _resolve_primary_department(requested_department)
+    if not department_code:
+        return jsonify({
+            'error': '请选择支持的临床主责科室，辅助科室不能作为主责科室',
+            'code': 'invalid_department',
+        }), 400
+
+    existing = payload.get('routing') or {}
+    same_submission = (
+        existing.get('status') == 'submitted' and
+        ((existing.get('requested_department') or {}).get('code') == department_code)
+    )
+    reviewers = auth_service.list_reviewer_accounts(department_code)
+    if not same_submission and not reviewers:
+        return jsonify({
+            'error': '当前科室暂无可接收病例的医生，请稍后再试或选择其他科室',
+            'code': 'no_reviewer_available',
+        }), 409
+
+    outcome = case_flow.submit_case_for_review(
+        case_id,
+        department_code=department_code,
+        actor=session.username,
+        reviewer_ids=[item['username'] for item in reviewers],
+    )
+    if not outcome.get('ok'):
+        status = 409 if '暂无可接收病例' in str(outcome.get('error') or '') else 400
+        return jsonify({
+            'error': outcome.get('error') or '病例提交失败',
+            'code': 'no_reviewer_available' if status == 409 else 'invalid_request',
+        }), status
+    return jsonify({
+        'ok': True,
+        'changed': bool(outcome.get('changed')),
+        'routing': outcome.get('routing') or {},
+        'reviewer_count': int(outcome.get('reviewer_count') or 0),
+    })
 
 
 @app.route('/api/v2/case/<case_id>/answers', methods=['POST'])

@@ -286,11 +286,16 @@ class Store:
         if not case_id or not reviewer_id or not self.load_case(case_id):
             return False
         with self._lock:
+            existing = self._conn.execute(
+                "SELECT 1 FROM case_access WHERE case_id=? AND reviewer_id=?",
+                (case_id, reviewer_id),
+            ).fetchone()
+            if existing:
+                return False
             self._conn.execute(
                 """INSERT INTO case_access (case_id, reviewer_id, granted_by, created_at)
                    VALUES (?, ?, ?, ?)
-                   ON CONFLICT(case_id, reviewer_id) DO UPDATE SET
-                     granted_by=excluded.granted_by, created_at=excluded.created_at""",
+                   """,
                 (case_id, reviewer_id, granted_by, _now()),
             )
             self._conn.commit()

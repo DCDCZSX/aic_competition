@@ -23,7 +23,7 @@ from functools import wraps
 from types import SimpleNamespace
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1209,6 +1209,92 @@ class CaseFlow:
         return {"case_id": case_id, "status": status, "ready": bool(mdt), "mdt": mdt}
 
     # ------------------------------------------------------------------ 查询
+    @serialized_case
+    def submit_case_for_review(
+        self,
+        case_id: str,
+        *,
+        department_code: str,
+        actor: str,
+        reviewer_ids: Sequence[str],
+    ) -> Dict[str, Any]:
+        """患者确认主责科室后提交病例，并建立科室范围内的访问授权。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+
+        raw_code = str(department_code or "").strip()
+        requested_name = department_domain.to_name(raw_code)
+        if requested_name is None:
+            resolved = department_domain.resolve(raw_code)
+            requested_name = resolved.name
+        requested_code = department_domain.to_code(requested_name or "")
+        if not requested_name or not requested_code:
+            return {"ok": False, "error": "提交的科室不在支持的科室域内"}
+        if not department_domain.can_be_primary(requested_name):
+            return {"ok": False, "error": "辅助科室不能作为病例主责科室"}
+
+        reviewers = list(dict.fromkeys(
+            str(item).strip() for item in (reviewer_ids or []) if str(item).strip()
+        ))
+        payload = dict(case.get("payload") or {})
+        existing = payload.get("routing") or {}
+        existing_status = str(existing.get("status") or "")
+        existing_requested = (existing.get("requested_department") or {}).get("code")
+        if existing_status == "submitted":
+            if existing_requested == requested_code:
+                return {
+                    "ok": True,
+                    "changed": False,
+                    "routing": existing,
+                    "reviewer_count": len(reviewers),
+                }
+            return {"ok": False, "error": "病例已经提交到其他科室，不能直接改派"}
+
+        if not reviewers:
+            return {"ok": False, "error": "当前科室暂无可接收病例的医生"}
+
+        triage = payload.get("triage") or {}
+        primary = triage.get("primary") or {}
+        triage_name = str(primary.get("department") or "").strip()
+        triage_code = department_domain.to_code(triage_name) or ""
+        now = _now()
+        routing = {
+            "status": "submitted",
+            "triage_primary_department": {
+                "code": triage_code,
+                "name": triage_name,
+            },
+            "requested_department": {
+                "code": requested_code,
+                "name": requested_name,
+            },
+            "patient_adjusted": bool(triage_code and triage_code != requested_code),
+            "submitted_at": now,
+        }
+
+        def mutate(current: Dict[str, Any]) -> None:
+            next_payload = dict(current.get("payload") or {})
+            next_payload["routing"] = routing
+            current["payload"] = next_payload
+
+        updated = self.store.mutate_case(case_id, mutate) if self.store else None
+        if updated is None:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+        for reviewer_id in reviewers:
+            self.store.grant_case_access(case_id, reviewer_id, granted_by=actor)
+        self.store.add_audit(
+            case_id,
+            "case_submitted_for_review",
+            f"department={requested_code}; reviewers={len(reviewers)}; patient_adjusted={routing['patient_adjusted']}",
+        )
+        return {
+            "ok": True,
+            "changed": True,
+            "routing": routing,
+            "reviewer_count": len(reviewers),
+        }
+
     @serialized_case
     def submit_mdt_screening(
         self,
