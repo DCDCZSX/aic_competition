@@ -31,6 +31,7 @@ from services.report_service import (  # noqa: E402
     build_mdt_preparation_packet,
     build_full_report,
     build_patient_summary,
+    patient_timeline_for_report,
     render_markdown,
 )
 from services.store import Store  # noqa: E402
@@ -132,6 +133,23 @@ class TestTimeline(unittest.TestCase):
 
     def test_empty_profile(self):
         self.assertEqual(build_timeline(None), [])
+
+    def test_patient_timeline_only_contains_timed_symptom_changes(self):
+        """患者端时间线只表达病程变化，不把检查和当前用药当成时间事件。"""
+        profile = sample_profile()
+        profile["symptoms_timeline"].append({
+            "symptom": "乏力", "onset": "", "trend": "加重", "source_refs": ["S-1:90"],
+        })
+        timeline = patient_timeline_for_report(profile)
+        self.assertTrue(timeline)
+        self.assertTrue(all(item["类型"] == "症状" for item in timeline))
+        self.assertTrue(all(item["时间"] not in ("", "时间不详") for item in timeline))
+        text = json.dumps(timeline, ensure_ascii=False)
+        self.assertNotIn("尿蛋白", text)
+        self.assertNotIn("二甲双胍", text)
+        self.assertNotIn("当前用药", text)
+        self.assertNotIn("检查结果", text)
+        self.assertNotIn("乏力", text, "缺少起始时间的症状不能伪装成时间事件")
 
 
 class TestEvidenceCards(unittest.TestCase):
@@ -395,6 +413,10 @@ class TestFullReport(unittest.TestCase):
             self.assertIn("类型", event)
             self.assertIn("内容", event)
             self.assertNotIn("confidence", event, "时间线不得带模型自报置信度")
+            self.assertEqual(event["类型"], "症状")
+        timeline_text = json.dumps(timeline, ensure_ascii=False)
+        self.assertNotIn("尿蛋白", timeline_text)
+        self.assertNotIn("二甲双胍", timeline_text)
 
         steps = report.sections["就医路径"]
         self.assertTrue(steps, "样本病例应产出就医路径")

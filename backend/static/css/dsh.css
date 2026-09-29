@@ -126,6 +126,10 @@ input,textarea,select{font-family:inherit;font-size:var(--body-3);}
 /* 更窄的屏（≤640px）：收紧页面内边距，避免正文被挤成窄条 */
 @media (max-width:640px){:root{--page-pad:16px;}}
 .work{min-width:0;display:flex;flex-direction:column;gap:var(--sp-16);}
+/* 患者端没有右侧工作轨，宽屏也不能为不存在的栏位预留空白。 */
+.shell.patient-shell{grid-template-columns:var(--rail-left) minmax(0,1fr);}
+@media (min-width:1440px){.shell.patient-shell{grid-template-columns:var(--rail-left) minmax(0,1fr);gap:var(--sp-32);}}
+@media (max-width:1000px){.shell.patient-shell{grid-template-columns:1fr;}}
 
 /* 3.3 左轨：流程导航 */
 .rail-title{
@@ -246,6 +250,10 @@ input:focus,textarea:focus,select:focus{border-color:var(--gray-300);}
 .chip.on{background:var(--clay);color:var(--gray-050);}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--danger);margin-right:5px;}
 
+@media (max-width:720px){
+  .btn-sm,.mini,button.chip{min-height:44px;min-width:44px;}
+}
+
 /* 4.5 提示条 */
 .banner{padding:var(--sp-12) var(--sp-16);border-radius:var(--br-8);margin-bottom:var(--sp-12);
         font-size:var(--caption);border:1px solid var(--line);background:var(--gray-000);color:var(--ink2);}
@@ -281,17 +289,11 @@ input:focus,textarea:focus,select:focus{border-color:var(--gray-300);}
 }
 .tl .ev .at{font-family:var(--font-mono);font-size:var(--micro);color:var(--ink3);}
 
-/* 4.8 文档式两栏（报告 / 长文） */
-.doc{display:grid;gap:var(--sp-24);grid-template-columns:1fr;align-items:start;}
-@media (min-width:1100px){.doc{grid-template-columns:230px minmax(0,1fr);}}
-.toc{
-  position:sticky;top:calc(var(--nav-h) + var(--sp-16));
-  border-left:2px solid var(--line);padding-left:var(--sp-16);
-}
-.toc a{display:block;padding:5px 0;font-size:var(--caption);color:var(--ink2);}
-.toc a:hover{color:var(--ink);text-decoration:none;}
-.toc a.on{color:var(--accent);font-weight:500;}
+/* 4.8 文档式单栏（报告 / 长文）：段落标题本身就是唯一导航入口。 */
+.doc{display:block;min-width:0;width:100%;}
 .doc-body{max-width:var(--text-width-prose);}
+.patient-shell .doc{min-width:0;width:100%;}
+.patient-shell .doc-body{max-width:none;min-width:0;width:100%;}
 .doc-body p,.doc-body li{font-size:var(--body-3);color:var(--ink2);line-height:1.75;}
 .doc-body ul{margin:var(--sp-8) 0;}
 .doc-body li{margin-bottom:6px;}
@@ -345,6 +347,48 @@ ul.bullet li{font-size:var(--caption);color:var(--ink2);margin-bottom:4px;}
 .rec:last-child{margin-bottom:0;}
 .rec > .def{padding:0;border-bottom:0;}
 .rec > .def > dt:first-of-type,.rec > .def > dd:first-of-type{font-weight:500;color:var(--ink);}
+
+/* 患者端就医路径流程图：屏幕强调顺序，打印使用文字准备单。 */
+.patient-path-flow{min-width:0;margin:0;padding:var(--sp-4) 0 var(--sp-8);}
+.patient-path-flow-list{display:grid;gap:0;list-style:none;margin:0;padding:0;overflow-x:visible;}
+.patient-path-flow-stage{position:relative;display:grid;grid-template-columns:44px minmax(0,1fr);column-gap:var(--sp-16);min-width:0;padding-bottom:var(--sp-24);}
+.patient-path-flow-stage:not(:last-child)::before{
+  content:"";position:absolute;left:21px;top:38px;bottom:0;width:1px;background:var(--line);
+}
+.patient-path-flow-stage:not(:last-child)::after{
+  content:"↓";position:absolute;left:14px;bottom:1px;z-index:1;
+  font-size:16px;line-height:1;color:var(--ink3);background:var(--gray-000);
+}
+.patient-path-flow-stage-marker{position:relative;z-index:2;display:flex;align-items:flex-start;justify-content:center;}
+.patient-path-flow-stage-marker span{display:grid;place-items:center;width:32px;height:32px;border:1px solid var(--gray-300);border-radius:50%;background:var(--gray-050);color:var(--ink2);font-family:var(--font-mono);font-size:var(--micro);}
+.patient-path-flow-stage-content{min-width:0;}
+.patient-path-flow-stage-label{margin:2px 0 var(--sp-8);font-family:var(--font-mono);font-size:var(--micro);color:var(--ink3);}
+.patient-path-flow-stage-track{display:grid;align-content:start;gap:var(--sp-16);min-width:0;width:100%;}
+.patient-path-flow-stage.has-parallel .patient-path-flow-stage-track{grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);align-items:stretch;}
+.patient-path-flow-stage-list,.patient-path-flow-parallel-list{display:grid;gap:var(--sp-12);list-style:none;margin:0;padding:0;}
+.patient-path-flow-parallel-group{min-width:0;border:1px dashed var(--info);border-radius:var(--br-8);background:rgba(91,75,138,.04);padding:var(--sp-12);}
+.patient-path-flow-parallel-label{margin-bottom:var(--sp-8);font-size:var(--micro);font-weight:600;color:var(--info);}
+.patient-path-flow-parallel-list{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));}
+.patient-path-flow-step{position:relative;display:flex;min-width:0;}
+.patient-path-flow-card{
+  width:100%;min-width:0;border:1px solid var(--line);
+  border-radius:var(--br-8);background:var(--gray-000);padding:var(--sp-12);
+}
+.patient-path-flow-meta{display:flex;align-items:center;gap:var(--sp-8);flex-wrap:wrap;margin-bottom:var(--sp-8);}
+.patient-path-flow-number{font-family:var(--font-mono);font-size:var(--micro);color:var(--ink3);}
+.patient-path-flow-card h4{margin:0;color:var(--ink);font-size:var(--body-3);line-height:1.45;}
+.patient-path-flow-detail{margin-top:var(--sp-8);font-size:var(--caption);line-height:1.65;color:var(--ink2);}
+.patient-path-flow-condition{margin-top:var(--sp-8);font-size:var(--micro);line-height:1.55;color:var(--warn);}
+.patient-path-flow-dependency{margin-top:var(--sp-8);font-size:var(--micro);line-height:1.55;color:var(--ink3);}
+.patient-path-flow-note{margin:var(--sp-12) 0 0;color:var(--ink3);}
+@media (max-width:900px){
+  .patient-path-flow-stage{grid-template-columns:36px minmax(0,1fr);column-gap:var(--sp-12);padding-bottom:var(--sp-20);}
+  .patient-path-flow-stage:not(:last-child)::before{left:17px;top:34px;}
+  .patient-path-flow-stage:not(:last-child)::after{left:11px;}
+  .patient-path-flow-stage-marker span{width:28px;height:28px;}
+  .patient-path-flow-stage.has-parallel .patient-path-flow-stage-track{grid-template-columns:1fr;}
+  .patient-path-flow-parallel-list{grid-template-columns:1fr;}
+}
 
 /* 4.10 决策条目（报告审核） */
 .item{border:1px solid var(--line);border-radius:var(--br-12);padding:var(--sp-16);
@@ -460,6 +504,7 @@ details summary{cursor:pointer;color:var(--accent);font-size:var(--caption);marg
   .doc{display:block;}
   .banner{border-width:1px;}
   .report-screen{display:none !important;}
+  .patient-path-flow{display:none !important;}
   .print-report{display:block !important;}
   .print-head{border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:12px;}
   .print-head h2{margin:0 0 4px;font-size:22px;}

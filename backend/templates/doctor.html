@@ -9,18 +9,19 @@
   /* 医生工作台专用样式（公共 token 与组件在 dsh.css） */
   /* 左轨只承担筛选和导航；病例队列在主区集中展示 */
   .rail-filters{display:flex;flex-direction:column;gap:4px;}
-  .rail-filters a{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border-radius:var(--br-8);color:var(--ink2);font-size:var(--body-3);}
-  .rail-filters a:hover{background:var(--gray-100);text-decoration:none;}
-  .rail-filters a.on{background:var(--gray-000);border:1px solid var(--gray-200);color:var(--ink);font-weight:600;}
+  .rail-filters .filter-link{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:var(--br-8);background:transparent;color:var(--ink2);font:inherit;font-size:var(--body-3);text-align:left;}
+  .rail-filters .filter-link:hover{background:var(--gray-100);}
+  .rail-filters .filter-link.on{background:var(--gray-000);border:1px solid var(--gray-200);color:var(--ink);font-weight:600;}
   .rail-sec{border-top:1px solid var(--line);margin-top:var(--sp-12);padding-top:var(--sp-12);}
   .view-nav{display:flex;flex-direction:column;gap:2px;}
-  .view-nav a{
+  .view-nav a,.view-nav .nav-link{
     display:flex;align-items:center;justify-content:space-between;gap:8px;
-    padding:8px 12px;border-radius:var(--br-8);color:var(--ink2);font-size:var(--body-3);
+    width:100%;padding:8px 12px;border:0;border-radius:var(--br-8);background:transparent;
+    color:var(--ink2);font:inherit;font-size:var(--body-3);text-align:left;
   }
-  .view-nav a:hover{background:var(--gray-100);text-decoration:none;}
-  .view-nav a.on{background:var(--gray-000);border:1px solid var(--gray-200);color:var(--ink);font-weight:500;}
-  .view-nav a.dis{color:var(--ink3);cursor:not-allowed;}
+  .view-nav a:hover,.view-nav .nav-link:hover{background:var(--gray-100);text-decoration:none;}
+  .view-nav a.on,.view-nav .nav-link.on{background:var(--gray-000);border:1px solid var(--gray-200);color:var(--ink);font-weight:500;}
+  .view-nav a.dis,.view-nav .nav-link.dis{color:var(--ink3);cursor:not-allowed;}
   /* 屏幕 E：三栏工作台已有通用 .mdt；屏幕 F：条目两列铺开 */
   #rev-body{display:grid;gap:var(--sp-12);grid-template-columns:1fr;}
   @media (min-width:1280px){ #rev-body{grid-template-columns:repeat(2,minmax(0,1fr));}}
@@ -31,23 +32,43 @@
   #list-body{display:grid;grid-template-columns:1fr;}
   .queue-head{background:var(--gray-100);color:var(--ink3);font-size:var(--micro);font-weight:600;letter-spacing:.02em;}
   .queue-row{border-top:1px solid var(--line);cursor:pointer;transition:background .15s ease,box-shadow .15s ease;}
-  .queue-row:hover{background:#fffdf9;box-shadow:inset 3px 0 0 var(--accent);}
+  .queue-row:hover{background:var(--surface-warm);box-shadow:inset 3px 0 0 var(--accent);}
   .queue-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
   .q-id{font-weight:650;color:var(--ink);}.q-main{min-width:0;}.q-main .muted{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .q-risk{font-weight:650;}.q-risk.high{color:var(--danger);}.q-risk.medium{color:var(--warn);}.q-risk.low{color:var(--ok);}
   .queue-pager{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;flex-wrap:wrap;}
-  .pager-buttons{display:flex;align-items:center;gap:5px;flex-wrap:wrap;}.pager-buttons button{min-width:34px;}.pager-buttons button.on{background:var(--ink);color:#fff;}
+  .pager-buttons{display:flex;align-items:center;gap:5px;flex-wrap:wrap;}.pager-buttons button{min-width:34px;}.pager-buttons button.on{background:var(--ink);color:var(--gray-000);}
   .review-group{border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);margin-bottom:var(--sp-12);overflow:hidden;}
   .review-group>summary{cursor:pointer;list-style:none;padding:12px 14px;font-weight:650;display:flex;justify-content:space-between;gap:12px;align-items:center;background:var(--gray-100);}
-  .review-group>summary::-webkit-details-marker{display:none;}.review-group.auto>summary{background:#f4f7f4;}.review-group .item{border:0;border-top:1px solid var(--line);border-radius:0;}
+  .review-group>summary::-webkit-details-marker{display:none;}.review-group.auto>summary{background:var(--surface-subtle);}.review-group .item{border:0;border-top:1px solid var(--line);border-radius:0;}
+  .queue-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;}
+  .doctor-card-accent{margin:0 0 var(--sp-16);border-left:3px solid var(--accent);}
+  .doctor-card-info{margin:0 0 var(--sp-16);border-left:3px solid var(--info);}
+  .inline-between{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;}
+  .inline-between-tight{display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;}
+  .inline-end{display:flex;justify-content:flex-end;gap:8px;align-items:center;}
+  .inline-wrap{display:flex;gap:8px;flex-wrap:wrap;}
+  .mdt-packet-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px;}
+  .opinion-fields{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
   @media (max-width:1100px){
-    .queue-head{display:none;}.queue-row{grid-template-columns:1fr 1fr;gap:8px 12px;padding:14px;}.queue-row>div:nth-child(n+3){font-size:var(--micro);}
+    .queue-head{display:none;}.queue-row{grid-template-columns:1fr 1fr;gap:8px 12px;padding:14px;}
+    .queue-row>div{display:flex;align-items:baseline;gap:8px;min-width:0;}
+    .queue-row>div::before{content:attr(data-label);flex:0 0 5.5rem;color:var(--ink3);font-size:var(--micro);font-weight:600;}
+    .queue-row>div:nth-child(n+3){font-size:var(--micro);}
+    .queue-row>.q-main .muted{flex:1;min-width:0;}
   }
   /* 窄屏：轨道折成整宽 */
   @media (max-width:1100px){
     .shell{grid-template-columns:1fr;}
     .rail{position:static;max-height:none;border:1px solid var(--line);border-radius:var(--br-12);
           background:var(--gray-000);padding:var(--sp-12);}
+  }
+  @media (max-width:720px){
+    .rail-filters .filter-link{min-height:44px;}
+  }
+  @media (min-width:1440px){
+    .shell:not(.has-case){grid-template-columns:var(--rail-left) minmax(0,1fr);}
+    .shell:not(.has-case) .rail-right{display:none;}
   }
 </style>
 </head>
@@ -69,13 +90,16 @@
       <h1>进入医生工作台</h1>
       <p class="muted">先从风险优先队列开始，只处理需要医生决定的条目；接受、修改、驳回、暂不确定，全部留痕可回溯。</p>
 
-      <div class="row" style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
-        <input id="login-user" placeholder="账号" autocomplete="username" style="flex:1;min-width:160px;">
-        <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password" style="flex:1;min-width:160px;">
-        <button class="primary" onclick="loginForm()">登录</button>
-      </div>
+      <form id="doctor-login-form" class="row" style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
+        <label class="sr" for="login-user">账号</label>
+        <input id="login-user" placeholder="账号" autocomplete="username" aria-describedby="login-help" style="flex:1;min-width:160px;">
+        <label class="sr" for="login-pass">密码</label>
+        <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password" aria-describedby="login-help" style="flex:1;min-width:160px;">
+        <button class="primary" type="submit">登录</button>
+      </form>
+      <p id="login-help" class="tiny">账号和密码由部署者提供；审核操作会保留操作人和时间。</p>
 
-      <div id="login-msg" class="banner danger hide" style="margin-top:var(--sp-12);"></div>
+      <div id="login-msg" class="banner danger hide" role="alert" aria-live="assertive" style="margin-top:var(--sp-12);"></div>
     </div>
   </div>
 
@@ -134,7 +158,7 @@
     </div>
   </header>
 
-  <div class="shell">
+  <div id="doctor-shell" class="shell">
     <!-- 左轨：队列筛选 + 视图导航；病例本体在主区分页展示 -->
     <aside class="rail rail-left">
       <div class="rail-title">队列筛选</div>
@@ -142,13 +166,13 @@
       <div class="rail-sec">
         <div class="rail-title">审阅视图</div>
         <nav class="view-nav" id="nav">
-          <a onclick="go('list')" data-s="list">病例列表</a>
-          <a onclick="navCase('overview')" data-s="overview" class="dis">病例总览</a>
-          <a onclick="navCase('triage')" data-s="triage" class="dis">分诊依据</a>
-          <a onclick="navCase('evidence')" data-s="evidence" class="dis">证据板</a>
-          <a onclick="navCase('mdt')" data-s="mdt" class="dis">多学科审阅 ★</a>
-          <a onclick="navCase('review')" data-s="review" class="dis">报告审核 ★</a>
-          <a onclick="navCase('history')" data-s="history" class="dis">审核记录与版本</a>
+          <button type="button" class="nav-link" onclick="go('list')" data-s="list" aria-current="page">病例列表</button>
+          <button type="button" class="nav-link dis" onclick="navCase('overview')" data-s="overview" aria-disabled="true">病例总览</button>
+          <button type="button" class="nav-link dis" onclick="navCase('triage')" data-s="triage" aria-disabled="true">分诊依据</button>
+          <button type="button" class="nav-link dis" onclick="navCase('evidence')" data-s="evidence" aria-disabled="true">证据板</button>
+          <button type="button" class="nav-link dis" onclick="navCase('mdt')" data-s="mdt" aria-disabled="true">多学科审阅 ★</button>
+          <button type="button" class="nav-link dis" onclick="navCase('review')" data-s="review" aria-disabled="true">报告审核 ★</button>
+          <button type="button" class="nav-link dis" onclick="navCase('history')" data-s="history" aria-disabled="true">审核记录与版本</button>
         </nav>
       </div>
       <div class="rail-foot">
@@ -160,7 +184,8 @@
     <main class="work">
       <section id="s-list" class="card">
         <h2>待审队列（风险优先）</h2>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+        <p id="doctor-scope-note" class="tiny" role="status" aria-live="polite"></p>
+        <div class="queue-toolbar">
           <select id="f-state" style="width:auto;" onchange="setQueueState(this.value)">
             <option value="">全部状态</option>
             <option value="awaiting_doctor">AI 分析完成 / 待医生审核</option>
@@ -211,6 +236,7 @@
       <section id="s-review" class="card hide">
         <h2>报告审核</h2>
         <div class="banner gray" id="pub-badge">AI 生成 · 尚未经医生审核</div>
+        <div id="review-task-banner" class="banner info hide" role="status" aria-live="polite"></div>
         <div id="rev-body"></div>
         <!-- 发布入口的**主区镜像**：<1440px 时右轨被 dsh.css 收起（.rail-right），
              发布与"录入线下意见"不能只活在右轨里，否则 1366/1280 屏上医生发不出去 -->
@@ -242,12 +268,12 @@
 </div>
 
 <!-- 修改/驳回弹窗 -->
-<div id="modal" class="modal hide">
-  <div class="box">
+<div id="modal" class="modal hide" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="box" tabindex="-1">
     <h2 id="modal-title">审核操作</h2>
     <div id="modal-body"></div>
     <div class="actions">
-      <button class="ghost" onclick="closeModal()">取消</button>
+      <button id="modal-close" class="ghost" type="button" onclick="closeModal()">取消</button>
       <button class="primary" onclick="submitModal()">确认提交</button>
     </div>
   </div>
@@ -256,7 +282,7 @@
 <script>
 /* ===================== 状态与工具 ===================== */
 const S = { token:'', me:null, cases:[], caseId:'', caseData:null, review:null,
-            audit:null, screen:'list', modal:null, mdtTimer:null,
+            audit:null, screen:'list', modal:null, mdtTimer:null, mdtPlayback:null,
             queue:{filter:'', sort:'risk', state:'', page:1, pageSize:20, total:0, hasMore:false,
                    scroll:0, requestId:0} };
 
@@ -273,7 +299,14 @@ const QUEUE_FILTERS = [
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function $(id){ return document.getElementById(id); }
-function msg(id, text, cls){ const el=$(id); if(!el) return; el.className='banner '+(cls||'danger'); el.textContent=text; el.classList.remove('hide'); }
+function msg(id, text, cls){
+  const el=$(id); if(!el) return;
+  const tone=cls||'danger';
+  el.className='banner '+tone;
+  el.setAttribute('role', tone==='ok'?'status':'alert');
+  el.setAttribute('aria-live', tone==='ok'?'polite':'assertive');
+  el.textContent=text; el.classList.remove('hide');
+}
 
 async function api(path, opt){
   opt = opt || {};
@@ -286,29 +319,63 @@ async function api(path, opt){
 }
 
 /* ===================== 登录 ===================== */
+let loginBusy = false;
 async function loginForm(){
-  const username = $('login-user').value.trim(), password = $('login-pass').value;
-  const r = await api('/api/login', {method:'POST', body:JSON.stringify({username, password})});
-  if(r.status!==200){ msg('login-msg', r.data.error||'登录失败'); return; }
-  const d = r.data.session || {};
-  if(d.role !== 'doctor'){ msg('login-msg','该账号不是医生角色，无法进入审核台'); return; }
-  S.token = d.token; S.me = d; enterApp();
+  if(loginBusy) return;
+  loginBusy = true;
+  const submit = document.querySelector('#doctor-login-form button[type="submit"]');
+  const originalLabel = submit ? submit.textContent : '';
+  if(submit){ submit.disabled = true; submit.setAttribute('aria-busy','true'); submit.textContent='正在登录…'; }
+  try{
+    const username = $('login-user').value.trim(), password = $('login-pass').value;
+    const r = await api('/api/login', {method:'POST', body:JSON.stringify({username, password})});
+    if(r.status!==200){ showLoginError(r.data.error||'登录失败'); return; }
+    const d = r.data.session || {};
+    if(d.role !== 'doctor'){ showLoginError('该账号不是医生角色，无法进入审核台'); return; }
+    S.token = d.token; S.me = d; enterApp();
+  }finally{
+    loginBusy = false;
+    if(submit){ submit.disabled = false; submit.removeAttribute('aria-busy'); submit.textContent=originalLabel; }
+  }
+}
+function showLoginError(text){
+  msg('login-msg', text);
+  const user = $('login-user');
+  if(user) user.focus();
+}
+function renderDoctorScope(){
+  const note = $('doctor-scope-note');
+  if(!note) return;
+  const me = S.me || {};
+  if(me.access_scope === 'all'){
+    note.textContent = '全量审核范围：可查看所有病例';
+    return;
+  }
+  const department = me.department_name || me.department_code || '未配置科室';
+  note.textContent = `当前科室：${department} · 仅显示已授权病例`;
 }
 async function logout(){
+  clearInterval(S.mdtTimer); S.mdtTimer=null; S.mdtPlayback=null;
   await api('/api/logout', {method:'POST', body:JSON.stringify({token:S.token})});
   try{ localStorage.removeItem('dsh_session'); }catch(e){}
   S.token=''; S.me=null; $('app').classList.add('hide'); $('login').classList.remove('hide');
   document.body.classList.remove('doctor-queue-mode');
   $('ctx').textContent='未选择病例'; enableCaseNav(false); S.caseId='';
+  $('doctor-shell').classList.remove('has-case');
   const rf=$('rail-filters'); if(rf) rf.innerHTML='';
 }
 function enterApp(){
   // 跨页会话：登录后写入，供刷新与两端跳转复用
   try{ localStorage.setItem('dsh_session', JSON.stringify({token:S.token, role:'doctor',
-        username:S.me.username, label:S.me.label})); }catch(e){}
+        username:S.me.username, label:S.me.label, department_code:S.me.department_code||'',
+        department_name:S.me.department_name||'', access_scope:S.me.access_scope||'department'})); }catch(e){}
   $('login').classList.add('hide'); $('app').classList.remove('hide');
+  $('doctor-shell').classList.remove('has-case');
   document.body.classList.add('doctor-queue-mode');
-  $('ident').textContent = (S.me.label||'模拟审核员') + ' · ' + S.me.username;
+  const department = S.me.department_name || S.me.department_code;
+  $('ident').textContent = (S.me.label||'模拟审核员') + ' · ' + S.me.username +
+    (department ? ' · ' + department : '');
+  renderDoctorScope();
   loadList({resetPage:true});
 }
 /* 跨页会话恢复：已有医生会话可复用；非医生会话忽略 */
@@ -316,7 +383,9 @@ function restoreSession(){
   let s=null;
   try{ s = JSON.parse(localStorage.getItem('dsh_session')||'null'); }catch(e){ return false; }
   if(!s || !s.token || s.role!=='doctor') return false;
-  S.token=s.token; S.me={username:s.username, label:s.label, role:s.role};
+  S.token=s.token; S.me={username:s.username, label:s.label, role:s.role,
+    department_code:s.department_code||'', department_name:s.department_name||'',
+    access_scope:s.access_scope||'department'};
   enterApp();
   return true;
 }
@@ -329,7 +398,12 @@ function go(screen){
   ['list','overview','triage','evidence','mdt','review','history'].forEach(s=>{
     $('s-'+s).classList.toggle('hide', s!==screen);
   });
-  document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on', a.dataset.s===screen));
+  document.querySelectorAll('#nav [data-s]').forEach(a=>{
+    const active = a.dataset.s===screen;
+    a.classList.toggle('on', active);
+    if(active) a.setAttribute('aria-current','page');
+    else a.removeAttribute('aria-current');
+  });
   if(screen==='list') loadList({keepPage:true}).then(()=>{
     if(S.queue.scroll) window.scrollTo({top:S.queue.scroll, behavior:'instant'});
   });
@@ -345,8 +419,11 @@ function navCase(screen){
   go(screen);
 }
 function enableCaseNav(on){
-  document.querySelectorAll('#nav a').forEach(a=>{
-    if(a.dataset.s!=='list') a.classList.toggle('dis', !on);
+  document.querySelectorAll('#nav [data-s]').forEach(a=>{
+    if(a.dataset.s!=='list'){
+      a.classList.toggle('dis', !on);
+      a.setAttribute('aria-disabled', String(!on));
+    }
   });
 }
 
@@ -355,9 +432,9 @@ function renderQueueFilters(){
   const rail=$('rail-filters'); if(!rail) return;
   const counts=(S.queueMeta&&S.queueMeta.filters)||{};
   rail.innerHTML = QUEUE_FILTERS.map(f=>`
-    <a href="#" class="${S.queue.filter===f.key?'on':''}" onclick="setQueueFilter('${esc(f.key)}');return false;">
+    <button type="button" class="filter-link ${S.queue.filter===f.key?'on':''}" aria-pressed="${S.queue.filter===f.key}" onclick="setQueueFilter('${esc(f.key)}');">
       <span>${esc(f.label)}</span><span class="tiny mono">${esc(counts[f.key||'all']!=null?counts[f.key||'all']:0)}</span>
-    </a>`).join('');
+    </button>`).join('');
 }
 function renderPager(){
   const el=$('list-pager'); if(!el) return;
@@ -422,18 +499,18 @@ async function loadList(options){
     const highRisk=Number(c.high_risk_items||0), conflicts=Number(c.conflict_items||0), analysisFailed=Number(c.analysis_failed_items||0);
     const reopened=Array.isArray(c.reopened_item_ids)?c.reopened_item_ids.length:0;
     const reopenedLabels=Array.isArray(c.reopened_item_labels)?c.reopened_item_labels:[];
-    return `<div class="queue-row" tabindex="0" role="button" onclick="openCase('${esc(c.case_id)}')" onkeydown="if(event.key==='Enter'||event.key===' ')openCase('${esc(c.case_id)}')">
-      <div class="q-id">#${esc(c.case_id)}<div class="tiny">${esc(c.sex||'—')} · ${esc(c.age||'—')}</div></div>
-      <div class="q-main"><strong>${esc(c.primary_department||'待分诊')}</strong><div class="muted" title="${esc(c.chief_complaint||'')}">${esc(c.chief_complaint||'（未提供主诉）')}</div></div>
-      <div class="q-risk ${esc(risk)}"><span class="pill ${risk==='high'?'danger':(risk==='medium'?'warn':'ok')}">${esc(riskLabel)}</span>${c.conflict_count?`<div class="tiny">分歧 ${esc(c.conflict_count)}</div>`:''}</div>
-      <div><span class="pill ${c.reliability==='高'?'ok':(c.reliability==='中'?'warn':'danger')}">${esc(c.reliability||'—')}</span></div>
-      <div>${analysisBadge(c)}</div>
-      <div>${pending?`<span class="pill danger"><span class="dot"></span>必审 ${pending}</span>`:`<span class="pill ok">已处理</span>`}
+    return `<div class="queue-row" tabindex="0" role="button" onclick="openCase('${esc(c.case_id)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCase('${esc(c.case_id)}')}">
+      <div class="q-id" data-label="病例">#${esc(c.case_id)}<div class="tiny">${esc(c.sex||'—')} · ${esc(c.age||'—')}</div></div>
+      <div class="q-main" data-label="主诉 / 牵头方向"><strong>${esc(c.primary_department||'待分诊')}</strong><div class="muted" title="${esc(c.chief_complaint||'')}">${esc(c.chief_complaint||'（未提供主诉）')}</div></div>
+      <div class="q-risk ${esc(risk)}" data-label="风险"><span class="pill ${risk==='high'?'danger':(risk==='medium'?'warn':'ok')}">${esc(riskLabel)}</span>${c.conflict_count?`<div class="tiny">分歧 ${esc(c.conflict_count)}</div>`:''}</div>
+      <div data-label="可靠性"><span class="pill ${c.reliability==='高'?'ok':(c.reliability==='中'?'warn':'danger')}">${esc(c.reliability||'—')}</span></div>
+      <div data-label="分析">${analysisBadge(c)}</div>
+      <div data-label="医生处理">${pending?`<span class="pill danger"><span class="dot"></span>必审 ${pending}</span>`:`<span class="pill ok">已处理</span>`}
         <div class="tiny">必审 ${required} · 建议抽查 ${sample} · 自动处理 ${automatic}</div>
         ${(highRisk||conflicts||analysisFailed)?`<div class="tiny">${highRisk?`高风险 ${highRisk}　`:''}${conflicts?`冲突 ${conflicts}　`:''}${analysisFailed?`分析失败 ${analysisFailed}`:''}</div>`:''}
         ${exempt?`<div class="tiny">免审 ${exempt}</div>`:''}
         ${reopened?`<div class="tiny" style="color:var(--warn);">资料更新重开 ${reopened} 项：${esc(reopenedLabels.join('、'))}</div>`:''}</div>
-      <div class="tiny">${esc(c.updated_at||c.created_at||'—')}<div>${esc(c.case_state_label||c.case_state||'')}</div></div>
+      <div class="tiny" data-label="更新">${esc(c.updated_at||c.created_at||'—')}<div>${esc(c.case_state_label||c.case_state||'')}</div></div>
     </div>`;
   }).join('');
   $('list-body').innerHTML = `<div class="queue-table"><div class="queue-head"><div>病例</div><div>主诉 / 牵头方向</div><div>风险</div><div>可靠性</div><div>分析</div><div>医生处理</div><div>更新</div></div>${rows}</div>`;
@@ -446,7 +523,7 @@ function analysisBadge(c){
   const label = {running:'分析中', done:'分析就绪', partial_failed:'部分未完成',
                  failed:'分析失败', none:'未分析'}[state] || state;
   const cls = state==='done' ? 'ok' : (state==='running' ? 'warn' : (state==='none' ? 'gray' : 'danger'));
-  return `<span class="pill ${cls}">${esc(label)}</span>`;
+  return `<span class="pill ${cls}" role="status" aria-label="${esc(label)}">${esc(label)}</span>`;
 }
 
 /* 批量补齐分析：把"分析未完成"的病例排进后台任务（逐例可见进度，不阻塞当前操作） */
@@ -472,6 +549,7 @@ async function openCase(caseId){
   S.caseData = (c.data.case||{});
   S.review = rev.data;
   S.audit = (aud.status===200? aud.data : null);
+  $('doctor-shell').classList.add('has-case');
   const p = (S.caseData.payload||{}), t = p.triage||{};
   $('ctx').textContent = `病例 #${caseId}　${t.behavior_type?('类型 '+t.behavior_type):''}　可靠性 ${(t.reliability||{}).level||'—'}　${S.review.published?'已审核':'未审核'}`;
   updateBadge();
@@ -493,8 +571,8 @@ function renderMdtScreening(){
   if(screening.status === 'decided'){
     const tone = screening.decision==='urgent_care' ? 'danger' :
       (screening.decision==='recommend_mdt' ? 'info' : 'ok');
-    return `<div class="card" style="margin:0 0 var(--sp-16);border-left:3px solid var(--accent);">
-      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
+    return `<div class="card doctor-card-accent">
+      <div class="inline-between">
         <h3 style="margin:0;">MDT 初筛结果</h3><span class="pill ${tone}">${esc(screening.decision_label||'已完成')}</span>
       </div>
       <div class="field" style="margin-top:10px;"><div class="muted" style="min-width:72px;">处理原因</div><div style="flex:1;">${esc(screening.reason||'—')}</div></div>
@@ -505,7 +583,7 @@ function renderMdtScreening(){
   }
   const selected = (((S.caseData||{}).payload||{}).triage||{}).selected || [];
   const options = selected.length ? selected : ['内分泌科','眼科','肾内科'];
-  return `<div class="card" style="margin:0 0 var(--sp-16);border-left:3px solid var(--accent);">
+  return `<div class="card doctor-card-accent">
     <h3 style="margin-top:0;">MDT 初筛与病例分流</h3>
     <p class="muted">先判断是否需要多学科协作，再进入后续审核。初筛决定会单独留痕。</p>
     <div class="field"><label style="min-width:88px;">处理方向</label>
@@ -518,10 +596,10 @@ function renderMdtScreening(){
     </div>
     <div id="mdt-screening-multi-fields" class="hide">
       <div class="field"><label style="min-width:88px;">会诊目的</label><input id="mdt-screening-purpose" placeholder="填写这次希望共同解决的问题" style="flex:1;"></div>
-      <div class="field"><label style="min-width:88px;">参与科室</label><div style="flex:1;display:flex;gap:8px;flex-wrap:wrap;">${options.map(d=>`<label class="chip"><input type="checkbox" data-mdt-dept value="${esc(d)}"> ${esc(d)}</label>`).join('')}</div></div>
+      <div class="field"><label style="min-width:88px;">参与科室</label><div style="flex:1;" class="inline-wrap">${options.map(d=>`<label class="chip"><input type="checkbox" data-mdt-dept value="${esc(d)}"> ${esc(d)}</label>`).join('')}</div></div>
     </div>
     <div class="field"><label style="min-width:88px;">初筛原因</label><textarea id="mdt-screening-reason" placeholder="说明为什么选择这个处理方向" style="flex:1;min-height:70px;"></textarea></div>
-    <div style="display:flex;justify-content:flex-end;gap:8px;align-items:center;"><span id="mdt-screening-msg" class="tiny"></span><button class="primary" onclick="submitMdtScreening()">保存初筛决定</button></div>
+    <div class="inline-end"><span id="mdt-screening-msg" class="tiny"></span><button class="primary" onclick="submitMdtScreening()">保存初筛决定</button></div>
   </div>`;
 }
 function toggleMdtScreeningFields(){
@@ -556,7 +634,7 @@ function renderMdtPreparationPacket(){
   const specialtyHtml = opinions.length ? opinions.map(op=>{
     const unavailable = op.status !== 'available';
     return `<div class="opcard">
-      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;">
+      <div class="inline-between-tight">
         <strong>${esc(op.department||'未注明科室')}</strong>
         <span class="pill ${unavailable?'gray':'info'}">${esc(op.source_label||'专科 AI 参考意见')}</span>
       </div>
@@ -583,7 +661,7 @@ function renderMdtPreparationPacket(){
         const statusCode = status==='已解决' ? 'resolved' : (status==='需要补充资料' ? 'need_more_info' : 'unresolved_with_followup');
         const safeKey = String(id).replace(/[^A-Za-z0-9_-]/g,'');
         return `<div class="opcard">
-          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><strong>${esc(topic)}</strong><span class="pill ${status==='已解决'?'ok':'warn'}">${esc(status)}</span></div>
+      <div class="inline-between-tight"><strong>${esc(topic)}</strong><span class="pill ${status==='已解决'?'ok':'warn'}">${esc(status)}</span></div>
           <div class="tiny" style="margin-top:5px;">${esc(id)}　下一步：${esc(next||'需补充证据后再判断')}</div>
           <div class="field" style="margin-top:8px;"><label style="min-width:72px;">处理状态</label><select id="dis-status-${safeKey}" style="flex:1;">
             <option value="resolved" ${statusCode==='resolved'?'selected':''}>已解决</option><option value="unresolved_with_followup" ${statusCode==='unresolved_with_followup'?'selected':''}>未解决，需后续跟进</option><option value="need_more_info" ${statusCode==='need_more_info'?'selected':''}>需要补充资料</option>
@@ -591,7 +669,7 @@ function renderMdtPreparationPacket(){
           <div class="field"><label style="min-width:72px;">决定/结果</label><input id="dis-choice-${safeKey}" value="${esc(choice==='（未记录）'?'':choice)}" placeholder="已解决时填写牵头医生决定或修改结果" style="flex:1;"></div>
           <div class="field"><label style="min-width:72px;">处理理由</label><textarea id="dis-reason-${safeKey}" placeholder="说明判断依据（必填）" style="flex:1;min-height:54px;">${esc(reason==='（未记录）'?'':reason)}</textarea></div>
           <div class="field"><label style="min-width:72px;">下一步</label><textarea id="dis-next-${safeKey}" placeholder="未解决或需补资料时填写后续安排" style="flex:1;min-height:54px;">${esc(next)}</textarea></div>
-          <div style="display:flex;justify-content:flex-end;gap:8px;align-items:center;"><span id="dis-msg-${safeKey}" class="tiny"></span><button class="mini" onclick="submitDisagreement('${esc(id)}','${safeKey}')">保存分歧处理</button></div>
+          <div class="inline-end"><span id="dis-msg-${safeKey}" class="tiny"></span><button class="mini" onclick="submitDisagreement('${esc(id)}','${safeKey}')">保存分歧处理</button></div>
         </div>`;
       }).join('')
     : '<div class="tiny">暂无方向性分歧。</div>';
@@ -604,12 +682,12 @@ function renderMdtPreparationPacket(){
   const humanHtml = (packet.human_reviewed||[]).length
     ? packet.human_reviewed.map(x=>`<div class="tiny">${esc(x.department||'线下医生')}：${esc(x.content||'')} <span class="pill ok">${esc(x.source_label||'医生审核内容')}</span></div>`).join('')
     : '<div class="tiny">当前没有已验证的线下医生意见。</div>';
-  return `<div class="card" id="mdt-preparation-packet" style="margin:0 0 var(--sp-16);border-left:3px solid var(--info);">
-    <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
+  return `<div class="card doctor-card-info" id="mdt-preparation-packet">
+    <div class="inline-between">
       <h3 style="margin:0;">MDT 会前资料包</h3><span class="pill info">只读资料汇总</span>
     </div>
     <p class="tiny" style="margin-top:8px;">会前资料包只汇总已脱敏的结构化资料，逐项标明来源类型，供医生快速核对后再执行审核操作。</p>
-    <div class="mdt-packet-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px;">
+    <div class="mdt-packet-grid">
       <div class="opcard"><strong>初筛与会诊目的</strong><div class="tiny">处理方向：${esc(screening.decision_label||'待医生初筛')}</div><div class="tiny">初筛原因：${esc(screening.reason||'—')}</div><div class="tiny">会诊目的：${esc(screening.purpose||'—')}</div><div class="tiny">参与科室：${esc((screening.departments||[]).join('、')||'—')}</div></div>
       <div class="opcard"><strong>分诊摘要</strong><div class="tiny">牵头方向：${esc(triage.primary_department||'—')}</div><div class="tiny">协同方向：${esc((triage.secondary_departments||[]).join('、')||'—')}</div><div class="tiny">可靠性：${esc(triage.reliability||'—')}</div></div>
       <div class="opcard"><strong>证据来源</strong><div class="tiny" style="margin:6px 0;">${refsHtml}</div><div class="tiny">来源类型：患者结构化资料 / 专科 AI 参考意见 / 医生审核内容</div></div>
@@ -815,14 +893,39 @@ function renderMdt(){
 function playMdt(){
   const steps = document.querySelectorAll('#mdt-body [data-step]');
   steps.forEach(el=>el.style.display='none');
-  let i = 0;
+  S.mdtPlayback = {steps:Array.from(steps), index:0};
+  startMdtPlayback();
+}
+function startMdtPlayback(){
   clearInterval(S.mdtTimer);
+  if(!S.mdtPlayback) return;
+  if(document.visibilityState === 'hidden'){
+    $('mdt-note').textContent = '页面不可见，已暂停';
+    return;
+  }
   $('mdt-note').textContent = '播放中…';
   S.mdtTimer = setInterval(()=>{
-    if(i >= steps.length){ clearInterval(S.mdtTimer); $('mdt-note').textContent = '播放完毕'; return; }
-    steps[i].style.display='block'; i++;
+    if(document.visibilityState === 'hidden'){
+      clearInterval(S.mdtTimer); S.mdtTimer=null;
+      $('mdt-note').textContent = '页面不可见，已暂停';
+      return;
+    }
+    const playback = S.mdtPlayback;
+    if(!playback || playback.index >= playback.steps.length){
+      clearInterval(S.mdtTimer); S.mdtTimer=null;
+      $('mdt-note').textContent = '播放完毕';
+      return;
+    }
+    playback.steps[playback.index].style.display='block';
+    playback.index += 1;
   }, 900);
 }
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible' && S.mdtPlayback
+      && S.mdtPlayback.index < S.mdtPlayback.steps.length){
+    startMdtPlayback();
+  }
+});
 function addToQuestions(topic){
   const box = $('rev-summary');
   if(!box) return;
@@ -844,6 +947,15 @@ function renderReview(){
   const tierCounts = sum.tier_counts||{};
   const doctorReviewed = Number(sum.doctor_reviewed!=null ? sum.doctor_reviewed : (sum.human_touched||0));
   const autoProcessed = Number(sum.auto_processed||byState.auto_processed||0);
+  const taskBanner = $('review-task-banner');
+  if(taskBanner){
+    const pendingRequired = Number(sum.pending||0);
+    taskBanner.className = 'banner ' + (pendingRequired ? 'info' : 'ok');
+    taskBanner.classList.toggle('hide', !sum.total);
+    taskBanner.innerHTML = pendingRequired
+      ? `<strong>当前主要任务</strong>：还有 ${sum.pending||0} 项必审，请先逐条处理。`
+      : '<strong>当前主要任务</strong>：必审项目已处理，可检查分歧后发布审核版。';
+  }
   const bar = $('rev-bar'), note = $('rev-note');
   if(bar) bar.style.width = Math.round((doctorReviewed+autoProcessed)/(sum.total||1)*100) + '%';
   if(note) note.textContent = sum.total
@@ -945,7 +1057,7 @@ function publishPanelHtml(sum, canPublish, pfx){
       </div>
       <h3>录入线下实际意见（就诊后闭环）</h3>
       <div class="tiny">由医生端录入线下真实医生意见（来源=医生上传），用于生成「AI 建议 vs 医生意见」对照；患者端不承担"替医生写意见"。</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+      <div class="opinion-fields">
         <input id="${pfx}-op-dept" placeholder="科室（如 眼科）" style="flex:0 0 180px;">
         <input id="${pfx}-op-text" placeholder="线下医生意见原文" style="flex:1;min-width:220px;">
         <button class="mini" onclick="submitOpinion('${pfx}')">录入</button>
@@ -981,25 +1093,49 @@ async function submitDisagreement(disagreementId, key){
   await openCase(S.caseId);
   go('overview');
 }
+let modalPreviousFocus = null;
 function openModal(action, itemId){
   const labels = {modify:'修改条目', reject:'驳回条目', uncertain:'标记为暂不确定', request_more_info:'请求补充资料'};
   const needAfter = action==='modify';
+  modalPreviousFocus = document.activeElement;
   S.modal = {action, itemId};
   $('modal-title').textContent = labels[action] || '审核操作';
   $('modal-body').innerHTML = `
-    ${needAfter?`<div class="muted">修改后内容（必填）</div><textarea id="m-after" placeholder="改写为面向患者/医生的中性表述"></textarea>`:''}
-    <div class="muted" style="margin-top:8px;">原因（修改/驳回必填，其他建议填写）</div>
-    <textarea id="m-reason" placeholder="例如：依据不足，需补充眼底检查结果"></textarea>
-    <div id="m-msg"></div>`;
+    ${needAfter?`<label id="m-after-label" for="m-after" class="muted">修改后内容（必填）</label><div id="m-after-help" class="tiny">请使用面向患者和医生的中性表述。</div><textarea id="m-after" aria-describedby="m-after-help" placeholder="改写为面向患者/医生的中性表述"></textarea>`:''}
+    <label id="m-reason-label" for="m-reason" class="muted" style="margin-top:8px;">原因（修改/驳回必填，其他建议填写）</label>
+    <div id="m-reason-help" class="tiny">说明依据不足、风险或需要补充的资料，便于后续追溯。</div>
+    <textarea id="m-reason" aria-describedby="m-reason-help" placeholder="例如：依据不足，需补充眼底检查结果"></textarea>
+    <div id="m-msg" role="alert" aria-live="assertive"></div>`;
   $('modal').classList.remove('hide');
+  const first = $('m-after') || $('m-reason') || $('modal-close');
+  if(first) first.focus();
 }
-function closeModal(){ $('modal').classList.add('hide'); S.modal=null; }
+function closeModal(){
+  $('modal').classList.add('hide');
+  S.modal=null;
+  const previous = modalPreviousFocus;
+  modalPreviousFocus = null;
+  if(previous && document.contains(previous) && typeof previous.focus==='function') previous.focus();
+  else if($('rev-body')){ $('rev-body').setAttribute('tabindex','-1'); $('rev-body').focus(); }
+}
+let modalSubmitting = false;
 async function submitModal(){
-  if(!S.modal) return;
-  const after = $('m-after') ? $('m-after').value.trim() : '';
-  const reason = $('m-reason') ? $('m-reason').value.trim() : '';
-  const ok = await decide(S.modal.itemId, S.modal.action, after, reason);
-  if(ok) closeModal();
+  if(!S.modal || modalSubmitting) return;
+  const modal = S.modal;
+  modalSubmitting = true;
+  modal.submitting = true;
+  const controls = Array.from(document.querySelectorAll('#modal button'));
+  controls.forEach(button=>{ button.disabled=true; button.setAttribute('aria-busy','true'); });
+  try{
+    const after = $('m-after') ? $('m-after').value.trim() : '';
+    const reason = $('m-reason') ? $('m-reason').value.trim() : '';
+    const ok = await decide(modal.itemId, modal.action, after, reason);
+    if(ok) closeModal();
+  }finally{
+    if(S.modal===modal) modal.submitting=false;
+    modalSubmitting = false;
+    controls.forEach(button=>{ button.disabled=false; button.removeAttribute('aria-busy'); });
+  }
 }
 async function publish(acceptAll){
   const r = await api('/api/v2/case/'+S.caseId+'/publish', {method:'POST',
@@ -1027,6 +1163,22 @@ async function refreshHeader(){
     $('ctx').textContent = `病例 #${S.caseId}　${t.behavior_type?('类型 '+t.behavior_type):''}　可靠性 ${(t.reliability||{}).level||'—'}　${(S.review.published?'已审核':'未审核')}`;
   }
 }
+
+document.getElementById('doctor-login-form').addEventListener('submit', function(e){
+  e.preventDefault();
+  loginForm();
+});
+
+document.getElementById('modal').addEventListener('keydown', function(e){
+  if(e.key==='Escape'){ closeModal(); return; }
+  if(e.key!=='Tab') return;
+  const modalFocusables = Array.from(this.querySelectorAll('button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])'))
+    .filter(el=>!el.closest('.hide'));
+  if(!modalFocusables.length){ e.preventDefault(); $('modal').querySelector('.box').focus(); return; }
+  const first = modalFocusables[0], last = modalFocusables[modalFocusables.length-1];
+  if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+  else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+});
 
 /* ===================== 屏 G：审核记录与版本 ===================== */
 function renderHistory(){

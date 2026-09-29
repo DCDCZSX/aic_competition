@@ -279,12 +279,19 @@ class ResponsiveLayoutTest(unittest.TestCase):
                                      f"{path} {width}px 下应塌成单列，实际 {narrow!r}")
 
     def test_multi_column_areas_are_single_column_on_narrow_screens(self):
-        """报告目录/多学科/路径/摘要/审核列表这些多列区，窄屏下行数必须是 1。"""
+        """报告/多学科/路径/摘要/审核列表这些区域，窄屏下不能挤成多列。"""
         for path, selectors in (("/patient", (".doc", ".mdt", ".path-grid", ".sum-grid")),
                                 ("/doctor", ("#rev-body", "#list-body"))):
             html, rules = self.page(path)
             for selector in selectors:
                 with self.subTest(page=path, selector=selector):
+                    if path == "/patient" and selector == ".doc":
+                        self.assertEqual(
+                            declarations_at(rules, selector, 768).get("display"),
+                            "block",
+                            "患者就医详情应保持单栏文档流",
+                        )
+                        continue
                     value = declarations_at(rules, selector, 768).get("grid-template-columns", "")
                     self.assertIn("1fr", value, f"{path} {selector} 窄屏应为单列")
                     self.assertNotIn("repeat(", value, f"{path} {selector} 窄屏不应仍是多列")
@@ -294,6 +301,15 @@ class ResponsiveLayoutTest(unittest.TestCase):
         _html, rules = self.page("/patient")
         self.assertEqual(declarations_at(rules, ":root", 390).get("--page-pad"), "16px")
         self.assertNotEqual(declarations_at(rules, ":root", 1280).get("--page-pad"), "16px")
+
+    def test_touch_targets_keep_a_minimum_size_on_phone(self):
+        """手机端主要按钮和动态选项要有足够的触控面积。"""
+        _html, rules = self.page("/patient")
+        for selector in (".btn-sm", ".mini", "button.chip"):
+            with self.subTest(selector=selector):
+                decls = declarations_at(rules, selector, 390)
+                self.assertGreaterEqual(int(decls.get("min-height", "0").replace("px", "")), 44)
+                self.assertGreaterEqual(int(decls.get("min-width", "0").replace("px", "")), 44)
 
     # ---------------------------------------------------- 打印
     def test_print_hides_shell_and_expands_report(self):
@@ -312,6 +328,46 @@ class ResponsiveLayoutTest(unittest.TestCase):
                 decls = declarations_at(rules, selector, 1280, print_media=True)
                 self.assertEqual(decls.get("display"), "none",
                                  f"打印时不应出现折叠控件 {selector}（decls={decls}）")
+
+    def test_patient_path_flow_is_responsive_and_screen_only(self):
+        """患者路径流程图不产生横向滚动，阶段轨道和并行组自适应，打印仍使用文字准备单。"""
+        _html, rules = self.page("/patient")
+        self.assertEqual(
+            declarations_at(rules, ".patient-path-flow-list", 1280).get("display"),
+            "grid",
+        )
+        self.assertEqual(
+            declarations_at(rules, ".patient-path-flow-list", 768).get("display"),
+            "grid",
+        )
+        self.assertEqual(
+            declarations_at(rules, ".patient-path-flow-stage", 1280).get("display"),
+            "grid",
+        )
+        self.assertEqual(
+            declarations_at(rules, ".patient-path-flow-stage", 768).get("display"),
+            "grid",
+        )
+        self.assertEqual(
+            declarations_at(rules, ".patient-path-flow-parallel-list", 768).get("grid-template-columns"),
+            "1fr",
+        )
+        self.assertEqual(
+            declarations_at(rules, ".patient-path-flow-list", 1280).get("overflow-x"),
+            "visible",
+        )
+        self.assertEqual(
+            declarations_at(rules, ".patient-path-flow", 1280, print_media=True).get("display"),
+            "none",
+        )
+        self.assertEqual(
+            declarations_at(rules, ".shell.patient-shell", 1440).get("grid-template-columns"),
+            "var(--rail-left) minmax(0,1fr)",
+        )
+        self.assertEqual(
+            declarations_at(rules, ".patient-shell .doc-body", 1440).get("max-width"),
+            "none",
+        )
 
     def test_print_uses_width_independent_rules(self):
         """`@media print` 不能被宽度条件吞掉；屏幕档下打印规则不生效。"""
