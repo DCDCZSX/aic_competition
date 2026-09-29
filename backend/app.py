@@ -118,6 +118,9 @@ GUEST_TRIAGE_LIMIT = read_int_env(
 GUEST_MAX_CHARS = read_int_env(
     'APP_GUEST_MAX_CHARS', 2000, minimum=1, maximum=100000
 )
+REGISTRATION_MAX_PER_HOUR = read_int_env(
+    'APP_REGISTRATION_MAX_PER_HOUR', 20, minimum=1, maximum=1000
+)
 preview_tokens = PreviewTokenService(
     PREVIEW_TTL_MINUTES,
     # PreviewTokenService 保留旧版非法配额值的安全回退，兼容既有部署配置。
@@ -126,6 +129,8 @@ preview_tokens = PreviewTokenService(
 )
 _guest_issue_lock = threading.Lock()
 _guest_issues = defaultdict(deque)
+_registration_lock = threading.Lock()
+_registration_attempts = defaultdict(deque)
 
 # 患者端链路（接线层）。旧 MDTService 不再挂载到 HTTP，避免绕过脱敏与安全约束。
 # use_llm=True 时启用 S2 受限发言与多专科分析；未配置 Key 会自动降级为纯规则分诊。
@@ -258,6 +263,58 @@ def login():
         # 登录失败统一 401 且不区分“账号不存在/密码错误”，避免账号枚举。
         return jsonify({'error': str(exc), 'code': 'invalid_credentials'}), 401
     return jsonify({'status': 'ok', 'session': session.to_dict(), 'scopes': session.scopes})
+
+
+def _registration_allowed() -> bool:
+    """按来源地址限制患者注册频率，避免公开注册接口被滥用。"""
+    remote = (request.remote_addr or 'unknown').strip()[:128]
+    now = time.time()
+    with _registration_lock:
+        attempts = _registration_attempts.setdefault(remote, deque())
+        while attempts and attempts[0] <= now - 3600:
+            attempts.popleft()
+        if len(attempts) >= REGISTRATION_MAX_PER_HOUR:
+            return False
+        attempts.append(now)
+    return True
+
+
+@app.route('/api/register', methods=['POST'])
+def register_patient():
+    """患者注册：只允许创建 patient 角色并在成功后建立会话。"""
+    if not _registration_allowed():
+        return jsonify({
+            'error': '注册次数过多，请稍后再试',
+            'code': 'rate_limited',
+        }), 429
+    data, error = _json_object()
+    if error:
+        return error
+    if 'role' in data:
+        return jsonify({
+            'error': '注册接口只允许创建患者账号',
+            'code': 'invalid_request',
+        }), 400
+    try:
+        username = string_field(data, 'username', default='', max_length=64)
+        password = string_field(data, 'password', default='', max_length=128)
+        password_confirm = string_field(data, 'password_confirm', default='', max_length=128)
+        label = string_field(data, 'label', default='', max_length=32)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    if password_confirm and password_confirm != password:
+        return jsonify({'error': '两次输入的密码不一致', 'code': 'invalid_request'}), 400
+    try:
+        session = auth_service.register_patient(username, password, label=label)
+    except AuthError as exc:
+        if str(exc) == 'username_taken':
+            return jsonify({'error': '该账号已被注册', 'code': 'username_taken'}), 409
+        return jsonify({'error': str(exc), 'code': 'invalid_request'}), 400
+    return jsonify({
+        'status': 'registered',
+        'session': session.to_dict(),
+        'scopes': session.scopes,
+    }), 201
 
 
 @app.route('/api/guest/session', methods=['POST'])
