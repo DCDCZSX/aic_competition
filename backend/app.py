@@ -847,6 +847,18 @@ def submit_mdt_screening(case_id):
         departments = string_list(data, 'departments', default=(), max_items=6)
     except InputValidationError as exc:
         return _invalid_input(exc)
+    department_reviewer_map = None
+    if decision == 'recommend_mdt':
+        department_reviewer_map = {}
+        for department in departments:
+            department_name = department_domain.to_name(department)
+            if department_name is None:
+                department_name = department_domain.resolve(department).name
+            department_code = department_domain.to_code(department_name or '')
+            department_reviewer_map[department_name or department] = [
+                item['username']
+                for item in auth_service.list_reviewer_accounts(department_code or '')
+            ]
     result = case_flow.submit_mdt_screening(
         case_id,
         decision=decision,
@@ -854,6 +866,7 @@ def submit_mdt_screening(case_id):
         purpose=purpose,
         departments=departments,
         reviewer_id=session.username,
+        department_reviewer_map=department_reviewer_map,
     )
     if not result.get('ok'):
         result.setdefault('code', 'invalid_request')

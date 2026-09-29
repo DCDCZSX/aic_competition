@@ -9,7 +9,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.case_flow import CaseFlow  # noqa: E402
-from services.auth import AuthService, ROLE_DOCTOR, ROLE_PATIENT  # noqa: E402
+from services.auth import AuthService, ROLE_DOCTOR, ROLE_PATIENT, hash_password  # noqa: E402
 from services.store import Store  # noqa: E402
 import app as app_module  # noqa: E402
 
@@ -114,6 +114,50 @@ class MdtScreeningFlowTest(unittest.TestCase):
         self.assertIn("急诊", result["mdt_screening"]["patient_next_step"])
         self.assertEqual(self.flow.list_review_cases()["rows"], [])
 
+    def test_recommend_mdt_grants_selected_department_collaborators(self):
+        self.store.create_user(
+            "doctor_endo", hash_password("doctor-password"), role=ROLE_DOCTOR,
+            label="内分泌协作者", department_code="endocrinology",
+        )
+        self.store.create_user(
+            "doctor_eye", hash_password("doctor-password"), role=ROLE_DOCTOR,
+            label="眼科协作者", department_code="ophthalmology",
+        )
+        result = self.submit(
+            decision="recommend_mdt", reason="需要共同判断", purpose="明确会诊重点",
+            departments=["眼科", "内分泌科"],
+            department_reviewer_map={
+                "眼科": ["doctor_eye"],
+                "内分泌科": ["doctor_endo"],
+            },
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(set(result["authorized_departments"]), {"眼科", "内分泌科"})
+        self.assertEqual(result["authorized_reviewer_count"], 2)
+        self.assertEqual(result["pending_departments"], [])
+        self.assertTrue(self.store.has_case_access(self.case_id, "doctor_eye"))
+        self.assertTrue(self.store.has_case_access(self.case_id, "doctor_endo"))
+        events = self.store.list_audit(self.case_id)
+        self.assertTrue(any(item["event"] == "mdt_access_granted" for item in events))
+
+    def test_mdt_without_a_department_reviewer_is_explicitly_pending(self):
+        self.store.create_user(
+            "doctor_endo", hash_password("doctor-password"), role=ROLE_DOCTOR,
+            label="内分泌协作者", department_code="endocrinology",
+        )
+        result = self.submit(
+            decision="recommend_mdt", reason="需要共同判断", purpose="明确会诊重点",
+            departments=["眼科", "内分泌科"],
+            department_reviewer_map={"眼科": [], "内分泌科": ["doctor_endo"]},
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["authorized_departments"], ["内分泌科"])
+        self.assertEqual(result["pending_departments"], ["眼科"])
+        self.assertEqual(result["authorized_reviewer_count"], 1)
+        self.assertFalse(self.store.has_case_access(self.case_id, "doctor_eye"))
+        events = self.store.list_audit(self.case_id)
+        self.assertTrue(any(item["event"] == "mdt_access_pending" for item in events))
+
 
 class MdtScreeningHttpTest(unittest.TestCase):
     def setUp(self):
@@ -126,8 +170,11 @@ class MdtScreeningHttpTest(unittest.TestCase):
         app_module.case_flow = self.flow
         app_module.auth_service = AuthService(accounts={
             "alice": {"password": "alice-password", "role": ROLE_PATIENT, "label": "患者 A"},
-            "doctor": {"password": "doctor-password", "role": ROLE_DOCTOR, "label": "审核医生"},
-        })
+            "doctor": {"password": "doctor-password", "role": ROLE_DOCTOR,
+                       "label": "审核医生", "department_code": "endocrinology"},
+            "doctor_eye": {"password": "doctor-password", "role": ROLE_DOCTOR,
+                            "label": "眼科协作者", "department_code": "ophthalmology"},
+        }, store=self.store)
         app_module.app.config.update(TESTING=True)
         self.client = app_module.app.test_client()
         self.store.save_case("C-MDT", owner_id="alice", case_state="awaiting_doctor",
@@ -182,6 +229,12 @@ class MdtScreeningHttpTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertTrue(response.get_json()["ok"])
+        self.assertEqual(response.get_json()["authorized_reviewer_count"], 2)
+        eye = self._token("doctor_eye", "doctor-password")
+        self.assertEqual(
+            self.client.get("/api/v2/case/C-MDT", headers=self._headers(eye)).status_code,
+            200,
+        )
         review = self.client.get("/api/v2/case/C-MDT/review", headers=self._headers(doctor))
         self.assertEqual(review.status_code, 200)
         self.assertEqual(review.get_json()["mdt_screening"]["decision"], "recommend_mdt")

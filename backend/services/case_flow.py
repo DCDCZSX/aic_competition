@@ -1305,6 +1305,7 @@ class CaseFlow:
         purpose: str = "",
         departments: Optional[List[str]] = None,
         reviewer_id: str = "",
+        department_reviewer_map: Optional[Mapping[str, Sequence[str]]] = None,
     ) -> Dict[str, Any]:
         """保存医生负责的 MDT 初筛决定（不改变病例主状态机）。"""
         case = self.store.load_case(case_id) if self.store else None
@@ -1354,6 +1355,24 @@ class CaseFlow:
         if decision == "recommend_mdt" and len(normalized_departments) < 2:
             return {"ok": False, "error": "建议 MDT 时至少两个不同科室"}
 
+        normalized_reviewer_map: Dict[str, List[str]] = {}
+        if department_reviewer_map is not None:
+            if not isinstance(department_reviewer_map, Mapping):
+                return {"ok": False, "error": "科室协作者映射格式非法"}
+            for raw_department, raw_reviewers in department_reviewer_map.items():
+                if not isinstance(raw_reviewers, Sequence) or isinstance(
+                    raw_reviewers, (str, bytes)
+                ):
+                    return {"ok": False, "error": "科室协作者列表格式非法"}
+                department_name = department_domain.to_name(str(raw_department).strip())
+                if department_name is None:
+                    department_name = department_domain.resolve(str(raw_department)).name
+                if not department_name:
+                    continue
+                normalized_reviewer_map[department_name] = list(dict.fromkeys(
+                    str(item).strip() for item in raw_reviewers if str(item).strip()
+                ))
+
         now = _now()
         screening = {
             "status": "decided",
@@ -1384,10 +1403,39 @@ class CaseFlow:
             "mdt_screening_recorded",
             f"decision={decision}; departments={'、'.join(normalized_departments) or '无'}; reason=provided",
         )
+
+        authorized_departments: List[str] = []
+        pending_departments: List[str] = []
+        authorized_reviewer_count = 0
+        if decision == "recommend_mdt" and department_reviewer_map is not None:
+            for department in normalized_departments:
+                reviewers = normalized_reviewer_map.get(department, [])
+                if not reviewers:
+                    pending_departments.append(department)
+                    continue
+                authorized_departments.append(department)
+                authorized_reviewer_count += len(reviewers)
+                for reviewer in reviewers:
+                    self.store.grant_case_access(case_id, reviewer, granted_by=safe_reviewer)
+            if authorized_departments:
+                self.store.add_audit(
+                    case_id,
+                    "mdt_access_granted",
+                    f"departments={'、'.join(authorized_departments)}; reviewers={authorized_reviewer_count}",
+                )
+            if pending_departments:
+                self.store.add_audit(
+                    case_id,
+                    "mdt_access_pending",
+                    f"departments={'、'.join(pending_departments)}",
+                )
         return {
             "ok": True,
             "mdt_screening": screening,
             "patient_mdt_screening": patient_safe_mdt_screening(screening),
+            "authorized_departments": authorized_departments,
+            "authorized_reviewer_count": authorized_reviewer_count,
+            "pending_departments": pending_departments,
         }
 
     def get_case(self, case_id: str) -> Optional[Dict[str, Any]]:
