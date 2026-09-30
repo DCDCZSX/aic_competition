@@ -363,7 +363,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage };');
   const D = globalThis.__D;
   check('病例详情导航只突出主要任务',
-    ['overview','triage','evidence','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`)), '');
+    ['overview','triage','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`))
+      && !doctorHtml.includes('data-s="evidence"'), '');
   check('病例详情目录位于左侧布局栏',
     doctorHtml.includes('class="doctor-case-layout"')
       && doctorHtml.includes('class="doctor-case-nav view-nav"')
@@ -451,17 +452,6 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('分诊不重复展示内部过程', !triage.includes('triage-process') && !triage.includes('规则命中（确定性）'), triage);
   check('分诊默认按科室列表展示依据', triage.includes('triage-department-list')
     && triage.includes('triage-department-item') && triage.includes('依据：'), triage);
-  D.renderEvidence();
-  const evidence = el('ev-body').innerHTML;
-  check('证据默认突出判断关联', evidence.includes('判断 ↔ 证据') && evidence.includes('查看完整证据时间线'), evidence);
-  D.S.caseData.payload.evidence = {};
-  D.S.caseData.payload.masked_history = '患者描述视力下降';
-  D.S.caseData.payload.profile.exams[0].source_refs = ['S-1:4'];
-  D.renderEvidence();
-  const emptyEvidence = el('ev-body').innerHTML;
-  check('证据空状态隐藏原始编号', emptyEvidence.includes('当前暂无判断—证据关联')
-    && emptyEvidence.includes('查看可引用资料') && emptyEvidence.includes('查看原文')
-    && !emptyEvidence.includes('>S-1:8<'), emptyEvidence);
   D.renderMdt();
   const mdt = el('mdt-body').innerHTML;
   check('MDT 默认突出共识分歧待确认',

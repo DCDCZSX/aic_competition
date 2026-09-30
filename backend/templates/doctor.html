@@ -244,7 +244,6 @@
         <button type="button" class="nav-link" onclick="go('list')" data-s="list" aria-current="page">病例队列</button>
         <button type="button" class="nav-link dis" onclick="navCase('overview')" data-s="overview" aria-disabled="true">总览</button>
         <button type="button" class="nav-link dis" onclick="navCase('triage')" data-s="triage" aria-disabled="true">判断依据</button>
-        <button type="button" class="nav-link dis" onclick="navCase('evidence')" data-s="evidence" aria-disabled="true">证据</button>
         <button type="button" class="nav-link dis" onclick="navCase('mdt')" data-s="mdt" aria-disabled="true">多学科</button>
         <button type="button" class="nav-link dis" onclick="navCase('review')" data-s="review" aria-disabled="true">审核发布</button>
         <button type="button" class="nav-link dis" onclick="navCase('history')" data-s="history" aria-disabled="true">历史</button>
@@ -286,11 +285,6 @@
       <section id="s-triage" class="card hide">
         <h2>科室与判断依据</h2>
         <div id="tri-body"></div>
-      </section>
-
-      <section id="s-evidence" class="card hide">
-        <h2>证据核对</h2>
-        <div id="ev-body"></div>
       </section>
 
       <section id="s-mdt" class="card hide">
@@ -460,7 +454,7 @@ function go(screen){
   if(S.screen==='list' && screen!=='list') S.queue.scroll = window.scrollY || 0;
   S.screen = screen;
   document.body.classList.toggle('doctor-queue-mode', screen==='list');
-  ['list','overview','triage','evidence','mdt','review','history'].forEach(s=>{
+  ['list','overview','triage','mdt','review','history'].forEach(s=>{
     $('s-'+s).classList.toggle('hide', s!==screen);
   });
   document.querySelectorAll('#nav [data-s]').forEach(a=>{
@@ -474,7 +468,6 @@ function go(screen){
   });
   if(screen==='overview') renderOverview();
   if(screen==='triage') renderTriage();
-  if(screen==='evidence') renderEvidence();
   if(screen==='mdt') renderMdt();
   if(screen==='review') renderReview();
   if(screen==='history') renderHistory();
@@ -793,7 +786,7 @@ function renderOverview(){
   if(!S.review.published) todo.push(`<div class="field"><div style="flex:1;">报告尚未生成审核版（[F]）</div>
       <button class="mini" onclick="go('review')">去发布</button></div>`);
   if((p.gaps||[]).length) todo.push(`<div class="field"><div style="flex:1;">仍有 ${p.gaps.length} 项信息缺口未补</div>
-      <button class="mini" onclick="go('evidence')">看证据</button></div>`);
+      <button class="mini" onclick="go('review')">去审核条目</button></div>`);
   if(!todo.length) todo.push('<div class="tiny">暂无待处理事项</div>');
 
   $('ov-body').innerHTML = `
@@ -871,7 +864,9 @@ function sourceSnippet(ref){
   return (start>0?'…':'') + characters.slice(start,end).join('') + (end<characters.length?'…':'');
 }
 function sourceRefHtml(refs){
-  return (refs||[]).map(ref=>`<details class="source-ref" data-source-ref="${esc(ref)}"><summary><span class="source-ref-open">查看原文</span><span class="source-ref-close">收起原文</span></summary><div class="source-ref-text"><div>来源：患者原始描述（脱敏文本）</div>${esc(sourceSnippet(ref))}</div></details>`).join('');
+  return (refs||[]).map(ref=>/^S-1:\d+$/.test(String(ref||''))
+    ? `<details class="source-ref" data-source-ref="${esc(ref)}"><summary><span class="source-ref-open">查看原文</span><span class="source-ref-close">收起原文</span></summary><div class="source-ref-text"><div>来源：患者原始描述（脱敏文本）</div>${esc(sourceSnippet(ref))}</div></details>`
+    : `<span class="ref" title="系统记录的依据">${esc(ref)}</span>`).join('');
 }
 function profileSourceRows(profile){
   const rows = [];
@@ -1009,7 +1004,7 @@ function renderMdt(){
       <div class="col">
         <div class="rt" style="font-weight:600;">右栏 · 证据与裁决</div>
         <div class="opcard"><strong>支持证据</strong>
-          ${((p.evidence||{}).judgements||[]).slice(0,3).map(j=>`<div class="tiny">· ${esc(j.judgement||'')}</div>`).join('')||'<div class="tiny">（见证据板）</div>'}</div>
+          ${((p.evidence||{}).judgements||[]).slice(0,3).map(j=>`<div class="tiny">· ${esc(j.judgement||'')}</div>`).join('')||'<div class="tiny">（证据请在审核条目中核对）</div>'}</div>
         <div class="opcard"><strong>反对证据 / 不足</strong>
           <div class="tiny">${(p.gaps||[]).slice(0,3).map(g=>'· 缺：'+esc(g)).join('<br>')||'· 无'}</div>
           <div class="tiny muted">外部依据仅认白名单教材/共识；未命中时显示"暂无可靠外部依据"，不伪造文献。</div></div>
@@ -1148,7 +1143,7 @@ function renderReview(){
         ${it.batch_block_reason?`<div class="tiny" style="color:var(--warn);">批量处理限制：${esc(it.batch_block_reason)}</div>`:''}
         <details class="doctor-disclosure"><summary>查看审核详情</summary><div class="doctor-disclosure-body">
         <div class="tiny mono">${esc(it.item_id)} · 内容修订 v${esc(it.content_revision||1)}</div>
-        ${(it.evidence_refs||[]).length?`<div class="field"><div class="muted">证据</div><div style="flex:1;">${it.evidence_refs.map(x=>`<span class="ref">${esc(x)}</span>`).join(' ')}</div></div>`:''}
+        ${(it.evidence_refs||[]).length?`<div class="field"><div class="muted">证据</div><div style="flex:1;">${sourceRefHtml(it.evidence_refs)}</div></div>`:''}
         <div class="tiny">分级依据：${esc(it.tier_reason||'未匹配已审核规则，默认必审')}</div>
         ${it.auto_reason?`<div class="tiny">自动处理依据：${esc(it.auto_reason)}（医生可接管）</div>`:''}
         ${it.decision_reason&&!it.changed_by_doctor?`<div class="tiny">审核记录：${esc(it.state_label)}｜原因：${esc(it.decision_reason)}｜${esc(it.reviewer||'')} ${esc(it.decided_at||'')}</div>`:''}
