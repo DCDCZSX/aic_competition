@@ -62,13 +62,15 @@
   .opinion-fields{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
   .doctor-case-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:var(--sp-12);}
   .doctor-case-header .lede{max-width:var(--text-width-body);}
-  .doctor-case-nav{display:flex;gap:4px;overflow-x:auto;margin:0 0 var(--sp-16);padding-bottom:2px;border-bottom:1px solid var(--line);}
-  .doctor-case-nav .nav-link{flex:0 0 auto;width:auto;white-space:nowrap;}
-  .doctor-case-main{min-width:0;}
+  .doctor-case-layout{display:grid;grid-template-columns:180px minmax(0,1fr);gap:var(--sp-24);align-items:start;}
+  .doctor-case-nav{display:flex;flex-direction:column;gap:3px;position:sticky;top:var(--sp-16);min-width:0;padding-right:var(--sp-12);border-right:1px solid var(--line);}
+  .doctor-case-nav .nav-link{width:100%;white-space:nowrap;}
+  .doctor-case-main{grid-column:2;min-width:0;}
   .shell.has-case{grid-template-columns:minmax(0,1fr);}
   .shell.has-case .rail-left,.shell.has-case .rail-right{display:none;}
   .shell.has-case .work{grid-column:1;}
   .doctor-queue-mode .doctor-case-header,.doctor-queue-mode .doctor-case-nav{display:none;}
+  .doctor-queue-mode .doctor-case-layout{display:block;}
   .publish-inline{display:block;}
   .doctor-decision-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:var(--sp-16);}
   .doctor-decision-summary>div{padding:12px 14px;background:var(--surface-subtle);border-radius:var(--br-8);}
@@ -96,6 +98,12 @@
   @media (max-width:720px){
     .doctor-case-header{flex-direction:column;}
     .doctor-decision-summary{grid-template-columns:1fr;}
+  }
+  @media (max-width:960px){
+    .doctor-case-layout{display:block;}
+    .doctor-case-nav{position:static;flex-direction:row;gap:4px;overflow-x:auto;margin:0 0 var(--sp-16);padding:0 0 2px;border-right:0;border-bottom:1px solid var(--line);}
+    .doctor-case-nav .nav-link{width:auto;flex:0 0 auto;}
+    .doctor-case-main{display:block;}
   }
   /* 窄屏：轨道折成整宽 */
   @media (max-width:1100px){
@@ -216,6 +224,7 @@
         </div>
         <button type="button" class="ghost btn-sm" onclick="go('list')">返回病例队列</button>
       </div>
+      <div class="doctor-case-layout">
       <nav class="doctor-case-nav view-nav" id="nav" aria-label="病例处理阶段">
         <button type="button" class="nav-link" onclick="go('list')" data-s="list" aria-current="page">病例队列</button>
         <button type="button" class="nav-link dis" onclick="navCase('overview')" data-s="overview" aria-disabled="true">总览</button>
@@ -299,6 +308,7 @@
         <h2>审核记录与版本</h2>
         <div id="hist-body"></div>
       </section>
+      </div>
       </div>
     </main>
 

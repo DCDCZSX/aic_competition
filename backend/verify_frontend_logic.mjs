@@ -364,6 +364,10 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   const D = globalThis.__D;
   check('病例详情导航只突出主要任务',
     ['overview','triage','evidence','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`)), '');
+  check('病例详情目录位于左侧布局栏',
+    doctorHtml.includes('class="doctor-case-layout"')
+      && doctorHtml.includes('class="doctor-case-nav view-nav"')
+      && doctorHtml.includes('class="doctor-case-main"'), '');
 
   D.S.me = {username:'doctor_endo', label:'内分泌审核医生', role:'doctor', department_name:'内分泌科', department_code:'endocrinology'};
   D.renderDoctorScope();

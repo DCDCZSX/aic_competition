@@ -303,6 +303,14 @@ class ResponsiveLayoutTest(unittest.TestCase):
         self.assertIn(".doctor-case-main", selectors)
         self.assertIn(".doctor-case-nav", selectors)
         self.assertEqual(
+            declarations_at(rules, ".doctor-case-layout", 1920).get("grid-template-columns"),
+            "180px minmax(0,1fr)",
+        )
+        self.assertEqual(
+            declarations_at(rules, ".doctor-case-layout", 768).get("display"),
+            "block",
+        )
+        self.assertEqual(
             declarations_at(rules, ".shell.has-case", 1920).get("grid-template-columns"),
             "minmax(0,1fr)",
         )
