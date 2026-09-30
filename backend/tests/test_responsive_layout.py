@@ -296,6 +296,17 @@ class ResponsiveLayoutTest(unittest.TestCase):
                     self.assertIn("1fr", value, f"{path} {selector} 窄屏应为单列")
                     self.assertNotIn("repeat(", value, f"{path} {selector} 窄屏不应仍是多列")
 
+    def test_doctor_case_detail_does_not_reserve_a_fixed_right_rail(self):
+        """病例详情应使用单列主区，右侧审核面板不能继续挤压正文。"""
+        _html, rules = self.page("/doctor")
+        selectors = {selector for _conditions, selector, _body in rules}
+        self.assertIn(".doctor-case-main", selectors)
+        self.assertIn(".doctor-case-nav", selectors)
+        self.assertEqual(
+            declarations_at(rules, ".shell.has-case", 1920).get("grid-template-columns"),
+            "minmax(0,1fr)",
+        )
+
     def test_narrow_screens_shrink_page_padding(self):
         """≤640px 收窄页面内边距，避免正文被挤成一条。"""
         _html, rules = self.page("/patient")

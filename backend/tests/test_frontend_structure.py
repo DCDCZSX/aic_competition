@@ -240,23 +240,24 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("preview_token:S.previewToken", html)
         self.assertIn("blocking_hit_count", html)
 
-    def test_doctor_three_track_shell(self):
-        """医生工作台：左轨 = 队列筛选 + 审阅视图；右轨 = 审核面板。"""
+    def test_doctor_detail_shell_contract(self):
+        """医生详情页使用病例上下文头部、任务导航和单列主区。"""
         _, html = self.get("/doctor")
         self.assertIn('href="/static/css/dsh.css"', html)
         self.assertEqual(html.count('class="rail rail-left"'), 1)
         self.assertEqual(html.count('class="rail rail-right"'), 1)
         for anchor in ('id="rail-filters"', 'id="rev-summary"', 'id="rev-publish"',
-                       'id="rev-bar"', 'id="nav"'):
+                       'id="rev-bar"', 'id="nav"', 'class="doctor-case-header"',
+                       'class="doctor-case-nav', 'class="doctor-case-main"'):
             self.assertIn(anchor, html, f"医生工作台缺少 {anchor}")
         self.assertNotIn('id="rail-cases"', html, "病例队列不应在左轨重复渲染")
         # 业务屏必须在 <main> 内（与患者端同一约束）
         ids = set(self.sections_of(html, "main"))
         expected = {"s-list", "s-overview", "s-triage", "s-evidence", "s-mdt", "s-review", "s-history"}
         self.assertTrue(expected.issubset(ids), f"main 内缺少屏：{expected - ids}")
-        # 右轨的审核面板必须在 main 之外（常驻可见，不随切屏隐藏）
-        main_close = html.index("</main>")
-        self.assertLess(main_close, html.index('class="rail rail-right"'))
+        # 详情页的五个主要任务必须有统一导航入口
+        for task in ("overview", "triage", "evidence", "mdt", "review"):
+            self.assertIn(f'data-s="{task}"', html)
         self.assertNotIn("--blue", html)
 
     def test_doctor_queue_has_server_pagination_controls(self):
