@@ -163,7 +163,9 @@ class TestBuildItems(unittest.TestCase):
         self.assertEqual(rs.build_items({"case_id": "C0", "payload": {}}), [])
 
     def test_review_tiers_are_explicit_and_unknown_defaults_to_required(self):
-        items = rs.apply_decisions(rs.build_items(sample_case()), [])
+        case = sample_case()
+        case["payload"]["gaps"] = []
+        items = rs.apply_decisions(rs.build_items(case), [])
         by_id = {item.item_id: item for item in items}
 
         self.assertEqual(by_id["path_step:S1"].review_tier, rs.AUTOMATIC)
@@ -181,6 +183,18 @@ class TestBuildItems(unittest.TestCase):
         )
         self.assertEqual(unknown.review_tier, rs.REQUIRED)
         self.assertIn("默认必审", unknown.tier_reason)
+
+    def test_non_decision_summary_items_are_not_required(self):
+        """重复摘要不应阻塞医生发布，真正的分歧和医疗问题仍需决定。"""
+        case = sample_case()
+        case["payload"]["gaps"] = []
+        items = rs.apply_decisions(rs.build_items(case), [])
+        by_id = {item.item_id: item for item in items}
+
+        self.assertEqual(by_id["consensus_item:C-01"].review_tier, rs.SAMPLE)
+        self.assertEqual(by_id["consensus_item:X-01"].review_tier, rs.REQUIRED)
+        self.assertFalse(any(item.target_type == "patient_advice"
+                             and "建议咨询方向" in item.title for item in items))
 
     def test_summary_counts_tiers_and_risk_flags(self):
         items = [

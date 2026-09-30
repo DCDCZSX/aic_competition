@@ -590,6 +590,16 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("还有 ${sum.pending||0} 项必审", html)
         self.assertIn('aria-live="polite"', html)
 
+    def test_doctor_review_uses_decision_level_groups_and_compact_cards(self):
+        """审核页应按责任分组，默认卡片只显示决策摘要，详情折叠。"""
+        _, html = self.get("/doctor")
+        for label in ("必须医生决定", "建议抽查", "已自动处理"):
+            self.assertIn(label, html)
+        self.assertIn("review-decision-card", html)
+        self.assertIn("review-card-summary", html)
+        self.assertIn("查看审核详情", html)
+        self.assertIn("自动处理不会阻塞发布", html)
+
     def test_doctor_empty_context_hides_right_rail_and_reclaims_grid(self):
         """未选择病例时右栏不应占用宽屏布局，选中病例后再恢复。"""
         _, html = self.get("/doctor")

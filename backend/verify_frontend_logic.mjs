@@ -484,7 +484,9 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.renderReview();
   check('审核进度条按医生处理与自动处理合计', el('rev-bar').style.width === '60%', el('rev-bar').style.width);
   check('审核进度说明区分医生与自动处理', el('rev-note').textContent.includes('医生处理 6') && el('rev-note').textContent.includes('免审自动 0'), el('rev-note').textContent);
-  check('主区审核摘要有内容', el('rev-summary-inline').innerHTML.includes('共 10 条'), '');
+  check('主区审核摘要有责任分级',
+    el('rev-summary-inline').innerHTML.includes('必须医生决定')
+      && el('rev-summary-inline').innerHTML.includes('建议抽查'), '');
 
   /* 发布入口必须"两处都有"：≥1440px 右轨常驻，<1440px 右轨被 CSS 隐藏 → 屏 F 主区兜底
      （真实缺陷：入口只在右轨里，1366/1280 屏上医生审完发不出去） */
@@ -502,7 +504,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     inlinePub.includes('确认发布审核版') && inlinePub.includes('处理剩余必审并发布'), '');
   check('仍有待审条目时发布按钮禁用', inlinePub.includes('disabled'), '');
   check('审核条目默认折叠非必要信息',
-    el('rev-body').innerHTML.includes('查看审核详情') && el('rev-body').innerHTML.includes('分级依据'), el('rev-body').innerHTML);
+    el('rev-body').innerHTML.includes('查看审核详情') && el('rev-body').innerHTML.includes('责任分级'), el('rev-body').innerHTML);
   check('审核须知使用折叠区', doctorHtml.includes('class="review-help"') && doctorHtml.includes('审核须知'), '');
   check('唯一发布入口使用一致的输入前缀',
     inlinePub.includes('id="inline-op-text"')

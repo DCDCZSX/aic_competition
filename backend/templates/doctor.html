@@ -51,6 +51,19 @@
   .review-group{border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);margin-bottom:var(--sp-12);overflow:hidden;}
   .review-group>summary{cursor:pointer;list-style:none;padding:12px 14px;font-weight:650;display:flex;justify-content:space-between;gap:12px;align-items:center;background:var(--gray-100);}
   .review-group>summary::-webkit-details-marker{display:none;}.review-group.auto>summary{background:var(--surface-subtle);}.review-group .item{border:0;border-top:1px solid var(--line);border-radius:0;}
+  .review-level-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px;}
+  .review-level-summary>div{padding:10px 12px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--gray-000);}
+  .review-level-summary strong{display:block;margin-top:3px;font-size:var(--body-1);}
+  .review-decision-card{padding:14px 16px;background:var(--gray-000);}
+  .review-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+  .review-card-title{min-width:0;line-height:1.45;}
+  .review-card-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px;}
+  .review-card-summary{margin:10px 0 0;padding:10px 12px;border-radius:var(--br-8);background:var(--surface-subtle);line-height:1.6;}
+  .review-card-summary .muted{margin-right:6px;}
+  .review-card-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;}
+  .review-group.sample>summary{background:var(--surface-warm);}
+  .review-group.auto>summary{color:var(--ink2);}
+  @media (max-width:720px){.review-level-summary{grid-template-columns:1fr;}}
   .queue-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;}
   .doctor-card-accent{margin:0 0 var(--sp-16);border-left:3px solid var(--accent);}
   .doctor-card-info{margin:0 0 var(--sp-16);border-left:3px solid var(--info);}
@@ -1061,14 +1074,15 @@ function renderReview(){
       ? ('已发布审核版 · 审核人 ' + (r.review.published_by||'医生') + ' · ' + (r.review.published_at||'') + ' · v' + (r.review.version||''))
       : 'AI 生成 · 尚未经医生审核（逐条确认后方可发布审核版）';
   $('rev-summary-inline').innerHTML = `
-    <div class="ai-block">共 ${sum.total||0} 条决策条目：待审 <strong>${sum.pending||0}</strong>　
-      已接受 ${byState.confirmed||0}　已修改 ${byState.modified||0}　
-      已驳回 ${byState.rejected||0}　暂不确定 ${byState.uncertain||0}　
-      免审（自动） ${autoProcessed}　（医生已处理 ${doctorReviewed}/${sum.total||0}）
+    <div class="ai-block">审核只需要处理会改变医疗方向或患者安全的内容；普通摘要和已明确的路径步骤由系统归档，不阻塞发布。
       ${S.extraQuestion?`<div class="tiny">已从 MDT 审阅台加入待确认问题：${esc(S.extraQuestion)}（可在下方对应分歧条目上操作）</div>`:''}
     </div>
-    <div class="tiny" style="margin-top:8px;">审核分级：必审 ${Number(tierCounts.required||sum.required||0)} · 建议抽查 ${Number(tierCounts.sample||sum.sample||0)} · 自动处理 ${Number(tierCounts.automatic||sum.automatic||0)}</div>
-    <div class="tiny">风险提示：高风险 ${Number(sum.high_risk||0)} · 冲突 ${Number(sum.conflict||0)} · 分析失败 ${Number(sum.analysis_failed||0)}</div>
+    <div class="review-level-summary" aria-label="审核责任分级">
+      <div><span class="tiny">必须医生决定</span><strong>${Number(tierCounts.required||sum.required||0)}</strong><span class="tiny">${sum.pending||0} 条待处理</span></div>
+      <div><span class="tiny">建议抽查</span><strong>${Number(tierCounts.sample||sum.sample||0)}</strong><span class="tiny">不阻塞发布</span></div>
+      <div><span class="tiny">已自动处理</span><strong>${Number(tierCounts.automatic||sum.automatic||0)}</strong><span class="tiny">自动处理不会阻塞发布 · 可随时接管</span></div>
+    </div>
+    <div class="tiny" style="margin-top:8px;">风险提示：高风险 ${Number(sum.high_risk||0)} · 冲突 ${Number(sum.conflict||0)} · 分析失败 ${Number(sum.analysis_failed||0)} · 医生已处理 ${doctorReviewed}/${sum.total||0}</div>
     ${reopened_item_ids.length?`<div class="banner warn" style="margin-top:8px;">资料更新后重新打开 ${reopened_item_ids.length} 条审核项：${esc(reopened_item_labels.join('、'))}；旧决定仍保留在历史中，但不会套用到新修订内容。</div>`:''}
     ${stale_decisions.length?`<div class="tiny" style="color:var(--warn);">有 ${stale_decisions.length} 条历史决定已过期，需按当前内容重新审核。</div>`:''}`;
   if(!items.length){
@@ -1092,15 +1106,15 @@ function renderReview(){
          <button class="mini" onclick="openModal('reject','${esc(it.item_id)}')">驳回</button>
          <button class="mini" onclick="openModal('uncertain','${esc(it.item_id)}')">暂不确定</button>
          <button class="mini" onclick="openModal('request_more_info','${esc(it.item_id)}')">请求补资料</button>`;
-    return `<div class="item ${stateCls[it.state]||''}" data-state="${esc(it.state)}">
-      <div class="head"><div><strong>${index}. ${esc(it.title)}</strong>
-        <span class="pill gray">${esc(typeLabel[it.target_type]||it.target_type)}</span>
+    return `<div class="item ${stateCls[it.state]||''} review-decision-card" data-state="${esc(it.state)}">
+      <div class="head review-card-head"><div class="review-card-title"><strong>${index}. ${esc(it.title)}</strong>
+        <div class="review-card-tags"><span class="pill gray">${esc(typeLabel[it.target_type]||it.target_type)}</span>
         <span class="pill ${tier==='required'?'danger':(tier==='sample'?'warn':'info')}">${esc(it.review_tier_label||tierLabel[tier]||tier||'必审')}</span>
         <span class="pill ${tone}">${esc(it.state_label)}</span>
-        ${it.changed_by_doctor?'<span class="pill ok">医生已改写</span>':''}
+        ${it.changed_by_doctor?'<span class="pill ok">医生已改写</span>':''}</div>
       </div></div>
+      <div class="review-card-summary"><span class="muted">AI 建议</span><span class="${it.changed_by_doctor?'old':''}">${esc(it.changed_by_doctor?it.reviewer_content:it.ai_content)}</span></div>
       <div class="body">
-        <div class="field"><div class="muted" style="min-width:66px;">AI 原稿</div><div style="flex:1;" class="${it.changed_by_doctor?'old':''}">${esc(it.ai_content)}</div></div>
         ${it.changed_by_doctor?`<div class="diff">医生改写为：${esc(it.reviewer_content)}<div class="tiny">原因：${esc(it.decision_reason)}</div></div>`:''}
         ${it.reason_hint?`<div class="field"><div class="muted" style="min-width:66px;">依据</div><div style="flex:1;" class="tiny">${esc(it.reason_hint)}</div></div>`:''}
         ${(it.high_risk||it.conflict||it.analysis_failed)?`<div class="tiny" style="color:var(--danger);">${it.high_risk?'高风险　':''}${it.conflict?'存在冲突　':''}${it.analysis_failed?'分析失败':''}</div>`:''}
@@ -1108,11 +1122,11 @@ function renderReview(){
         <details class="doctor-disclosure"><summary>查看审核详情</summary><div class="doctor-disclosure-body">
         <div class="tiny mono">${esc(it.item_id)} · 内容修订 v${esc(it.content_revision||1)}</div>
         ${(it.evidence_refs||[]).length?`<div class="field"><div class="muted">证据</div><div style="flex:1;">${sourceRefHtml(it.evidence_refs)}</div></div>`:''}
-        <div class="tiny">分级依据：${esc(it.tier_reason||'未匹配已审核规则，默认必审')}</div>
-        ${it.auto_reason?`<div class="tiny">自动处理依据：${esc(it.auto_reason)}（医生可接管）</div>`:''}
+        <div class="tiny">责任分级：${esc(it.tier_reason||'未匹配已审核规则，默认必审')}</div>
+        ${it.auto_reason?`<div class="tiny">自动处理：${esc(it.auto_reason)}（医生可接管）</div>`:''}
         ${it.decision_reason&&!it.changed_by_doctor?`<div class="tiny">审核记录：${esc(it.state_label)}｜原因：${esc(it.decision_reason)}｜${esc(it.reviewer||'')} ${esc(it.decided_at||'')}</div>`:''}
         </div></details>
-      </div><div class="btnbar">${actions}</div>
+      </div><div class="review-card-actions">${actions}</div>
     </div>`;
   }
   const pending=items.filter(it=>tierOf(it)==='required' && it.state==='awaiting');
@@ -1120,10 +1134,10 @@ function renderReview(){
   const auto=items.filter(it=>tierOf(it)==='automatic' && (it.state==='auto_processed' || !it.decision_id));
   const processed=items.filter(it=>!pending.includes(it) && !sample.includes(it) && !auto.includes(it));
   const group=(title, list, open, cls, compact)=>list.length?`<details class="review-group ${cls||''}" ${open?'open':''}><summary><span>${title}</span><span class="tiny">${list.length} 条</span></summary>${list.map((it,i)=>itemMarkup(it, items.indexOf(it)+1, compact)).join('')}</details>`:'';
-  $('rev-body').innerHTML = group('需要医生决定', pending, true, 'pending', false)
+  $('rev-body').innerHTML = group('必须医生决定', pending, true, 'pending', false)
     + group('建议抽查', sample, false, 'sample', false)
     + group('已完成审核', processed, false, 'processed', false)
-    + group('自动处理', auto, false, 'auto', true);
+    + group('已自动处理', auto, false, 'auto', true);
 
   const pendingDisagreements = (r.pending_disagreements||[]).length;
   const canPublish = sum.pending===0 && sum.total>0 && pendingDisagreements===0;
