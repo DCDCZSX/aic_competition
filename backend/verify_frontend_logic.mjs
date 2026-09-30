@@ -447,7 +447,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('总览将完整资料折叠', /<details[^>]*>/.test(overview) && overview.includes('完整患者资料'), overview);
   D.renderTriage();
   const triage = el('tri-body').innerHTML;
-  check('分诊默认突出牵头科室', triage.includes('内分泌科') && triage.includes('查看分诊依据'), triage);
+  check('分诊默认突出牵头科室', triage.includes('内分泌科') && triage.includes('科室分诊结果'), triage);
+  check('分诊不重复展示内部过程', !triage.includes('triage-process') && !triage.includes('规则命中（确定性）'), triage);
   check('分诊默认按科室列表展示依据', triage.includes('triage-department-list')
     && triage.includes('triage-department-item') && triage.includes('依据：'), triage);
   D.renderEvidence();
