@@ -404,8 +404,8 @@ def build_items(case: Any) -> List[ReviewItem]:
             title="待医生确认问题",
             ai_content=text,
             reason_hint="由多学科分析聚合产出",
-            review_tier=REQUIRED,
-            tier_reason="待医生确认的问题不能自动处理",
+            review_tier=SAMPLE,
+            tier_reason="MDT 建议项，建议抽查；出现风险或具体资料缺口时自动升级",
         ))
 
     # ---- ④ 患者建议（来自一页摘要的可审核段落）----
@@ -431,8 +431,8 @@ def build_items(case: Any) -> List[ReviewItem]:
                 title=f"患者建议：{section}",
                 ai_content=text,
                 reason_hint="来自一页就医摘要",
-                review_tier=REQUIRED,
-                tier_reason="涉及患者就医安排，需要医生确认",
+                review_tier=SAMPLE,
+                tier_reason="患者摘要中的补充建议，建议抽查，不阻塞发布",
             ))
 
     _annotate_item_flags(items, payload)
@@ -530,9 +530,10 @@ def _annotate_item_flags(items: Sequence[ReviewItem], payload: Dict[str, Any]) -
         gap_match = False
         for gap in gaps:
             label = re.split(r"[:：]", gap, maxsplit=1)[0].strip()
-            # 带字段名的缺口只影响相关条目；没有字段名的缺口按未知情况处理，
-            # 不能让自动规则静默放行。
-            if (label and label in item_text) or (not re.search(r"[:：]", gap)):
+            # 带字段名的缺口只影响相关条目；没有字段名的缺口不指向具体决策，
+            # 不能把整条就医路径、MDT 摘要和患者建议一起升级为必审。
+            generic_gap = not re.search(r"[:：]", gap)
+            if (label and label in item_text) or (generic_gap and item.target_type == "department_selection"):
                 gap_match = True
                 break
 

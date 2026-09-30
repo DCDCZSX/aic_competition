@@ -193,6 +193,8 @@ class TestBuildItems(unittest.TestCase):
 
         self.assertEqual(by_id["consensus_item:C-01"].review_tier, rs.SAMPLE)
         self.assertEqual(by_id["consensus_item:X-01"].review_tier, rs.REQUIRED)
+        question = next(item for item in items if item.item_id == "patient_advice:Q-01")
+        self.assertEqual(question.review_tier, rs.SAMPLE)
         self.assertFalse(any(item.target_type == "patient_advice"
                              and "建议咨询方向" in item.title for item in items))
 
@@ -253,6 +255,14 @@ class TestBuildItems(unittest.TestCase):
 
         self.assertEqual(step.review_tier, rs.REQUIRED)
         self.assertIn("资料缺口", step.tier_reason)
+
+    def test_generic_information_gaps_do_not_escalate_every_path_step(self):
+        """未指向具体条目的资料缺口不能把整条就医路径都变成必审。"""
+        case = sample_case()
+        case["payload"]["gaps"] = ["个人史"]
+        items = rs.build_items(case)
+        step = next(item for item in items if item.item_id == "path_step:S1")
+        self.assertEqual(step.review_tier, rs.AUTOMATIC)
 
 
 class TestDecisions(unittest.TestCase):
@@ -327,8 +337,8 @@ class TestDecisions(unittest.TestCase):
         exempt = [i for i in items if i.state == rs.AUTO_PROCESSED]
         self.assertTrue(exempt, "样例病例应有免审的路径步骤")
         s0 = rs.summarize(items)
-        # 待审只算"必审"条目：未要求医生决定的路径步骤不计入待审
-        self.assertEqual(s0["pending"], s0["total"] - len(exempt))
+        # 待审只算"必审"条目：抽查和自动处理都不计入待审
+        self.assertEqual(s0["pending"], s0["total"] - len(exempt) - s0["sample_pending"])
         self.assertEqual(s0["auto_processed"], len(exempt))
         self.assertFalse(s0["can_publish"])
         for item in items:
@@ -358,7 +368,7 @@ class TestDecisions(unittest.TestCase):
         exempt = [i for i in items if i.state == rs.AUTO_PROCESSED]
         self.assertTrue(exempt)
         summary = rs.summarize(items)
-        self.assertEqual(summary["pending"], summary["total"] - len(exempt))
+        self.assertEqual(summary["pending"], summary["total"] - len(exempt) - summary["sample_pending"])
         self.assertEqual(summary["auto_processed"], len(exempt))
         # 免审条目既不属于"医生已处理"，也不出现在阻塞原因里
         self.assertEqual(summary["doctor_reviewed"], 0)
