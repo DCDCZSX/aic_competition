@@ -448,6 +448,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.renderTriage();
   const triage = el('tri-body').innerHTML;
   check('分诊默认突出牵头科室', triage.includes('内分泌科') && triage.includes('查看分诊依据'), triage);
+  check('分诊默认按科室列表展示依据', triage.includes('triage-department-list')
+    && triage.includes('triage-department-item') && triage.includes('依据：'), triage);
   D.renderEvidence();
   const evidence = el('ev-body').innerHTML;
   check('证据默认突出判断关联', evidence.includes('判断 ↔ 证据') && evidence.includes('查看完整证据时间线'), evidence);

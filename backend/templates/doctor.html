@@ -74,6 +74,12 @@
   .publish-inline{display:block;}
   .doctor-decision-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:var(--sp-16);}
   .doctor-decision-summary>div{padding:12px 14px;background:var(--surface-subtle);border-radius:var(--br-8);}
+  .triage-department-list{display:flex;flex-direction:column;border-top:1px solid var(--line);margin-bottom:var(--sp-16);}
+  .triage-department-item{padding:12px 2px;border-bottom:1px solid var(--line);}
+  .triage-department-item .tiny{margin-top:5px;max-width:var(--text-width-body);}
+  .triage-process{display:flex;flex-direction:column;gap:var(--sp-12);}
+  .triage-process-section{padding:12px 0;border-bottom:1px solid var(--line);}
+  .triage-process-section:last-child{border-bottom:0;}
   .doctor-primary-task{padding:14px 16px;margin-bottom:var(--sp-16);border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
   .doctor-disclosure{border-top:1px solid var(--line);padding:0 2px;}
   .doctor-disclosure+ .doctor-disclosure{margin-top:var(--sp-8);}
@@ -816,6 +822,19 @@ function renderTriage(){
   const p = S.caseData.payload||{}, t = p.triage||{};
   const ruleHits = t.rule_hits||[];
   const primary = t.primary||{}, secondary = t.secondary||[];
+  const deptMap = new Map();
+  const addDept = (name, role, signals) => {
+    if(!name) return;
+    const row = deptMap.get(name) || {department:name, role:role||'协作', signals:[]};
+    if(role === '牵头' || row.role !== '牵头') row.role = role || row.role;
+    (signals||[]).filter(Boolean).forEach(signal=>{ if(!row.signals.includes(signal)) row.signals.push(signal); });
+    deptMap.set(name, row);
+  };
+  addDept(primary.department, '牵头', primary.signals);
+  secondary.forEach(d=>addDept(d.department, d.role||'协作', d.signals));
+  ruleHits.forEach(h=>addDept(h.department||h.dept, h.selected===false?'未入选':'协作', h.signals));
+  (t.selected||[]).forEach(name=>addDept(typeof name === 'string' ? name : name.department, '协作', []));
+  const departmentRows = Array.from(deptMap.values());
   const path = ruleHits.length ? ruleHits.map(h=>`
       <div class="opcard"><strong>${esc(h.department||h.dept||'')}</strong>
         <span class="pill ${(h.strength||h.weight)==='strong'?'ok':((h.strength||h.weight)==='medium'?'warn':'gray')}">${esc(h.strength||h.weight||'')}</span>
@@ -831,23 +850,27 @@ function renderTriage(){
     </div>
     <p class="prose">选择依据：${esc((primary.signals||[]).join('；')||'暂无记录，请核对患者资料')}</p>
     ${(p.gaps||[]).length?`<div class="banner warn">信息缺口：${(p.gaps||[]).map(esc).join('；')}</div>`:''}
+    <h3>科室分诊结果</h3>
+    <div class="triage-department-list">
+      ${departmentRows.length?departmentRows.map(d=>`<div class="triage-department-item"><div class="inline-between-tight"><strong>${esc(d.department)}</strong><span class="pill ${d.role==='牵头'?'ok':(d.role==='未入选'?'gray':'info')}">${esc(d.role)}</span></div><div class="tiny">依据：${esc(d.signals.join('；')||'已纳入分诊方向，具体依据见分诊过程')}</div></div>`).join(''):'<div class="tiny">暂无明确科室方向，请核对患者资料。</div>'}
+    </div>
     <details class="doctor-disclosure">
       <summary>查看分诊依据</summary>
-      <div class="doctor-disclosure-body"><div class="mdt">
-      <div class="col">
+      <div class="doctor-disclosure-body"><div class="triage-process">
+      <section class="triage-process-section">
         <div class="rt" style="font-weight:600;color:var(--accent);">① S1 规则命中（确定性）</div>
         ${ruleHits.length?ruleHits.length+' 条规则命中':'（无规则命中：本例未命中科室规则，走降级/兜底）'}
         ${path}
-      </div>
-      <div class="col">
+      </section>
+      <section class="triage-process-section">
         <div class="rt" style="font-weight:600;color:var(--accent);">② S2 模型受限发言</div>
         ${p.s2?`<div class="tiny">方式：${esc(p.s2.method||'')}　状态：${esc(p.s2.status||'—')}</div>
            ${(p.s2.speeches||[]).slice(0,6).map(s=>`<div class="opcard">${esc(s.department||'')}：${esc(s.stance||s.reason||'')}<div class="tiny">${esc((s.reason||'').slice(0,80))}</div></div>`).join('')}
            ${(p.s2.orchestrator_picks||[]).length?'':'<div class="tiny">未提出新增科室</div>'}`
           :'<div class="tiny">本例未启用模型发言（未配置模型时自动降级，仅规则分诊）</div>'}
         ${(p.s2&&p.s2.orchestrator_picks||[]).map(x=>`<div class="tiny">模型建议新增：${esc(x.department||'')}（需过阈值与 S3 校验）</div>`).join('')}
-      </div>
-      <div class="col">
+      </section>
+      <section class="triage-process-section">
         <div class="rt" style="font-weight:600;color:var(--accent);">③ S3 编排校验</div>
         <div class="opcard">牵头：<strong>${esc(primary.department||'—')}</strong>
           <div class="tiny">依据：${esc((primary.signals||[]).join('；')||'规则命中')}</div></div>
@@ -855,7 +878,7 @@ function renderTriage(){
           <div class="tiny">${esc((d.signals||[]).join('；')||'相关方向')}</div></div>`).join('')}
         <div class="tiny">入选科室数：${(t.selected||[]).length} / 上限 6　决策路径：<strong>${esc(t.decision_path||'—')}</strong></div>
         ${(t.validator_notes||[]).map(n=>`<div class="tiny">· ${esc(n)}</div>`).join('')}
-      </div>
+      </section>
       </div></div>
     </details>
     ${conflicts.length?`<div class="banner danger" style="margin-top:12px;">模型与规则存在分歧（${conflicts.length} 条）：分歧保留并进入报告分歧区，不由 AI 静默覆盖
