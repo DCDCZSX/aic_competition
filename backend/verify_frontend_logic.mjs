@@ -454,6 +454,14 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.renderEvidence();
   const evidence = el('ev-body').innerHTML;
   check('证据默认突出判断关联', evidence.includes('判断 ↔ 证据') && evidence.includes('查看完整证据时间线'), evidence);
+  D.S.caseData.payload.evidence = {};
+  D.S.caseData.payload.masked_history = '患者描述视力下降';
+  D.S.caseData.payload.profile.exams[0].source_refs = ['S-1:4'];
+  D.renderEvidence();
+  const emptyEvidence = el('ev-body').innerHTML;
+  check('证据空状态隐藏原始编号', emptyEvidence.includes('当前暂无判断—证据关联')
+    && emptyEvidence.includes('查看可引用资料') && emptyEvidence.includes('查看原文')
+    && !emptyEvidence.includes('>S-1:8<'), emptyEvidence);
   D.renderMdt();
   const mdt = el('mdt-body').innerHTML;
   check('MDT 默认突出共识分歧待确认',

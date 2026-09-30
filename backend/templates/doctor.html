@@ -85,6 +85,16 @@
   .doctor-disclosure>summary:hover{color:var(--ink);}
   .doctor-disclosure>summary:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:var(--br-6);}
   .doctor-disclosure-body{padding:0 2px var(--sp-8);}
+  .doctor-empty-state{display:flex;flex-direction:column;gap:6px;padding:16px;background:var(--surface-subtle);border-radius:var(--br-8);color:var(--ink2);}
+  .source-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 2px;border-bottom:1px solid var(--line);}
+  .source-ref{display:inline-block;margin-left:8px;vertical-align:middle;}
+  .source-ref>summary{display:inline-block;color:var(--accent);font-size:var(--micro);cursor:pointer;list-style:none;}
+  .source-ref>summary::-webkit-details-marker{display:none;}
+  .source-ref-close{display:none;}
+  .source-ref[open] .source-ref-open{display:none;}
+  .source-ref[open] .source-ref-close{display:inline;}
+  .source-ref-text{max-width:var(--text-width-body);margin-top:6px;padding:8px 10px;background:var(--surface-subtle);border-radius:var(--br-6);color:var(--ink2);font-size:var(--body-3);line-height:1.6;}
+  .source-ref-id{display:none;}
   .history-version{padding:14px 0;border-top:1px solid var(--line);}
   .history-version:first-child{border-top:0;}
   .history-version h4{margin:14px 0 6px;font-size:var(--body-3);color:var(--ink2);}
@@ -279,7 +289,7 @@
       </section>
 
       <section id="s-evidence" class="card hide">
-        <h2>证据板（时间线 + 判断 ↔ 证据关联）</h2>
+        <h2>证据核对</h2>
         <div id="ev-body"></div>
       </section>
 
@@ -850,16 +860,54 @@ function renderTriage(){
 }
 
 /* ===================== 屏 D：证据板 ===================== */
+function sourceSnippet(ref){
+  const text = String((((S.caseData||{}).payload||{}).masked_history)||'');
+  const match = String(ref||'').match(/^S-1:(\d+)$/);
+  if(!text || !match) return '原文暂不可用，请查看患者画像中的对应资料。';
+  const offset = Number(match[1]);
+  if(!Number.isSafeInteger(offset) || offset>=Array.from(text).length) return '无法定位原文，请核对对应资料。';
+  const characters = Array.from(text);
+  const start = Math.max(0, offset-32), end = Math.min(text.length, offset+72);
+  return (start>0?'…':'') + characters.slice(start,end).join('') + (end<characters.length?'…':'');
+}
+function sourceRefHtml(refs){
+  return (refs||[]).map(ref=>`<details class="source-ref" data-source-ref="${esc(ref)}"><summary><span class="source-ref-open">查看原文</span><span class="source-ref-close">收起原文</span></summary><div class="source-ref-text"><div>来源：患者原始描述（脱敏文本）</div>${esc(sourceSnippet(ref))}</div></details>`).join('');
+}
+function profileSourceRows(profile){
+  const rows = [];
+  const factLabel = (name, value) => {
+    const left = String(name||'').trim(), right = String(value||'').trim();
+    if(!right) return left || '未命名资料';
+    return right.startsWith(left) ? right : `${left}：${right}`;
+  };
+  (profile.exams||[]).forEach(e=>rows.push({label:factLabel(e.item, e.value), refs:e.source_refs||[]}));
+  (profile.diseases||[]).forEach(d=>rows.push({label:factLabel(d.name, d.duration), refs:d.source_refs||[]}));
+  (profile.symptoms_timeline||[]).forEach(s=>rows.push({label:factLabel(s.symptom, s.onset), refs:s.source_refs||[]}));
+  return rows;
+}
 function renderEvidence(){
   const r = S.review||{}, p = S.caseData.payload||{};
+  const packet = r.mdt_preparation_packet || {};
+  const packetCards = packet.evidence || [];
   const ev = p.evidence || {};
-  const timeline = ev.timeline || [];
-  const links = ev.judgements || ev.links || [];
+  const normalizeCard = card => ({
+    judgement: card.judgement || card['判断'] || '',
+    department: card.department || card['科室'] || '',
+    evidence_state: card.evidence_state || card['证据状态'] || '',
+    support: (card.support||card['支持证据']||[]).map(item=>typeof item==='string'?item:(item['证据']||item.text||'')),
+    missing: (card.missing||card['反向 / 不足证据']||[]).map(item=>typeof item==='string'?item:(item['证据']||item.text||'')),
+    against: (card.against||[]).map(item=>typeof item==='string'?item:(item['证据']||item.text||'')),
+  });
+  const timeline = ev.timeline || (packet.timeline||[]).map(item=>({
+    time:item.time||item['时间']||'—', label:item.label||item.content||item['内容']||'',
+    kind:item.kind||item['类型']||'', source_refs:item.source_refs||((item['原文出处']||'').match(/S-\d+:\d+/g)||[]),
+  }));
+  const links = (ev.judgements || ev.links || []).map(normalizeCard);
+  if(!links.length && packetCards.length) links.push(...packetCards.map(normalizeCard));
   if(!timeline.length && !links.length){
-    $('ev-body').innerHTML = '<div class="banner warn">本病例暂无证据板数据（证据板依赖画像 source_refs 与判断关联）。</div>' +
-      `<h3>画像中的原文出处</h3>` +
-      ((p.profile||{}).exams||[]).map(e=>`<div class="field"><div style="flex:1;">${esc(e.item)} ${esc(e.value||'')}</div>
-        ${(e.source_refs||[]).map(x=>`<span class="ref">${esc(x)}</span>`).join('')}</div>`).join('');
+    const sourceRows = profileSourceRows(p.profile||{});
+    $('ev-body').innerHTML = `<div class="doctor-empty-state"><strong>当前暂无判断—证据关联</strong><span>已有 ${sourceRows.length} 条结构化资料。可展开查看资料来源，或前往总览核对病情。</span></div>
+      <details class="doctor-disclosure"><summary>查看可引用资料</summary><div class="doctor-disclosure-body">${sourceRows.length?sourceRows.map(row=>`<div class="source-row"><span>${esc(row.label||'未命名资料')}</span>${sourceRefHtml(row.refs)}</div>`).join(''):'<div class="tiny">暂无可引用的结构化资料。</div>'}</div></details>`;
     return;
   }
   const linkHtml = links.map(j=>`<div class="opcard">
@@ -871,7 +919,7 @@ function renderEvidence(){
     </div>`).join('');
   const timelineHtml = timeline.map(e=>`<div class="ev"><strong>${esc(e.time||e.onset||'—')}</strong>　${esc(e.label||e.symptom||e.item||'')}
       <span class="pill gray">${esc(e.kind||'')}</span>
-      ${(e.source_refs||[]).map(x=>`<span class="ref">${esc(x)}</span>`).join('')}</div>`).join('');
+      ${sourceRefHtml(e.source_refs)}</div>`).join('');
   $('ev-body').innerHTML = `
     <div class="doctor-decision-summary">
       <div><div class="muted">判断 ↔ 证据</div><strong>${links.length} 条关联</strong></div>
