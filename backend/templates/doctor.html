@@ -66,6 +66,14 @@
   .doctor-case-nav{display:flex;flex-direction:column;gap:3px;position:sticky;top:var(--sp-16);min-width:0;padding-right:var(--sp-12);border-right:1px solid var(--line);}
   .doctor-case-nav .nav-link{width:100%;white-space:nowrap;}
   .doctor-case-main{grid-column:2;min-width:0;}
+  @media (min-width:961px){
+    body.doctor-case-mode{overflow:hidden;}
+    #doctor-shell.has-case{height:calc(100vh - var(--nav-h));min-height:0;overflow:hidden;padding-bottom:var(--sp-24);}
+    #doctor-shell.has-case .work{min-height:0;overflow:hidden;}
+    #doctor-shell.has-case .doctor-case-layout{min-height:0;flex:1;}
+    #doctor-shell.has-case .doctor-case-main{min-height:0;max-height:calc(100vh - var(--nav-h) - 112px);overflow-y:auto;overscroll-behavior:contain;padding-right:var(--sp-8);scrollbar-gutter:stable;}
+    #doctor-shell.has-case .doctor-case-nav{max-height:calc(100vh - var(--nav-h) - 112px);overflow-y:auto;overscroll-behavior:contain;}
+  }
   .shell.has-case{grid-template-columns:minmax(0,1fr);}
   .shell.has-case .rail-left,.shell.has-case .rail-right{display:none;}
   .shell.has-case .work{grid-column:1;}
@@ -115,6 +123,8 @@
     .triage-department-list,#tri-body>.doctor-decision-summary{grid-template-columns:1fr;}
   }
   @media (max-width:960px){
+    body.doctor-case-mode{overflow:auto;}
+    #doctor-shell.has-case{height:auto;min-height:0;overflow:visible;}
     .doctor-case-layout{display:block;}
     .doctor-case-nav{position:static;flex-direction:row;gap:4px;overflow-x:auto;margin:0 0 var(--sp-16);padding:0 0 2px;border-right:0;border-bottom:1px solid var(--line);}
     .doctor-case-nav .nav-link{width:auto;flex:0 0 auto;}
@@ -419,8 +429,10 @@ async function logout(){
   try{ localStorage.removeItem('dsh_session'); }catch(e){}
   S.token=''; S.me=null; $('app').classList.add('hide'); $('login').classList.remove('hide');
   document.body.classList.remove('doctor-queue-mode');
+  document.body.classList.remove('doctor-case-mode');
   $('ctx').textContent='未选择病例'; enableCaseNav(false); S.caseId='';
   $('doctor-shell').classList.remove('has-case');
+  document.body.classList.remove('doctor-case-mode');
   const rf=$('rail-filters'); if(rf) rf.innerHTML='';
 }
 function enterApp(){
@@ -430,6 +442,7 @@ function enterApp(){
         department_name:S.me.department_name||'', access_scope:S.me.access_scope||'department'})); }catch(e){}
   $('login').classList.add('hide'); $('app').classList.remove('hide');
   $('doctor-shell').classList.remove('has-case');
+  document.body.classList.remove('doctor-case-mode');
   document.body.classList.add('doctor-queue-mode');
   const department = S.me.department_name || S.me.department_code;
   $('ident').textContent = (S.me.label||'模拟审核员') + ' · ' + S.me.username +
@@ -452,8 +465,13 @@ function restoreSession(){
 /* ===================== 导航 ===================== */
 function go(screen){
   if(S.screen==='list' && screen!=='list') S.queue.scroll = window.scrollY || 0;
+  if(screen==='list'){
+    $('doctor-shell').classList.remove('has-case');
+    document.body.classList.remove('doctor-case-mode');
+  }
   S.screen = screen;
   document.body.classList.toggle('doctor-queue-mode', screen==='list');
+  document.body.classList.toggle('doctor-case-mode', screen!=='list' && !!S.caseId);
   ['list','overview','triage','mdt','review','history'].forEach(s=>{
     $('s-'+s).classList.toggle('hide', s!==screen);
   });
@@ -617,6 +635,7 @@ async function openCase(caseId){
   S.review = rev.data;
   S.audit = (aud.status===200? aud.data : null);
   $('doctor-shell').classList.add('has-case');
+  document.body.classList.add('doctor-case-mode');
   const p = (S.caseData.payload||{}), t = p.triage||{};
   $('ctx').textContent = `病例 #${caseId}　${t.behavior_type?('类型 '+t.behavior_type):''}　可靠性 ${(t.reliability||{}).level||'—'}　${S.review.published?'已审核':'未审核'}`;
   updateBadge();

@@ -369,6 +369,10 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     doctorHtml.includes('class="doctor-case-layout"')
       && doctorHtml.includes('class="doctor-case-nav view-nav"')
       && doctorHtml.includes('class="doctor-case-main"'), '');
+  check('病例详情桌面端仅主内容区滚动',
+    doctorHtml.includes('body.doctor-case-mode')
+      && doctorHtml.includes('#doctor-shell.has-case .doctor-case-main')
+      && doctorHtml.includes('overflow-y:auto'), '');
 
   D.S.me = {username:'doctor_endo', label:'内分泌审核医生', role:'doctor', department_name:'内分泌科', department_code:'endocrinology'};
   D.renderDoctorScope();
