@@ -459,7 +459,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.renderMdt();
   const mdt = el('mdt-body').innerHTML;
   check('MDT 结果区突出共识分歧待确认',
-    ['MDT 结果','共识','分歧','待确认问题'].every(x=>mdt.includes(x)), mdt);
+    ['MDT 结果','共识','分歧','待确认事项'].every(x=>mdt.includes(x)), mdt);
   check('MDT 过程直接展示为四步',
     ['MDT 过程','独立研判','分歧识别','质询与补答','形成结果'].every(x=>mdt.includes(x))
       && (mdt.match(/mdt-process-step/g)||[]).length === 4, mdt);
@@ -467,6 +467,13 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     !mdt.includes('左栏 · 患者画像') && !mdt.includes('右栏 · 证据与裁决'), mdt);
   check('MDT 不再使用播放过程交互',
     !doctorHtml.includes('播放过程') && !doctorHtml.includes('mdt-note'), '');
+  D.S.caseData.payload.mdt.analyses[0].checks = [{content:'建议向医生确认是否需要复查'}];
+  D.S.caseData.payload.mdt.aggregation.open_questions = ['建议向医生确认是否需要复查'];
+  D.renderMdt();
+  const doctorMdtCopy = el('mdt-body').innerHTML;
+  check('医生端待确认事项使用决策语义',
+    doctorMdtCopy.includes('待确认事项') && doctorMdtCopy.includes('待判断：是否需要复查')
+      && !doctorMdtCopy.includes('向医生确认'), doctorMdtCopy);
 
   D.S.caseId = 'CAAA1111';
   D.S.review = {

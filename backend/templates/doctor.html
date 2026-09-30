@@ -968,6 +968,9 @@ function renderEvidence(){
 }
 
 /* ===================== 屏 E：MDT 结果与过程 ===================== */
+function doctorQuestionText(value){
+  return String(value||'').replace(/^\s*(?:建议\s*)?(?:向医生确认|请医生确认)\s*[:：]?\s*/,'').trim() || '请结合当前资料判断下一步';
+}
 function renderMdt(){
   const mdt = (S.caseData.payload||{}).mdt||{};
   const cards = mdt.analyses||mdt.cards||[];
@@ -977,18 +980,19 @@ function renderMdt(){
   const disagreements = agg.disagreements||[];
   const openQuestions = [...new Set((agg.open_questions||[]).map(q=>String(q||'').trim()).filter(Boolean))];
   const uncertainties = [...new Set((agg.uncertainties||[]).map(u=>String(u&&u.topic||u||'').trim()).filter(Boolean))];
-  const questionItems = [...openQuestions, ...uncertainties.filter(u=>!openQuestions.includes(u))];
+  const questionItems = [...new Set([...openQuestions, ...uncertainties]
+    .map(doctorQuestionText).filter(Boolean))];
   const challengeQuestions = challenge.questions||[];
   const consensusHtml = consensus.length ? consensus.map(c=>`<div class="mdt-result-item"><strong>${esc(c.topic||'')}</strong><p>${esc((c.supporters||[]).join('、')||'多学科一致')}</p></div>`).join('') : '<div class="mdt-result-empty">暂无共识记录</div>';
   const disagreementHtml = disagreements.length ? disagreements.map(d=>`<div class="mdt-result-item"><strong>${esc(d.topic||'未命名分歧')}</strong><p>${Object.entries(d.positions||{}).map(([k,v])=>esc(k)+'：'+esc(v)).join('；')||'各科意见待补充'}</p>${d.resolving_info?`<p class="muted">处理方式：${esc(d.resolving_info)}</p>`:''}</div>`).join('') : '<div class="mdt-result-empty">暂无分歧记录</div>';
-  const questionHtml = questionItems.length ? questionItems.map((q,i)=>`<div class="mdt-result-item question"><strong>${i+1}. ${esc(q)}</strong></div>`).join('') : '<div class="mdt-result-empty">暂无待确认问题</div>';
+  const questionHtml = questionItems.length ? questionItems.map((q,i)=>`<div class="mdt-result-item question"><strong>${i+1}. 待判断：${esc(q)}</strong></div>`).join('') : '<div class="mdt-result-empty">暂无待确认事项</div>';
   const specialtyHtml = cards.length ? cards.map(c=>{
     const name = c.specialty_name||c.department||'未命名科室';
     if(c.status==='unavailable') return `<div class="mdt-specialty-item"><strong>${esc(name)}</strong><div class="tiny" style="color:var(--warn);">本次未完成分析：${esc(c.error||'原因未知')}</div></div>`;
     const facts = (c.facts||[]).slice(0,2).join('；');
     const inferences = (c.inferences||[]).slice(0,2).map(i=>i.text||i).join('；');
     const checks = (c.checks||[]).slice(0,2).map(k=>k.content||k).join('；');
-    return `<div class="mdt-specialty-item"><strong>${esc(name)}</strong>${facts?`<div class="tiny">事实：${esc(facts)}</div>`:''}${inferences?`<div class="tiny">判断：${esc(inferences)}</div>`:''}${checks?`<div class="tiny">需确认：${esc(checks)}</div>`:''}${c.notice?`<div class="tiny" style="color:var(--warn);">说明：${esc(c.notice)}</div>`:''}</div>`;
+    return `<div class="mdt-specialty-item"><strong>${esc(name)}</strong>${facts?`<div class="tiny">事实：${esc(facts)}</div>`:''}${inferences?`<div class="tiny">判断：${esc(inferences)}</div>`:''}${checks?`<div class="tiny">待判断：${esc(doctorQuestionText(checks))}</div>`:''}${c.notice?`<div class="tiny" style="color:var(--warn);">说明：${esc(c.notice)}</div>`:''}</div>`;
   }).join('') : '<div class="mdt-process-note">本例未运行多学科分析。</div>';
   const disagreementProcess = disagreements.length ? `<div class="mdt-process-note">识别到 ${disagreements.length} 条方向性分歧，已在上方结果中按主题汇总。</div>` : '<div class="mdt-process-note">未检出方向性分歧，直接进入结果聚合。</div>';
   const challengeProcess = challengeQuestions.length ? challengeQuestions.map(q=>`<div class="mdt-result-item"><strong>${esc(q.question||q)}</strong><p>${q.answered?'已补答：'+esc(q.outcome||'结论待医生裁决'):'待补答'}</p></div>`).join('') : '<div class="mdt-process-note">本例未触发质询。</div>';
@@ -1002,7 +1006,7 @@ function renderMdt(){
       </div>
       <section class="mdt-result-section"><h4>共识</h4><div class="mdt-result-list">${consensusHtml}</div></section>
       <section class="mdt-result-section"><h4>分歧</h4><div class="mdt-result-list">${disagreementHtml}</div></section>
-      <section class="mdt-result-section"><h4>待确认问题</h4><div class="mdt-result-list">${questionHtml}</div></section>
+      <section class="mdt-result-section"><h4>待确认事项</h4><div class="mdt-result-list">${questionHtml}</div></section>
     </section>
     <section class="mdt-process" aria-labelledby="mdt-process-title">
       <h3 id="mdt-process-title">MDT 过程</h3>
