@@ -12,6 +12,11 @@
   .rail-filters .filter-link{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:var(--br-8);background:transparent;color:var(--ink2);font:inherit;font-size:var(--body-3);text-align:left;}
   .rail-filters .filter-link:hover{background:var(--gray-100);}
   .rail-filters .filter-link.on{background:var(--gray-000);border:1px solid var(--gray-200);color:var(--ink);font-weight:600;}
+  .queue-more-filters{margin-top:var(--sp-8);border-top:1px solid var(--line);padding-top:var(--sp-8);}
+  .queue-more-filters>summary{padding:8px 10px;min-height:44px;color:var(--ink2);font-size:var(--body-3);cursor:pointer;}
+  .queue-more-filters>summary:hover{color:var(--ink);}
+  .queue-more-filters>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:var(--br-8);}
+  .queue-more-filter-list{display:flex;flex-direction:column;gap:4px;margin-top:4px;}
   .rail-sec{border-top:1px solid var(--line);margin-top:var(--sp-12);padding-top:var(--sp-12);}
   .view-nav{display:flex;flex-direction:column;gap:2px;}
   .view-nav a,.view-nav .nav-link{
@@ -286,14 +291,16 @@ const S = { token:'', me:null, cases:[], caseId:'', caseData:null, review:null,
             queue:{filter:'', sort:'risk', state:'', page:1, pageSize:20, total:0, hasMore:false,
                    scroll:0, requestId:0} };
 
-const QUEUE_FILTERS = [
+const PRIMARY_QUEUE_FILTERS = [
   {key:'', label:'全部病例'},
-  {key:'doctor_pending', label:'医生必审'},
+  {key:'doctor_pending', label:'待我处理'},
+  {key:'recheck', label:'资料更新待复核'}
+];
+const MORE_QUEUE_FILTERS = [
   {key:'conflict', label:'存在分歧'},
   {key:'gaps', label:'证据缺口'},
   {key:'analysis_failed', label:'分析异常'},
   {key:'low_reliability', label:'可靠性较低'},
-  {key:'recheck', label:'待复核'},
   {key:'exempt', label:'免审（自动）'}
 ];
 
@@ -431,10 +438,18 @@ function enableCaseNav(on){
 function renderQueueFilters(){
   const rail=$('rail-filters'); if(!rail) return;
   const counts=(S.queueMeta&&S.queueMeta.filters)||{};
-  rail.innerHTML = QUEUE_FILTERS.map(f=>`
+  const previousMore=$('queue-more-filters');
+  const activeMore=MORE_QUEUE_FILTERS.find(f=>f.key===S.queue.filter);
+  const showMore=!!activeMore || !!(previousMore&&previousMore.open);
+  const renderFilter=f=>`
     <button type="button" class="filter-link ${S.queue.filter===f.key?'on':''}" aria-pressed="${S.queue.filter===f.key}" onclick="setQueueFilter('${esc(f.key)}');">
       <span>${esc(f.label)}</span><span class="tiny mono">${esc(counts[f.key||'all']!=null?counts[f.key||'all']:0)}</span>
-    </button>`).join('');
+    </button>`;
+  rail.innerHTML = PRIMARY_QUEUE_FILTERS.map(renderFilter).join('') + `
+    <details id="queue-more-filters" class="queue-more-filters" ${showMore?'open':''}>
+      <summary>更多筛选${activeMore?` · ${esc(activeMore.label)}`:''}</summary>
+      <div class="queue-more-filter-list">${MORE_QUEUE_FILTERS.map(renderFilter).join('')}</div>
+    </details>`;
 }
 function renderPager(){
   const el=$('list-pager'); if(!el) return;

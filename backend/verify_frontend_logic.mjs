@@ -359,7 +359,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 
 /* ----------------------------------------------------- 医生工作台断言 */
 {
-  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderReview, renderMdtScreening, renderDoctorScope, setQueueFilter, goQueuePage };');
+  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderReview, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage };');
   const D = globalThis.__D;
 
   D.S.me = {username:'doctor_endo', label:'内分泌审核医生', role:'doctor', department_name:'内分泌科', department_code:'endocrinology'};
@@ -400,6 +400,26 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('队列显示自动处理条数', queue.includes('免审 2'), '');
   check('病例队列使用服务端分页元数据', el('list-pager').innerHTML.includes('共 2 例'), '');
   check('左轨改为筛选入口而非病例堆叠', !el('rail-filters').innerHTML.includes('CAAA1111'), '');
+  const railFilters = el('rail-filters').innerHTML;
+  const commonFilters = railFilters.split('<details')[0];
+  check('队列默认只显示三个常用入口', (commonFilters.match(/class="filter-link /g)||[]).length === 3
+    && commonFilters.includes('全部病例') && commonFilters.includes('待我处理')
+    && commonFilters.includes('资料更新待复核'), commonFilters);
+  check('二级问题筛选默认收起但仍可访问', /<details[^>]*id="queue-more-filters"[^>]*>/.test(railFilters)
+    && !/<details[^>]*\bopen\b/.test(railFilters)
+    && ['存在分歧','证据缺口','分析异常','可靠性较低','免审（自动）'].every(label=>railFilters.includes(label)), '');
+  D.S.queue.filter = 'analysis_failed';
+  D.S.queueMeta.filters = {all:2, analysis_failed:1};
+  D.renderQueueFilters();
+  check('选择二级筛选后保持可见并标明当前条件', /<details[^>]*\bopen\b/.test(el('rail-filters').innerHTML)
+    && el('rail-filters').innerHTML.includes('更多筛选 · 分析异常')
+    && /aria-pressed="true" onclick="setQueueFilter\('analysis_failed'\);"/.test(el('rail-filters').innerHTML), '');
+  D.S.queue.filter = '';
+  el('queue-more-filters').open = true;
+  D.renderQueueFilters();
+  check('刷新列表时保留手动展开状态', /<details[^>]*\bopen\b/.test(el('rail-filters').innerHTML), '');
+  el('queue-more-filters').open = false;
+  D.renderQueueFilters();
   check('列表计数文案', el('list-note').textContent.includes('第 1 页'), el('list-note').textContent);
 
   D.S.caseId = 'CAAA1111';
