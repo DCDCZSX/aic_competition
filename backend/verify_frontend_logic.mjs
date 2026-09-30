@@ -360,7 +360,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 /* ----------------------------------------------------- 医生工作台断言 */
 {
   const doctorHtml = fs.readFileSync(path.join(TPL, 'doctor.html'), 'utf8');
-  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderReview, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage };');
+  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage };');
   const D = globalThis.__D;
   check('病例详情导航只突出主要任务',
     ['overview','triage','evidence','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`)), '');
@@ -428,6 +428,29 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   el('queue-more-filters').open = false;
   D.renderQueueFilters();
   check('列表计数文案', el('list-note').textContent.includes('第 1 页'), el('list-note').textContent);
+
+  D.S.caseData = { case_id:'CAAA1111', main_issue:'视物模糊', payload: {
+    profile: { chief_complaint:'视物模糊3月', symptoms_timeline:[{symptom:'视物模糊', onset:'3个月'}], diseases:[], exams:[{item:'视力', value:'下降'}], medications:[] },
+    triage: { primary:{department:'内分泌科', signals:['规则命中']}, secondary:[], selected:['内分泌科'], rule_hits:[], conflicts:[], decision_path:'规则优先' },
+    evidence: { timeline:[{time:'2026-09-01', label:'视物模糊', kind:'症状'}], judgements:[{judgement:'需进一步评估', department:'内分泌科', evidence_state:'direct', support:['视力下降']} ] },
+    mdt: { analyses:[{department:'内分泌科', facts:['血糖偏高'], inferences:[], checks:[]}], aggregation:{consensus:[{topic:'先完善检查', supporters:['内分泌科']}], disagreements:[], open_questions:['是否需要复查']}, challenge:{} },
+    gaps:['缺少近期检查结果']
+  }};
+  D.S.review = { published:false, case_state_label:'待医生审核', summary:{pending:2}, mdt_screening:null, mdt_preparation_packet:{} };
+  D.renderOverview();
+  const overview = el('ov-body').innerHTML;
+  check('总览默认只突出当前待办', overview.includes('当前待办') && overview.includes('下一步'), overview);
+  check('总览将完整资料折叠', /<details[^>]*>/.test(overview) && overview.includes('完整患者资料'), overview);
+  D.renderTriage();
+  const triage = el('tri-body').innerHTML;
+  check('分诊默认突出牵头科室', triage.includes('内分泌科') && triage.includes('查看分诊依据'), triage);
+  D.renderEvidence();
+  const evidence = el('ev-body').innerHTML;
+  check('证据默认突出判断关联', evidence.includes('判断 ↔ 证据') && evidence.includes('查看完整证据时间线'), evidence);
+  D.renderMdt();
+  const mdt = el('mdt-body').innerHTML;
+  check('MDT 默认突出共识分歧待确认',
+    ['共识','分歧','待确认问题'].every(x=>mdt.includes(x)) && mdt.includes('专科意见'), mdt);
 
   D.S.caseId = 'CAAA1111';
   D.S.review = {
