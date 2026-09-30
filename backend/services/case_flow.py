@@ -23,7 +23,7 @@ from functools import wraps
 from types import SimpleNamespace
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1210,6 +1210,92 @@ class CaseFlow:
 
     # ------------------------------------------------------------------ 查询
     @serialized_case
+    def submit_case_for_review(
+        self,
+        case_id: str,
+        *,
+        department_code: str,
+        actor: str,
+        reviewer_ids: Sequence[str],
+    ) -> Dict[str, Any]:
+        """患者确认主责科室后提交病例，并建立科室范围内的访问授权。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+
+        raw_code = str(department_code or "").strip()
+        requested_name = department_domain.to_name(raw_code)
+        if requested_name is None:
+            resolved = department_domain.resolve(raw_code)
+            requested_name = resolved.name
+        requested_code = department_domain.to_code(requested_name or "")
+        if not requested_name or not requested_code:
+            return {"ok": False, "error": "提交的科室不在支持的科室域内"}
+        if not department_domain.can_be_primary(requested_name):
+            return {"ok": False, "error": "辅助科室不能作为病例主责科室"}
+
+        reviewers = list(dict.fromkeys(
+            str(item).strip() for item in (reviewer_ids or []) if str(item).strip()
+        ))
+        payload = dict(case.get("payload") or {})
+        existing = payload.get("routing") or {}
+        existing_status = str(existing.get("status") or "")
+        existing_requested = (existing.get("requested_department") or {}).get("code")
+        if existing_status == "submitted":
+            if existing_requested == requested_code:
+                return {
+                    "ok": True,
+                    "changed": False,
+                    "routing": existing,
+                    "reviewer_count": len(reviewers),
+                }
+            return {"ok": False, "error": "病例已经提交到其他科室，不能直接改派"}
+
+        if not reviewers:
+            return {"ok": False, "error": "当前科室暂无可接收病例的医生"}
+
+        triage = payload.get("triage") or {}
+        primary = triage.get("primary") or {}
+        triage_name = str(primary.get("department") or "").strip()
+        triage_code = department_domain.to_code(triage_name) or ""
+        now = _now()
+        routing = {
+            "status": "submitted",
+            "triage_primary_department": {
+                "code": triage_code,
+                "name": triage_name,
+            },
+            "requested_department": {
+                "code": requested_code,
+                "name": requested_name,
+            },
+            "patient_adjusted": bool(triage_code and triage_code != requested_code),
+            "submitted_at": now,
+        }
+
+        def mutate(current: Dict[str, Any]) -> None:
+            next_payload = dict(current.get("payload") or {})
+            next_payload["routing"] = routing
+            current["payload"] = next_payload
+
+        updated = self.store.mutate_case(case_id, mutate) if self.store else None
+        if updated is None:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+        for reviewer_id in reviewers:
+            self.store.grant_case_access(case_id, reviewer_id, granted_by=actor)
+        self.store.add_audit(
+            case_id,
+            "case_submitted_for_review",
+            f"department={requested_code}; reviewers={len(reviewers)}; patient_adjusted={routing['patient_adjusted']}",
+        )
+        return {
+            "ok": True,
+            "changed": True,
+            "routing": routing,
+            "reviewer_count": len(reviewers),
+        }
+
+    @serialized_case
     def submit_mdt_screening(
         self,
         case_id: str,
@@ -1219,6 +1305,7 @@ class CaseFlow:
         purpose: str = "",
         departments: Optional[List[str]] = None,
         reviewer_id: str = "",
+        department_reviewer_map: Optional[Mapping[str, Sequence[str]]] = None,
     ) -> Dict[str, Any]:
         """保存医生负责的 MDT 初筛决定（不改变病例主状态机）。"""
         case = self.store.load_case(case_id) if self.store else None
@@ -1268,6 +1355,24 @@ class CaseFlow:
         if decision == "recommend_mdt" and len(normalized_departments) < 2:
             return {"ok": False, "error": "建议 MDT 时至少两个不同科室"}
 
+        normalized_reviewer_map: Dict[str, List[str]] = {}
+        if department_reviewer_map is not None:
+            if not isinstance(department_reviewer_map, Mapping):
+                return {"ok": False, "error": "科室协作者映射格式非法"}
+            for raw_department, raw_reviewers in department_reviewer_map.items():
+                if not isinstance(raw_reviewers, Sequence) or isinstance(
+                    raw_reviewers, (str, bytes)
+                ):
+                    return {"ok": False, "error": "科室协作者列表格式非法"}
+                department_name = department_domain.to_name(str(raw_department).strip())
+                if department_name is None:
+                    department_name = department_domain.resolve(str(raw_department)).name
+                if not department_name:
+                    continue
+                normalized_reviewer_map[department_name] = list(dict.fromkeys(
+                    str(item).strip() for item in raw_reviewers if str(item).strip()
+                ))
+
         now = _now()
         screening = {
             "status": "decided",
@@ -1298,10 +1403,39 @@ class CaseFlow:
             "mdt_screening_recorded",
             f"decision={decision}; departments={'、'.join(normalized_departments) or '无'}; reason=provided",
         )
+
+        authorized_departments: List[str] = []
+        pending_departments: List[str] = []
+        authorized_reviewer_count = 0
+        if decision == "recommend_mdt" and department_reviewer_map is not None:
+            for department in normalized_departments:
+                reviewers = normalized_reviewer_map.get(department, [])
+                if not reviewers:
+                    pending_departments.append(department)
+                    continue
+                authorized_departments.append(department)
+                authorized_reviewer_count += len(reviewers)
+                for reviewer in reviewers:
+                    self.store.grant_case_access(case_id, reviewer, granted_by=safe_reviewer)
+            if authorized_departments:
+                self.store.add_audit(
+                    case_id,
+                    "mdt_access_granted",
+                    f"departments={'、'.join(authorized_departments)}; reviewers={authorized_reviewer_count}",
+                )
+            if pending_departments:
+                self.store.add_audit(
+                    case_id,
+                    "mdt_access_pending",
+                    f"departments={'、'.join(pending_departments)}",
+                )
         return {
             "ok": True,
             "mdt_screening": screening,
             "patient_mdt_screening": patient_safe_mdt_screening(screening),
+            "authorized_departments": authorized_departments,
+            "authorized_reviewer_count": authorized_reviewer_count,
+            "pending_departments": pending_departments,
         }
 
     def get_case(self, case_id: str) -> Optional[Dict[str, Any]]:

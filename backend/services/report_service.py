@@ -327,6 +327,32 @@ def specialty_views_for_report(analyses: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def patient_timeline_for_report(profile: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """生成患者端的病程变化列表。
+
+    患者端时间线只回答“症状何时开始、如何变化”。检查结果和当前用药是
+    病例画像中的快照，现有字段也没有检查日期或用药起止日期，不能把它们
+    伪装成时间事件；它们继续留在“我的情况摘要”中。
+    """
+    profile = profile or {}
+    out: List[Dict[str, Any]] = []
+    for item in profile.get("symptoms_timeline") or []:
+        symptom = str(item.get("symptom") or "").strip()
+        onset = str(item.get("onset") or "").strip()
+        if not symptom or not onset:
+            continue
+        row: Dict[str, Any] = {
+            "时间": onset,
+            "类型": "症状",
+            "内容": symptom,
+        }
+        if item.get("trend"):
+            row["说明"] = f"趋势：{item['trend']}"
+        row["原文出处"] = _refs_text(item.get("source_refs"))
+        out.append(row)
+    return out
+
+
 def build_mdt_preparation_packet(case: Dict[str, Any]) -> Dict[str, Any]:
     """从现有结构化病例即时生成医生可读的 MDT 会前资料包。
 
@@ -768,7 +794,8 @@ def build_full_report(case: Dict[str, Any]) -> Report:
             "资料完整度": payload.get("completeness"),
             "原文直引覆盖率": payload.get("direct_quote_coverage"),
         },
-        "时间线": timeline_for_report(build_timeline(profile)),
+        # 患者版只展示有明确病程时间的症状变化；检查/用药仍在病例画像中。
+        "时间线": patient_timeline_for_report(profile),
         "分诊结果": {
             "病例类型": BEHAVIOR_LABELS.get(str(triage.get("behavior_type")), "（未判定）"),
             "牵头方向": (triage.get("primary") or {}).get("department") or "（未给出）",

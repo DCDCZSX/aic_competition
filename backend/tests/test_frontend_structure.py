@@ -89,6 +89,14 @@ class FrontendStructureTest(unittest.TestCase):
         for token in ("--clay:", "--gray-050:", "--sp-16:", "--font-display:"):
             self.assertIn(token, tokens, f"tokens.css 缺少 {token}")
 
+    def test_shared_tokens_use_readable_text_and_focus_colors(self):
+        """正文、警告和焦点环的 token 不能回到低对比度的浅色值。"""
+        _, tokens = self.get("/static/css/tokens.css")
+        self.assertIn("--gray-500:#686762", tokens)
+        self.assertIn("--clay-dark:#a94f35", tokens)
+        self.assertIn("--warn:#8a5a00", tokens)
+        self.assertIn("--focus-ring:#0b5cad", tokens)
+
     def test_home_uses_shared_tokens(self):
         """首页与工作台共用同一份 token（原先首页自带一份重复的 :root）。"""
         status, html = self.get("/")
@@ -139,7 +147,7 @@ class FrontendStructureTest(unittest.TestCase):
         _, html = self.get("/patient")
         self.assertIn('href="/static/css/dsh.css"', html)
         self.assertIn('class="appbar"', html)
-        self.assertIn('class="shell"', html)
+        self.assertIn('class="shell patient-shell"', html)
         self.assertEqual(html.count('class="rail rail-left"'), 1)
         self.assertEqual(html.count('class="rail rail-right"'), 0)
         self.assertNotIn('id="ctx-panel"', html)
@@ -232,23 +240,25 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("preview_token:S.previewToken", html)
         self.assertIn("blocking_hit_count", html)
 
-    def test_doctor_three_track_shell(self):
-        """医生工作台：左轨 = 队列筛选 + 审阅视图；右轨 = 审核面板。"""
+    def test_doctor_detail_shell_contract(self):
+        """医生详情页使用病例上下文头部、任务导航和单列主区。"""
         _, html = self.get("/doctor")
         self.assertIn('href="/static/css/dsh.css"', html)
         self.assertEqual(html.count('class="rail rail-left"'), 1)
-        self.assertEqual(html.count('class="rail rail-right"'), 1)
-        for anchor in ('id="rail-filters"', 'id="rev-summary"', 'id="rev-publish"',
-                       'id="rev-bar"', 'id="nav"'):
+        self.assertNotIn('class="rail rail-right"', html)
+        for anchor in ('id="rail-filters"', 'id="rev-summary-inline"', 'id="rev-publish-inline"',
+                       'id="rev-bar"', 'id="nav"', 'class="doctor-case-header"',
+                       'class="doctor-case-nav', 'class="doctor-case-main"'):
             self.assertIn(anchor, html, f"医生工作台缺少 {anchor}")
         self.assertNotIn('id="rail-cases"', html, "病例队列不应在左轨重复渲染")
         # 业务屏必须在 <main> 内（与患者端同一约束）
         ids = set(self.sections_of(html, "main"))
         expected = {"s-list", "s-overview", "s-triage", "s-evidence", "s-mdt", "s-review", "s-history"}
         self.assertTrue(expected.issubset(ids), f"main 内缺少屏：{expected - ids}")
-        # 右轨的审核面板必须在 main 之外（常驻可见，不随切屏隐藏）
-        main_close = html.index("</main>")
-        self.assertLess(main_close, html.index('class="rail rail-right"'))
+        # 详情页的五个主要任务必须有统一导航入口
+        for task in ("overview", "triage", "evidence", "mdt", "review"):
+            self.assertIn(f'data-s="{task}"', html)
+        self.assertIn('class="review-help"', html)
         self.assertNotIn("--blue", html)
 
     def test_doctor_queue_has_server_pagination_controls(self):
@@ -258,6 +268,16 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="f-page-size"', html)
         self.assertIn("offset", html)
         self.assertIn("has_more", html)
+
+    def test_doctor_queue_cells_have_mobile_field_labels(self):
+        """窄屏隐藏表头后，每个队列字段仍要带可见字段名。"""
+        _, html = self.get("/doctor")
+        for label in ("病例", "主诉 / 牵头科室", "风险", "处理状态", "更新"):
+            self.assertIn(f'data-label="{label}"', html)
+        self.assertIn('data-queue-details', html)
+        self.assertIn("查看详情", html)
+        self.assertNotIn('data-label="可靠性"', html)
+        self.assertNotIn('data-label="分析"', html)
 
     def test_doctor_review_template_exposes_auto_processed_group(self):
         _, html = self.get("/doctor")
@@ -325,6 +345,79 @@ class FrontendStructureTest(unittest.TestCase):
                 # 跨端只保留弱链接，避免用户走错后无法切换
                 self.assertIn(f'href="/{other}"', login, f"{path} 应有一条跨端弱链接")
 
+    def test_login_controls_have_form_labels_and_live_errors(self):
+        """登录必须能用 Enter 提交，输入框不能只依赖 placeholder。"""
+        for path, form_id in (("/patient", "patient-login-form"), ("/doctor", "doctor-login-form")):
+            with self.subTest(path=path):
+                _, html = self.get(path)
+                self.assertRegex(html, rf'<form id="{form_id}"[^>]*>')
+                self.assertRegex(html, r'<label[^>]+for="login-user"')
+                self.assertRegex(html, r'<label[^>]+for="login-pass"')
+                self.assertIn('id="login-msg"', html)
+                self.assertIn('role="alert"', html)
+                self.assertIn('aria-live="assertive"', html)
+
+    def test_patient_login_supports_first_party_registration(self):
+        """患者可在患者端注册；角色由服务端决定，不能由前端伪造。"""
+        _, html = self.get("/patient")
+        self.assertIn('id="patient-register-form"', html)
+        self.assertIn('id="register-user"', html)
+        self.assertIn('id="register-pass-confirm"', html)
+        self.assertIn('registerForm', html)
+        self.assertIn("/api/register", html)
+        self.assertNotIn('"role":"patient"', html)
+
+    def test_patient_can_confirm_department_before_review_submission(self):
+        """患者提交审核前必须看到主责科室并明确可见范围。"""
+        _, html = self.get("/patient")
+        for token in (
+            'id="review-routing"', 'id="review-department"',
+            'loadDepartments', 'renderReviewSubmission', 'submitCaseForReview',
+            '/api/departments', '/submit-review', '仅该科室医生可见',
+        ):
+            self.assertIn(token, html, f"患者端缺少科室分流入口：{token}")
+        stage3 = html[html.index('id="s-stage3"'):html.index('id="s-stage4"')]
+        stage4 = html[html.index('id="s-stage4"'):]
+        self.assertNotIn('id="review-routing"', stage3)
+        self.assertIn('id="review-routing"', stage4)
+        self.assertNotIn('reviewer_id', html)
+
+    def test_doctor_ui_surfaces_department_scope(self):
+        """医生工作台应显示当前科室范围，避免账号权限边界只存在于后台。"""
+        _, html = self.get("/doctor")
+        for token in ("department_name", "department_code", "当前科室", "仅显示已授权病例"):
+            self.assertIn(token, html, f"医生端缺少科室范围提示：{token}")
+
+    def test_interactive_choices_use_native_controls(self):
+        """目标、疾病/问题选项和医生导航不能依赖不可聚焦的 div/span。"""
+        _, patient = self.get("/patient")
+        self.assertIn('<button type="button" class="goal"', patient)
+        self.assertNotRegex(patient, r'<div[^>]+class="goal"[^>]+onclick=')
+        self.assertIn('<button type="button" class="chip"', patient)
+        self.assertNotRegex(patient, r'<span[^>]+class="chip"[^>]+onclick="setAns')
+        self.assertIn('event.preventDefault();go', patient)
+        self.assertNotIn('role="link" tabindex="0"', patient)
+
+        _, doctor = self.get("/doctor")
+        self.assertIn('<button type="button" class="nav-link', doctor)
+        self.assertIn('aria-current="page"', doctor)
+        self.assertIn("a.removeAttribute('aria-current')", doctor)
+        self.assertNotRegex(doctor, r'<a[^>]+onclick="navCase')
+        self.assertIn('class="filter-link', doctor)
+        self.assertNotIn('href="#"', doctor, "队列筛选应使用原生 button，不应依赖无目的锚点")
+
+    def test_doctor_review_modal_has_dialog_semantics_and_focus_restore(self):
+        """审核弹窗需要被读屏器识别，并在关闭后把焦点还给触发按钮。"""
+        _, html = self.get("/doctor")
+        self.assertIn('role="dialog"', html)
+        self.assertIn('aria-modal="true"', html)
+        self.assertIn('aria-labelledby="modal-title"', html)
+        self.assertIn('id="modal-close"', html)
+        self.assertIn('modalPreviousFocus', html)
+        self.assertIn('modalFocusables', html)
+        self.assertIn('document.activeElement', html)
+        self.assertIn('focus()', html)
+
     def test_json_key_order_is_preserved(self):
         """报告段落内部字段是"给人读的顺序"，JSON 序列化不得按字母重排。
 
@@ -360,7 +453,7 @@ class FrontendStructureTest(unittest.TestCase):
 
     # ------------------------------------------------- 完整报告的逐段折叠
     def test_full_report_is_collapsible(self):
-        """完整报告 13 段很长 → 做成可折叠；折叠只能影响显示，不能影响内容。
+        """患者端就医详情按重点段落折叠；折叠只能影响显示，不能影响内容。
 
         这里守住三件事：① 用 `<details>/<summary>`（原生折叠、键盘可达）；
         ② 打印前会全部展开（否则打印出来的 PDF 只有标题没有正文）；
@@ -375,11 +468,32 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('class="report-screen"', html)
         self.assertIn('class="print-report"', html)
         self.assertIn("buildPrintReportHtml", html)
+        self.assertIn("patientFullReportEntries", html)
+        self.assertIn("patientFullReportValue", html)
+        self.assertIn("patientTimelineValue", html)
+        self.assertIn("patientPathFlowValue", html)
+        self.assertIn("patient-path-flow-parallel-group", html)
+        self.assertIn("patient-path-flow-stage-marker", html)
+        self.assertIn("PATIENT_FULL_REPORT_LABELS", html)
+        self.assertIn("'时间线':'病程变化'", html)
+        self.assertIn("病例画像", html)
+        self.assertIn("就医路径", html)
+        self.assertIn("医生最终意见", html)
         # 打印前自动展开、打印后恢复
         self.assertRegex(html, r"addEventListener\(\s*'beforeprint'[^)]*\)")
         self.assertRegex(html, r"addEventListener\(\s*'afterprint'[^)]*\)")
         # 旧的"每段都是 section + h2，全部铺开"实现不应回潮
         self.assertNotIn('<section id="sec-', html)
+
+    def test_patient_shell_and_report_body_use_available_width(self):
+        """患者端没有右轨时不能保留空列，报告正文也不能被固定阅读宽度截断。"""
+        _, html = self.get("/patient")
+        self.assertIn('class="shell patient-shell"', html)
+        status, css = self.get("/static/css/dsh.css")
+        self.assertEqual(status, 200)
+        self.assertIn(".shell.patient-shell", css)
+        self.assertIn(".patient-shell .doc-body", css)
+        self.assertIn("max-width:none", css)
 
     def test_print_styles_expand_report_sections(self):
         """打印样式必须把折叠段落还原成正常文档（隐藏折叠控件）。"""
@@ -449,6 +563,83 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("AI 多学科参考意见", stage3)
         self.assertIn("路径中的任务", html)
 
+    def test_patient_stage3_supports_collapsible_detail_sections(self):
+        """第三阶段把路径和专科参考意见折叠，首屏优先保留方向与风险提示。"""
+        _, html = self.get("/patient")
+        stage3_start = html.index('id="s-stage3"')
+        stage4_start = html.index('id="s-stage4"')
+        stage3 = html[stage3_start:stage4_start]
+        self.assertIn('data-section="path"', stage3)
+        self.assertIn('data-section="mdt"', stage3)
+        self.assertGreaterEqual(stage3.count("<summary>"), 2)
+
+    def test_patient_stage3_uses_one_shared_safety_notice(self):
+        """第三阶段共用一条审核状态提示，避免分诊和专科卡重复堆 warning。"""
+        _, html = self.get("/patient")
+        stage3_start = html.index('id="s-stage3"')
+        stage4_start = html.index('id="s-stage4"')
+        stage3 = html[stage3_start:stage4_start]
+        self.assertIn('id="stage3-safety-note"', stage3)
+        self.assertEqual(stage3.count("AI 参考内容尚未经医生审核"), 1)
+
+    def test_doctor_review_exposes_primary_pending_task_banner(self):
+        """审核主区需要把剩余必审数量放在首要位置，避免三栏信息淹没下一步。"""
+        _, html = self.get("/doctor")
+        self.assertIn('id="review-task-banner"', html)
+        self.assertIn("还有 ${sum.pending||0} 项必审", html)
+        self.assertIn('aria-live="polite"', html)
+
+    def test_doctor_empty_context_hides_right_rail_and_reclaims_grid(self):
+        """未选择病例时右栏不应占用宽屏布局，选中病例后再恢复。"""
+        _, html = self.get("/doctor")
+        self.assertIn('id="doctor-shell"', html)
+        self.assertIn("$('doctor-shell').classList.add('has-case')", html)
+        self.assertIn("$('doctor-shell').classList.remove('has-case')", html)
+        self.assertIn('.shell:not(.has-case) .rail-right{display:none;}', html)
+
+    def test_doctor_styles_use_shared_surface_tokens(self):
+        """医生模板的状态和 hover 背景不能绕过共享 token。"""
+        _, html = self.get("/doctor")
+        _, tokens = self.get("/static/css/tokens.css")
+        self.assertIn("--surface-warm:#fffdf9", tokens)
+        self.assertIn("--surface-subtle:#f4f7f4", tokens)
+        self.assertNotIn("background:#fffdf9", html)
+        self.assertNotIn("background:#f4f7f4", html)
+        self.assertIn("background:var(--surface-warm)", html)
+        self.assertIn("background:var(--surface-subtle)", html)
+        self.assertIn('class="queue-toolbar"', html)
+        self.assertNotIn('style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;"', html)
+
+    def test_forms_expose_help_text_and_busy_guards(self):
+        """表单错误和提交中状态要能被辅助技术感知，并阻止重复提交。"""
+        _, patient = self.get("/patient")
+        _, doctor = self.get("/doctor")
+        for html in (patient, doctor):
+            self.assertIn('id="login-help"', html)
+            self.assertIn('aria-describedby="login-help"', html)
+            self.assertIn("loginBusy", html)
+        self.assertIn('aria-describedby="intake-help"', patient)
+        self.assertIn('id="intake-help"', patient)
+        self.assertIn('previewBusy', patient)
+        self.assertIn('modalSubmitting', doctor)
+
+    def test_dynamic_status_badges_have_textual_accessible_label(self):
+        """状态颜色之外还要提供可读取的文字标签。"""
+        _, doctor = self.get("/doctor")
+        self.assertIn('role="status" aria-label="${esc(label)}"', doctor)
+
+    def test_analysis_polling_pauses_when_hidden_and_backs_off(self):
+        """后台分析请求需要在隐藏页暂停，并在失败时按上限退避。"""
+        _, patient = self.get("/patient")
+        _, doctor = self.get("/doctor")
+        self.assertIn("const ANALYSIS_POLL_DELAYS = [1000, 2000, 4000, 8000]", patient)
+        self.assertIn("analysisPollDelay", patient)
+        self.assertIn("document.visibilityState", patient)
+        self.assertIn("document.addEventListener('visibilitychange'", patient)
+        self.assertIn("updateAnalysisStage3Dom", patient)
+        self.assertIn("mdtPlayback", doctor)
+        self.assertIn("document.addEventListener('visibilitychange'", doctor)
+
     # ------------------------------------------- 医生端关键操作的窄屏可见性
     def test_doctor_publish_entry_survives_narrow_screens(self):
         """<1440px 时右轨被 CSS 收起 → 主区必须有"发布审核版/录入线下意见"的镜像。
@@ -464,15 +655,15 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="rev-publish-inline"', review.group(0),
                       "发布入口必须有主区镜像，不能只在右轨里")
         self.assertIn("publishPanelHtml", html)
-        self.assertIn("publishPanelHtml(sum, canPublish, 'rail')", html)
+        self.assertNotIn("publishPanelHtml(sum, canPublish, 'rail')", html)
         self.assertIn("publishPanelHtml(sum, canPublish, 'inline')", html)
         self.assertNotIn('id="op-text"', html, "线下意见输入框 id 应带前缀，避免两处重复 id")
 
         _, css = self.get("/static/css/dsh.css")
         packed = css.replace(" ", "")
         self.assertIn(".rail-right{display:none;}", packed)
-        self.assertIn("@media(min-width:1440px){.publish-inline{display:none;}}", packed,
-                      "宽屏才隐藏主区镜像（此时右轨常驻）")
+        self.assertIn(".publish-inline{display:block;}", html,
+                      "医生端所有宽度都保留唯一主区发布入口")
 
 
 if __name__ == "__main__":

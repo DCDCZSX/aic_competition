@@ -136,10 +136,25 @@ class Store:
                     PRIMARY KEY (case_id, reviewer_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS users (
+                    username        TEXT PRIMARY KEY,
+                    password_hash   TEXT NOT NULL,
+                    role            TEXT NOT NULL,
+                    label           TEXT NOT NULL,
+                    department_code TEXT NOT NULL DEFAULT '',
+                    status          TEXT NOT NULL DEFAULT 'active',
+                    created_at      TEXT NOT NULL,
+                    updated_at      TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_audit_case ON audit_log(case_id, at);
                 CREATE INDEX IF NOT EXISTS idx_decisions_case ON decisions(case_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_case_access_reviewer
                     ON case_access(reviewer_id, case_id);
+                CREATE INDEX IF NOT EXISTS idx_users_role_status
+                    ON users(role, status, username);
+                CREATE INDEX IF NOT EXISTS idx_users_department
+                    ON users(role, department_code, status, username);
                 CREATE INDEX IF NOT EXISTS idx_cases_created
                     ON cases(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_report_versions_case
@@ -271,11 +286,16 @@ class Store:
         if not case_id or not reviewer_id or not self.load_case(case_id):
             return False
         with self._lock:
+            existing = self._conn.execute(
+                "SELECT 1 FROM case_access WHERE case_id=? AND reviewer_id=?",
+                (case_id, reviewer_id),
+            ).fetchone()
+            if existing:
+                return False
             self._conn.execute(
                 """INSERT INTO case_access (case_id, reviewer_id, granted_by, created_at)
                    VALUES (?, ?, ?, ?)
-                   ON CONFLICT(case_id, reviewer_id) DO UPDATE SET
-                     granted_by=excluded.granted_by, created_at=excluded.created_at""",
+                   """,
                 (case_id, reviewer_id, granted_by, _now()),
             )
             self._conn.commit()
@@ -541,6 +561,69 @@ class Store:
         with self._lock:
             self._insert_report_version_locked(snapshot)
             self._conn.commit()
+
+    # ------------------------------------------------------------------ 用户
+    def create_user(
+        self,
+        username: str,
+        password_hash: str,
+        *,
+        role: str,
+        label: str,
+        department_code: str = "",
+        status: str = "active",
+    ) -> bool:
+        """插入一个用户；用户名已存在时不覆盖原账号。"""
+        now = _now()
+        with self._lock:
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO users (
+                        username, password_hash, role, label, department_code,
+                        status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (username, password_hash, role, label, department_code, status, now, now),
+                )
+            except sqlite3.IntegrityError:
+                return False
+            self._conn.commit()
+        return True
+
+    def load_user(self, username: str) -> Optional[Dict[str, Any]]:
+        """读取账号内部记录（含哈希，仅供认证服务使用）。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM users WHERE username = ?", (username,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_users(
+        self,
+        *,
+        role: Optional[str] = None,
+        department_code: Optional[str] = None,
+        status: str = "active",
+    ) -> List[Dict[str, Any]]:
+        """按角色、科室和状态读取用户，默认只返回 active 用户。"""
+        clauses = []
+        args: List[Any] = []
+        if role is not None:
+            clauses.append("role = ?")
+            args.append(role)
+        if department_code is not None:
+            clauses.append("department_code = ?")
+            args.append(department_code)
+        if status is not None:
+            clauses.append("status = ?")
+            args.append(status)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM users{where} ORDER BY username ASC", args
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     @staticmethod
     def _row_to_report_version(row: sqlite3.Row) -> Dict[str, Any]:

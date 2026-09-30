@@ -17,16 +17,18 @@
 from __future__ import annotations
 
 import os
+import json
 import hmac
 import hashlib
 import math
+import re
 import secrets
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from services.config import read_int_env
 
@@ -34,6 +36,9 @@ ROLE_PATIENT = "patient"
 ROLE_DOCTOR = "doctor"
 ROLE_GUEST = "guest"
 VALID_ROLES = (ROLE_PATIENT, ROLE_DOCTOR)
+DEPARTMENT_REVIEW_SCOPE = "department"
+GLOBAL_REVIEW_SCOPE = "all"
+GLOBAL_DEPARTMENT_CODE = "*"
 
 # 角色可访问的能力范围（后台鉴权依据，而非前端约定）
 ROLE_SCOPES: Dict[str, List[str]] = {
@@ -50,7 +55,7 @@ def _configured_accounts() -> Dict[str, Dict[str, str]]:
     """
     reviewer_label = ("授权审核医生" if os.getenv("APP_REVIEWER_MODE", "simulation").lower()
                       == "clinical" else "模拟审核员")
-    return {
+    accounts = {
         os.getenv("APP_PATIENT_USERNAME", "patient").strip(): {
             "password": os.getenv("APP_PATIENT_PASSWORD", ""),
             "password_hash": os.getenv("APP_PATIENT_PASSWORD_HASH", ""),
@@ -62,8 +67,46 @@ def _configured_accounts() -> Dict[str, Dict[str, str]]:
             "password_hash": os.getenv("APP_DOCTOR_PASSWORD_HASH", ""),
             "role": ROLE_DOCTOR,
             "label": reviewer_label,
+            "department_code": os.getenv("APP_DOCTOR_DEPARTMENT", "").strip(),
+            "access_scope": os.getenv(
+                "APP_DOCTOR_ACCESS_SCOPE", DEPARTMENT_REVIEW_SCOPE
+            ).strip().lower(),
         },
     }
+    raw_doctors = os.getenv("APP_DOCTOR_ACCOUNTS_JSON", "").strip()
+    if raw_doctors:
+        try:
+            configured_doctors = json.loads(raw_doctors)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("APP_DOCTOR_ACCOUNTS_JSON 必须是合法 JSON 数组") from exc
+        if not isinstance(configured_doctors, list):
+            raise ValueError("APP_DOCTOR_ACCOUNTS_JSON 必须是 JSON 数组")
+        for item in configured_doctors:
+            if not isinstance(item, dict):
+                raise ValueError("APP_DOCTOR_ACCOUNTS_JSON 的每项必须是对象")
+            username = str(item.get("username") or "").strip()
+            if not username:
+                raise ValueError("APP_DOCTOR_ACCOUNTS_JSON 的医生账号不能为空")
+            access_scope = str(
+                item.get("access_scope") or DEPARTMENT_REVIEW_SCOPE
+            ).strip().lower()
+            if access_scope not in (DEPARTMENT_REVIEW_SCOPE, GLOBAL_REVIEW_SCOPE):
+                raise ValueError(
+                    "APP_DOCTOR_ACCOUNTS_JSON 的 access_scope 必须是 department 或 all"
+                )
+            accounts[username] = {
+                "password": str(item.get("password") or ""),
+                "password_hash": str(item.get("password_hash") or ""),
+                "role": ROLE_DOCTOR,
+                "label": str(item.get("label") or "审核医生"),
+                "department_code": (
+                    GLOBAL_DEPARTMENT_CODE
+                    if access_scope == GLOBAL_REVIEW_SCOPE
+                    else str(item.get("department_code") or "").strip()
+                ),
+                "access_scope": access_scope,
+            }
+    return accounts
 
 @dataclass
 class Session:
@@ -73,12 +116,21 @@ class Session:
     username: str
     role: str
     label: str = ""
+    department_code: str = ""
+    department_name: str = ""
+    access_scope: str = DEPARTMENT_REVIEW_SCOPE
     created_at: str = ""
     expires_at: str = ""
     usage: Dict[str, int] = field(default_factory=dict, repr=False)
 
     def to_dict(self, include_token: bool = True) -> Dict[str, str]:
         data = {"username": self.username, "role": self.role, "label": self.label}
+        if self.department_code:
+            data["department_code"] = self.department_code
+        if self.department_name:
+            data["department_name"] = self.department_name
+        if self.access_scope == GLOBAL_REVIEW_SCOPE:
+            data["access_scope"] = GLOBAL_REVIEW_SCOPE
         if include_token:
             data["token"] = self.token
         return data
@@ -134,14 +186,18 @@ def verify_password(password: str, encoded: str) -> bool:
 
 
 class AuthService:
-    """内存会话服务（比赛版）。"""
+    """会话服务：账号可由内存夹具提供，也可由 SQLite Store 持久化。"""
 
     def __init__(self, ttl_hours: int = 12,
-                 accounts: Optional[Dict[str, Dict[str, str]]] = None) -> None:
+                 accounts: Optional[Dict[str, Dict[str, str]]] = None,
+                 store: Optional[Any] = None) -> None:
         self._sessions: Dict[str, Session] = {}
         self._lock = threading.Lock()
         self.ttl = timedelta(hours=ttl_hours)
         self.accounts = dict(accounts if accounts is not None else _configured_accounts())
+        self.store = store
+        if self.store is not None:
+            self._seed_store_accounts()
         self._login_failures: Dict[str, deque] = {}
         self._max_login_failures = read_int_env(
             "APP_LOGIN_MAX_FAILURES", 5, minimum=1, maximum=100
@@ -196,7 +252,7 @@ class AuthService:
             raise AuthRateLimitError(retry_after)
 
         if normalized_username:
-            account = self.accounts.get(normalized_username)
+            account = self._lookup_account(normalized_username)
             if not account:
                 self._record_login_failure(identity_keys)
                 raise AuthError("账号或密码不正确，请稍后重试")
@@ -214,7 +270,13 @@ class AuthService:
                 self._record_login_failure(identity_keys)
                 raise AuthError("账号或密码不正确，请稍后重试")
             self._clear_login_failures(identity_keys)
-            return self._create_session(normalized_username, account["role"], account["label"])
+            return self._create_session(
+                normalized_username,
+                account["role"],
+                account.get("label") or "",
+                department_code=account.get("department_code") or "",
+                access_scope=self._account_access_scope(account),
+            )
 
         if role:
             self._record_login_failure(identity_keys)
@@ -224,14 +286,23 @@ class AuthService:
         raise AuthError("请提供账号密码，或选择进入患者端 / 医生工作台")
 
     def _create_session(self, username: str, role: str, label: str,
-                        ttl: Optional[timedelta] = None) -> Session:
+                        ttl: Optional[timedelta] = None,
+                        department_code: str = "",
+                        access_scope: str = DEPARTMENT_REVIEW_SCOPE) -> Session:
         now = datetime.now()
         session_ttl = ttl or self.ttl
+        normalized_scope = self._normalize_access_scope(access_scope, department_code)
+        if normalized_scope == GLOBAL_REVIEW_SCOPE:
+            department_code = ""
+        department_name = self._department_name(department_code)
         session = Session(
             token=secrets.token_urlsafe(24),
             username=username,
             role=role,
             label=label,
+            department_code=department_code,
+            department_name=department_name,
+            access_scope=normalized_scope,
             created_at=now.isoformat(timespec="seconds"),
             expires_at=(now + session_ttl).isoformat(timespec="seconds"),
         )
@@ -275,7 +346,123 @@ class AuthService:
         return bool(session) and scope in session.scopes
 
     def is_reviewer_account(self, username: str) -> bool:
-        return bool(username) and (self.accounts.get(username) or {}).get("role") == ROLE_DOCTOR
+        account = self._lookup_account(username)
+        return bool(account) and account.get("role") == ROLE_DOCTOR \
+            and account.get("status", "active") == "active"
+
+    def has_global_case_access(self, session: Optional[Session]) -> bool:
+        """Return whether a doctor session is explicitly configured for all cases."""
+        return bool(session and session.role == ROLE_DOCTOR
+                    and session.access_scope == GLOBAL_REVIEW_SCOPE)
+
+    def register_patient(self, username: str, password: str, *, label: str = "") -> Session:
+        """创建患者账号并返回登录会话；医生角色不能通过此入口创建。"""
+        normalized = str(username or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{3,64}", normalized):
+            raise AuthError("用户名格式不正确")
+        if not isinstance(password, str) or not 8 <= len(password) <= 128:
+            raise AuthError("密码长度应为 8 到 128 个字符")
+        if self._lookup_account(normalized):
+            raise AuthError("username_taken")
+        safe_label = str(label or "").strip()[:32] or "就诊者"
+        password_hash = hash_password(password)
+        account = {
+            "password_hash": password_hash,
+            "role": ROLE_PATIENT,
+            "label": safe_label,
+            "department_code": "",
+            "status": "active",
+        }
+        if self.store is not None:
+            if not self.store.create_user(
+                normalized, password_hash, role=ROLE_PATIENT, label=safe_label,
+            ):
+                raise AuthError("username_taken")
+        else:
+            self.accounts[normalized] = account
+        return self._create_session(normalized, ROLE_PATIENT, safe_label)
+
+    def list_reviewer_accounts(self, department_code: str) -> List[Dict[str, str]]:
+        """返回指定科室的 active 医生，并包含显式配置的全量审核账号。"""
+        code = str(department_code or "").strip()
+        if self.store is not None:
+            records = self.store.list_users(
+                role=ROLE_DOCTOR, status="active"
+            )
+        else:
+            records = [
+                {"username": username, **account}
+                for username, account in self.accounts.items()
+                if account.get("role") == ROLE_DOCTOR
+                and account.get("status", "active") == "active"
+            ]
+        records = [
+            item for item in records
+            if self._account_access_scope(item) == GLOBAL_REVIEW_SCOPE
+            or item.get("department_code", "") == code
+        ]
+        return [
+            {
+                "username": str(item.get("username") or ""),
+                "label": str(item.get("label") or "审核医生"),
+                "department_code": str(item.get("department_code") or ""),
+                "access_scope": self._account_access_scope(item),
+            }
+            for item in records
+        ]
+
+    @staticmethod
+    def _normalize_access_scope(scope: Any, department_code: str = "") -> str:
+        value = str(scope or "").strip().lower()
+        if value == GLOBAL_REVIEW_SCOPE or str(department_code or "").strip() == GLOBAL_DEPARTMENT_CODE:
+            return GLOBAL_REVIEW_SCOPE
+        return DEPARTMENT_REVIEW_SCOPE
+
+    @classmethod
+    def _account_access_scope(cls, account: Optional[Dict[str, Any]]) -> str:
+        if not account:
+            return DEPARTMENT_REVIEW_SCOPE
+        return cls._normalize_access_scope(
+            account.get("access_scope"), account.get("department_code") or ""
+        )
+
+    def _lookup_account(self, username: str) -> Optional[Dict[str, Any]]:
+        account = self.accounts.get(username)
+        if account is not None:
+            return account
+        if self.store is not None:
+            return self.store.load_user(username)
+        return None
+
+    def _seed_store_accounts(self) -> None:
+        for username, account in self.accounts.items():
+            password_hash = account.get("password_hash") or ""
+            if not password_hash and account.get("password"):
+                password_hash = hash_password(str(account["password"]))
+            if not password_hash:
+                continue
+            self.store.create_user(
+                username,
+                password_hash,
+                role=account.get("role") or ROLE_PATIENT,
+                label=account.get("label") or "就诊者",
+                department_code=(
+                    GLOBAL_DEPARTMENT_CODE
+                    if self._account_access_scope(account) == GLOBAL_REVIEW_SCOPE
+                    else account.get("department_code") or ""
+                ),
+                status=account.get("status") or "active",
+            )
+
+    @staticmethod
+    def _department_name(code: str) -> str:
+        if not code:
+            return ""
+        try:
+            from services.department_domain import to_name
+            return to_name(code) or ""
+        except ImportError:
+            return ""
 
     def consume(self, session: Optional[Session], capability: str, limit: int) -> bool:
         """Atomically consume one per-session allowance without exposing counters to clients."""

@@ -39,7 +39,7 @@
 python -m venv .venv
 .\.venv\bin\python.exe -m pip install -r backend\requirements.txt
 
-# 2) 从模板创建本机配置；修改两个账号密码，不要提交 .env
+# 2) 从模板创建本机配置；修改预置账号密码，不要提交 .env
 Copy-Item .env.example .env
 # AI_API_KEY 可留空：未配置时直接完成纯规则链路，MDT 状态为 skipped，不启动后台模型任务
 
@@ -54,14 +54,32 @@ Set-Location backend
 | 患者端 | http://127.0.0.1:5000/patient | 录入 → 摘要 → 就诊后更新 |
 | 医生工作台 | http://127.0.0.1:5000/doctor | 病例审阅 → 逐条审核 → 发布审核版 |
 
-默认账号名为 `patient` / `doctor`，密码必须通过 `.env` 中的
+默认兼容账号名为 `patient` / `doctor`，密码必须通过 `.env` 中的
 `APP_PATIENT_PASSWORD` / `APP_DOCTOR_PASSWORD` 配置（也可使用 PBKDF2 的
-`APP_*_PASSWORD_HASH`）。代码中没有默认密码。完整病例接口始终需要账号会话。
+`APP_*_PASSWORD_HASH`）。患者也可以在患者端点击“注册患者账号”自助创建账号，注册成功后会自动登录；
+注册接口只会创建 `patient` 角色，不能通过请求体创建医生账号。代码中没有默认密码。
+
+医生账号由部署者预置，并绑定一个主责科室。单医生兼容账号使用 `APP_DOCTOR_DEPARTMENT`；多医生使用
+`APP_DOCTOR_ACCOUNTS_JSON`。配置 `access_scope=all` 的总审账号可以查看所有病例，其余医生按科室隔离，例如：
+
+```dotenv
+APP_DOCTOR_DEPARTMENT=endocrinology
+APP_DOCTOR_ACCOUNTS_JSON=[{"username":"chief_doctor","password":"replace-with-a-strong-password","label":"总审医生","access_scope":"all"},{"username":"doctor_eye","password":"replace-with-a-strong-password","label":"眼科医生","department_code":"ophthalmology"}]
+```
+
+`department_code` 必须来自系统科室域。患者确认主责科室并提交后，病例进入该科室医生和总审账号的授权范围；
+总审账号通过显式的全量审核范围读取所有病例，科室医生仍以逐病例 `case_access` 为后端权限边界，页面上的科室提示只是可见范围说明。
+完整病例接口始终需要账号会话。
 
 游客可通过 `POST /api/guest/session` 获取短期匿名令牌，再使用
 `/api/guest/preview` 和 `/api/guest/triage` 体验有限的规则链路。游客不创建病例、
 不调用 MDT、不生成审核版报告；会话、输入长度和次数均受限。游客不能把令牌用于
 `/api/v2/case/*`。
+
+患者提交审核前会看到系统建议的主责科室，也可以从标准临床科室中调整。提交后页面只显示“已提交至某科室，
+等待医生审核”，不显示医生账号。若目标科室暂时没有 active 医生，系统不会写入 submitted 路由，也不会把病例
+兜底暴露给其他科室。主责医生在 MDT 初筛中明确选择会诊科室后，才会为对应科室医生建立额外授权；没有医生的
+协同科室会记录为待分配。
 
 ### 必要安全配置
 
@@ -78,7 +96,8 @@ Set-Location backend
   `APP_PREVIEW_MAX_PER_USER=5` 个未消费凭证，全局最多保留 `APP_PREVIEW_MAX_TOTAL=5000` 个。
   达到上限时先清理过期项，再按创建顺序淘汰最早的未消费项；凭证仍绑定用户且只能消费一次。
 - 审核账号还必须获得逐病例授权；`APP_AUTO_ASSIGN_REVIEWER=false` 是默认安全配置，
-  仅在单审核员演示时显式设为 `true` 自动分配。
+  仅在单审核员演示时显式设为 `true` 自动分配，且自动分配仍按病例主责科室匹配医生，不能全局授权。
+- 患者注册按来源地址受 `APP_REGISTRATION_MAX_PER_HOUR` 限制；账号、病例、授权和路由审计都落在本地 SQLite。
 - 登录失败按账号与来源地址限流，并限制同一账号活跃会话数；普通凭据失败返回 JSON HTTP 401，
   使用统一的“账号或密码不正确，请稍后重试”提示；进入冷却期时返回 JSON HTTP 429、`code=rate_limited`
   和正整数 `Retry-After`。游客会话创建也有来源地址配额。
@@ -108,7 +127,7 @@ Set-Location backend
 
 ```
 录入资料 → 脱敏确认 → 结构化画像 + 智能追问 → 就医方向（S1→S2→S3）
-        → 就医路径与任务 → 多学科分析 → 一页摘要 / 完整报告
+        → 患者确认主责科室并提交审核 → 就医路径与任务 → 多学科分析 → 一页摘要 / 就医详情
         → 医生工作台逐条审核并发布审核版 → 就诊后资料更新 → 变化摘要
 ```
 
@@ -139,7 +158,7 @@ Set-Location backend
 | `services/path_service.py` / `task_service.py` | 就医路径与任务中心（显式状态机 + 留痕） |
 | `services/review_service.py` | 医生工作台：决策条目枚举、逐条审核状态、发布条件 |
 | `services/update_service.py` | 就诊后更新：受影响科室判定、缺口填补、变化摘要 |
-| `services/store.py` | SQLite 落盘：病例、审计日志、审核决策、状态流转 |
+| `services/store.py` | SQLite 落盘：用户、病例、科室授权、审计日志、审核决策、状态流转 |
 | `services/case_flow.py` | 编排接线层：把上述模块串成完整业务流程 |
 
 ### 存储与隐私
@@ -166,7 +185,7 @@ python verify_doctor_http.py                     # 医生工作台全流程 HTTP
 python eval_triage_v1.py                         # 分诊评测（规则 / 模型 / 完整链路三方法对比）
 ```
 
-- 回归测试覆盖：护栏、脱敏、鉴权与病例所有权、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、并发更新、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新、输入契约、HTTP 请求体限制、流式错误脱敏、验收脚本契约与旧病例分析恢复，以及 Phase 2 的日志、预览 token、登录限流和响应头回归；具体数量以冻结前实际运行结果为准；
+- 回归测试覆盖：护栏、脱敏、鉴权与病例所有权、患者注册、用户持久化、科室目录与病例分流、MDT 协作者授权、录入校验、画像抽取、依赖矩阵、追问、规则引擎、编排、并发更新、路径任务、多学科聚合、质询、证据、报告、任务状态机、审核、就诊后更新、输入契约、HTTP 请求体限制、流式错误脱敏、验收脚本契约与旧病例分析恢复，以及 Phase 2 的日志、预览 token、登录限流和响应头回归；具体数量以冻结前实际运行结果为准；
 - 分诊评测（自建小样本集，n=9）：完整链路 Macro 召回 **0.900**、纯规则 **0.872**，早期基线 0.447–0.513；
 - 完整报告结构完整性 13 / 13，无空段与占位。
 
