@@ -33,12 +33,18 @@
   #rev-body .item{margin-bottom:0;}
   /* 病例队列：单列表格，保证病例、风险和待办量在同一视觉层级 */
   .queue-table{border:1px solid var(--line);border-radius:var(--br-12);overflow:hidden;background:var(--gray-000);}
-  .queue-head,.queue-row{display:grid;grid-template-columns:minmax(180px,1.25fr) minmax(180px,1.5fr) 90px 92px 105px 112px 150px;gap:14px;align-items:center;padding:13px 16px;}
+  .queue-head,.queue-row{display:grid;grid-template-columns:minmax(180px,1.25fr) minmax(220px,1.7fr) 100px minmax(150px,1fr) 150px;gap:14px;align-items:center;padding:13px 16px;}
   #list-body{display:grid;grid-template-columns:1fr;}
   .queue-head{background:var(--gray-100);color:var(--ink3);font-size:var(--micro);font-weight:600;letter-spacing:.02em;}
-  .queue-row{border-top:1px solid var(--line);cursor:pointer;transition:background .15s ease,box-shadow .15s ease;}
+  .queue-entry{border-top:1px solid var(--line);}
+  .queue-row{cursor:pointer;transition:background .15s ease,box-shadow .15s ease;}
   .queue-row:hover{background:var(--surface-warm);box-shadow:inset 3px 0 0 var(--accent);}
   .queue-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
+  .queue-details{padding:0 16px 12px;background:var(--surface-subtle);}
+  .queue-details>summary{display:inline-flex;align-items:center;min-height:30px;color:var(--accent);font-size:var(--micro);cursor:pointer;}
+  .queue-details>summary:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:var(--br-6);}
+  .queue-details-body{display:flex;gap:10px;flex-wrap:wrap;padding-top:6px;}
+  .queue-detail{display:inline-flex;align-items:center;gap:5px;color:var(--ink2);font-size:var(--micro);}
   .q-id{font-weight:650;color:var(--ink);}.q-main{min-width:0;}.q-main .muted{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .q-risk{font-weight:650;}.q-risk.high{color:var(--danger);}.q-risk.medium{color:var(--warn);}.q-risk.low{color:var(--ok);}
   .queue-pager{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;flex-wrap:wrap;}
@@ -527,25 +533,26 @@ async function loadList(options){
   const rows = S.cases.map(c=>{
     const risk=String(c.risk_level||'low'), riskLabel={high:'高风险',medium:'中风险',low:'低风险'}[risk]||risk;
     const pending=Number(c.pending_items||0), exempt=Number(c.exempt_items||0);
-    const required=Number(c.required_items||0), sample=Number(c.sample_items||0), automatic=Number(c.automatic_items||0);
+    const required=Number(c.required_items!=null?c.required_items:pending), sample=Number(c.sample_items||0), automatic=Number(c.automatic_items||0);
     const highRisk=Number(c.high_risk_items||0), conflicts=Number(c.conflict_items||0), analysisFailed=Number(c.analysis_failed_items||0);
     const reopened=Array.isArray(c.reopened_item_ids)?c.reopened_item_ids.length:0;
     const reopenedLabels=Array.isArray(c.reopened_item_labels)?c.reopened_item_labels:[];
-    return `<div class="queue-row" tabindex="0" role="button" onclick="openCase('${esc(c.case_id)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCase('${esc(c.case_id)}')}">
+    return `<div class="queue-entry"><div class="queue-row" tabindex="0" role="button" onclick="openCase('${esc(c.case_id)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCase('${esc(c.case_id)}')}">
       <div class="q-id" data-label="病例">#${esc(c.case_id)}<div class="tiny">${esc(c.sex||'—')} · ${esc(c.age||'—')}</div></div>
-      <div class="q-main" data-label="主诉 / 牵头方向"><strong>${esc(c.primary_department||'待分诊')}</strong><div class="muted" title="${esc(c.chief_complaint||'')}">${esc(c.chief_complaint||'（未提供主诉）')}</div></div>
+      <div class="q-main" data-label="主诉 / 牵头科室"><strong>${esc(c.primary_department||'待分诊')}</strong><div class="muted" title="${esc(c.chief_complaint||'')}">${esc(c.chief_complaint||'（未提供主诉）')}</div></div>
       <div class="q-risk ${esc(risk)}" data-label="风险"><span class="pill ${risk==='high'?'danger':(risk==='medium'?'warn':'ok')}">${esc(riskLabel)}</span>${c.conflict_count?`<div class="tiny">分歧 ${esc(c.conflict_count)}</div>`:''}</div>
-      <div data-label="可靠性"><span class="pill ${c.reliability==='高'?'ok':(c.reliability==='中'?'warn':'danger')}">${esc(c.reliability||'—')}</span></div>
-      <div data-label="分析">${analysisBadge(c)}</div>
-      <div data-label="医生处理">${pending?`<span class="pill danger"><span class="dot"></span>必审 ${pending}</span>`:`<span class="pill ok">已处理</span>`}
-        <div class="tiny">必审 ${required} · 建议抽查 ${sample} · 自动处理 ${automatic}</div>
-        ${(highRisk||conflicts||analysisFailed)?`<div class="tiny">${highRisk?`高风险 ${highRisk}　`:''}${conflicts?`冲突 ${conflicts}　`:''}${analysisFailed?`分析失败 ${analysisFailed}`:''}</div>`:''}
-        ${exempt?`<div class="tiny">免审 ${exempt}</div>`:''}
-        ${reopened?`<div class="tiny" style="color:var(--warn);">资料更新重开 ${reopened} 项：${esc(reopenedLabels.join('、'))}</div>`:''}</div>
+      <div data-label="处理状态">${pending?`<span class="pill danger"><span class="dot"></span>待处理 ${pending}</span>`:`<span class="pill ok">${esc(c.case_state_label||'已处理')}</span>`}</div>
       <div class="tiny" data-label="更新">${esc(c.updated_at||c.created_at||'—')}<div>${esc(c.case_state_label||c.case_state||'')}</div></div>
-    </div>`;
+    </div><details class="queue-details" data-queue-details><summary>查看详情</summary><div class="queue-details-body">
+      <span class="queue-detail">可靠性：<span class="pill ${c.reliability==='高'?'ok':(c.reliability==='中'?'warn':'danger')}">${esc(c.reliability||'—')}</span></span>
+      <span class="queue-detail">分析：${analysisBadge(c)}</span>
+      <span class="queue-detail">必审 ${required} · 抽查 ${sample} · 自动 ${automatic}</span>
+      ${(highRisk||conflicts||analysisFailed)?`<span class="queue-detail">${highRisk?`高风险 ${highRisk}　`:''}${conflicts?`冲突 ${conflicts}　`:''}${analysisFailed?`分析失败 ${analysisFailed}`:''}</span>`:''}
+      ${exempt?`<span class="queue-detail">免审 ${exempt}</span>`:''}
+      ${reopened?`<span class="queue-detail" style="color:var(--warn);">资料更新重开 ${reopened} 项：${esc(reopenedLabels.join('、'))}</span>`:''}
+    </div></details></div>`;
   }).join('');
-  $('list-body').innerHTML = `<div class="queue-table"><div class="queue-head"><div>病例</div><div>主诉 / 牵头方向</div><div>风险</div><div>可靠性</div><div>分析</div><div>医生处理</div><div>更新</div></div>${rows}</div>`;
+  $('list-body').innerHTML = `<div class="queue-table"><div class="queue-head"><div>病例</div><div>主诉 / 牵头科室</div><div>风险</div><div>处理状态</div><div>更新</div></div>${rows}</div>`;
   renderPager();
 }
 

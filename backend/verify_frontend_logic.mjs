@@ -403,6 +403,10 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('队列显示自动处理条数', queue.includes('免审 2'), '');
   check('病例队列使用服务端分页元数据', el('list-pager').innerHTML.includes('共 2 例'), '');
   check('左轨改为筛选入口而非病例堆叠', !el('rail-filters').innerHTML.includes('CAAA1111'), '');
+  check('队列默认只显示五个核心字段',
+    ['病例','主诉 / 牵头科室','风险','处理状态','更新'].every(x=>queue.includes(x))
+    && !queue.includes('>可靠性</div>') && !queue.includes('>分析</div>'), queue);
+  check('队列保留低频详情入口', queue.includes('data-queue-details') && queue.includes('查看详情') && queue.includes('可靠性'), queue);
   const railFilters = el('rail-filters').innerHTML;
   const commonFilters = railFilters.split('<details')[0];
   check('队列默认只显示三个常用入口', (commonFilters.match(/class="filter-link /g)||[]).length === 3

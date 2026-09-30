@@ -271,8 +271,12 @@ class FrontendStructureTest(unittest.TestCase):
     def test_doctor_queue_cells_have_mobile_field_labels(self):
         """窄屏隐藏表头后，每个队列字段仍要带可见字段名。"""
         _, html = self.get("/doctor")
-        for label in ("病例", "主诉 / 牵头方向", "风险", "可靠性", "分析", "医生处理", "更新"):
+        for label in ("病例", "主诉 / 牵头科室", "风险", "处理状态", "更新"):
             self.assertIn(f'data-label="{label}"', html)
+        self.assertIn('data-queue-details', html)
+        self.assertIn("查看详情", html)
+        self.assertNotIn('data-label="可靠性"', html)
+        self.assertNotIn('data-label="分析"', html)
 
     def test_doctor_review_template_exposes_auto_processed_group(self):
         _, html = self.get("/doctor")
