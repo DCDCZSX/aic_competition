@@ -458,8 +458,15 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     && triage.includes('triage-department-item') && triage.includes('依据：'), triage);
   D.renderMdt();
   const mdt = el('mdt-body').innerHTML;
-  check('MDT 默认突出共识分歧待确认',
-    ['共识','分歧','待确认问题'].every(x=>mdt.includes(x)) && mdt.includes('专科意见'), mdt);
+  check('MDT 结果区突出共识分歧待确认',
+    ['MDT 结果','共识','分歧','待确认问题'].every(x=>mdt.includes(x)), mdt);
+  check('MDT 过程直接展示为四步',
+    ['MDT 过程','独立研判','分歧识别','质询与补答','形成结果'].every(x=>mdt.includes(x))
+      && (mdt.match(/mdt-process-step/g)||[]).length === 4, mdt);
+  check('MDT 不重复展示患者画像和证据侧栏',
+    !mdt.includes('左栏 · 患者画像') && !mdt.includes('右栏 · 证据与裁决'), mdt);
+  check('MDT 不再使用播放过程交互',
+    !doctorHtml.includes('播放过程') && !doctorHtml.includes('mdt-note'), '');
 
   D.S.caseId = 'CAAA1111';
   D.S.review = {

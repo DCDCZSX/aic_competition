@@ -82,6 +82,28 @@
   .publish-inline{display:block;}
   .doctor-decision-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:var(--sp-16);}
   .doctor-decision-summary>div{padding:12px 14px;background:var(--surface-subtle);border-radius:var(--br-8);}
+  .mdt-results{display:grid;gap:var(--sp-16);}
+  .mdt-result-section{padding-top:var(--sp-4);}
+  .mdt-result-section h4,.mdt-process h3{margin:0 0 8px;font-size:var(--body-1);}
+  .mdt-result-list{display:grid;gap:6px;}
+  .mdt-result-item{padding:10px 12px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--gray-000);}
+  .mdt-result-item strong{font-weight:650;color:var(--ink);}
+  .mdt-result-item p{margin:4px 0 0;color:var(--ink2);font-size:var(--body-3);line-height:1.55;}
+  .mdt-result-item.question{border-left:3px solid var(--warn);}
+  .mdt-result-empty{padding:10px 0;color:var(--ink3);font-size:var(--body-3);}
+  .mdt-process{border-top:1px solid var(--line);padding-top:var(--sp-16);}
+  .mdt-process-list{display:grid;gap:0;margin:0;padding:0;list-style:none;}
+  .mdt-process-step{display:grid;grid-template-columns:32px minmax(0,1fr);gap:12px;position:relative;padding:0 0 var(--sp-16);}
+  .mdt-process-step:not(:last-child)::after{content:"";position:absolute;left:15px;top:32px;bottom:0;width:1px;background:var(--line);}
+  .mdt-process-marker{z-index:1;display:grid;place-items:center;width:30px;height:30px;border:1px solid var(--line);border-radius:50%;background:var(--gray-000);color:var(--accent);font-weight:650;font-size:var(--body-3);}
+  .mdt-process-content{min-width:0;padding:2px 0 0;}
+  .mdt-process-content h4{margin:0;font-size:var(--body-1);font-weight:650;}
+  .mdt-process-content>.tiny{margin:3px 0 8px;}
+  .mdt-specialty-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;}
+  .mdt-specialty-item{padding:10px 12px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--surface-subtle);}
+  .mdt-specialty-item .tiny{margin-top:4px;line-height:1.5;}
+  .mdt-process-note{padding:10px 12px;border-radius:var(--br-8);background:var(--surface-subtle);color:var(--ink2);font-size:var(--body-3);}
+  @media (max-width:720px){.mdt-specialty-list{grid-template-columns:1fr;}}
   .triage-department-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px;border-top:1px solid var(--line);margin-bottom:var(--sp-16);}
   .triage-department-item{padding:12px 2px;border-bottom:1px solid var(--line);}
   .triage-department-item .tiny{margin-top:5px;max-width:var(--text-width-body);font-size:var(--body-3);color:var(--ink2);}
@@ -299,9 +321,7 @@
 
       <section id="s-mdt" class="card hide">
         <h2>多学科会诊审阅</h2>
-        <div class="tiny" style="margin-bottom:8px;">独立研判 → 分歧 → 质询 → 补答。本页只显示"哪些判断被质疑、缺什么证据、是否维持"，不显示任何概率或置信度数字。</div>
-        <div style="margin-bottom:10px;"><button class="mini" onclick="playMdt()">▶ 播放过程</button>
-          <span class="tiny" id="mdt-note"></span></div>
+        <div class="tiny" style="margin-bottom:var(--sp-16);">先看会诊结果，再按时间顺序查看形成过程；不重复展示总览中的患者画像和完整证据。</div>
         <div id="mdt-body"></div>
       </section>
 
@@ -947,141 +967,62 @@ function renderEvidence(){
     </details>`;
 }
 
-/* ===================== 屏 E：MDT 三栏审阅台 ===================== */
+/* ===================== 屏 E：MDT 结果与过程 ===================== */
 function renderMdt(){
-  const p = S.caseData.payload||{}, prof = p.profile||{}, t = p.triage||{}, mdt = p.mdt||{};
+  const mdt = (S.caseData.payload||{}).mdt||{};
   const cards = mdt.analyses||mdt.cards||[];
   const agg = mdt.aggregation||{};
   const challenge = mdt.challenge||{};
-  const selected = t.selected||[];
+  const consensus = agg.consensus||[];
+  const disagreements = agg.disagreements||[];
+  const openQuestions = [...new Set((agg.open_questions||[]).map(q=>String(q||'').trim()).filter(Boolean))];
+  const uncertainties = [...new Set((agg.uncertainties||[]).map(u=>String(u&&u.topic||u||'').trim()).filter(Boolean))];
+  const questionItems = [...openQuestions, ...uncertainties.filter(u=>!openQuestions.includes(u))];
+  const challengeQuestions = challenge.questions||[];
+  const consensusHtml = consensus.length ? consensus.map(c=>`<div class="mdt-result-item"><strong>${esc(c.topic||'')}</strong><p>${esc((c.supporters||[]).join('、')||'多学科一致')}</p></div>`).join('') : '<div class="mdt-result-empty">暂无共识记录</div>';
+  const disagreementHtml = disagreements.length ? disagreements.map(d=>`<div class="mdt-result-item"><strong>${esc(d.topic||'未命名分歧')}</strong><p>${Object.entries(d.positions||{}).map(([k,v])=>esc(k)+'：'+esc(v)).join('；')||'各科意见待补充'}</p>${d.resolving_info?`<p class="muted">处理方式：${esc(d.resolving_info)}</p>`:''}</div>`).join('') : '<div class="mdt-result-empty">暂无分歧记录</div>';
+  const questionHtml = questionItems.length ? questionItems.map((q,i)=>`<div class="mdt-result-item question"><strong>${i+1}. ${esc(q)}</strong></div>`).join('') : '<div class="mdt-result-empty">暂无待确认问题</div>';
+  const specialtyHtml = cards.length ? cards.map(c=>{
+    const name = c.specialty_name||c.department||'未命名科室';
+    if(c.status==='unavailable') return `<div class="mdt-specialty-item"><strong>${esc(name)}</strong><div class="tiny" style="color:var(--warn);">本次未完成分析：${esc(c.error||'原因未知')}</div></div>`;
+    const facts = (c.facts||[]).slice(0,2).join('；');
+    const inferences = (c.inferences||[]).slice(0,2).map(i=>i.text||i).join('；');
+    const checks = (c.checks||[]).slice(0,2).map(k=>k.content||k).join('；');
+    return `<div class="mdt-specialty-item"><strong>${esc(name)}</strong>${facts?`<div class="tiny">事实：${esc(facts)}</div>`:''}${inferences?`<div class="tiny">判断：${esc(inferences)}</div>`:''}${checks?`<div class="tiny">需确认：${esc(checks)}</div>`:''}${c.notice?`<div class="tiny" style="color:var(--warn);">说明：${esc(c.notice)}</div>`:''}</div>`;
+  }).join('') : '<div class="mdt-process-note">本例未运行多学科分析。</div>';
+  const disagreementProcess = disagreements.length ? `<div class="mdt-process-note">识别到 ${disagreements.length} 条方向性分歧，已在上方结果中按主题汇总。</div>` : '<div class="mdt-process-note">未检出方向性分歧，直接进入结果聚合。</div>';
+  const challengeProcess = challengeQuestions.length ? challengeQuestions.map(q=>`<div class="mdt-result-item"><strong>${esc(q.question||q)}</strong><p>${q.answered?'已补答：'+esc(q.outcome||'结论待医生裁决'):'待补答'}</p></div>`).join('') : '<div class="mdt-process-note">本例未触发质询。</div>';
   $('mdt-body').innerHTML = `
-    <div class="doctor-decision-summary">
-      <div><div class="muted">共识</div><strong>${(agg.consensus||[]).length} 条</strong></div>
-      <div><div class="muted">分歧</div><span class="pill ${(agg.disagreements||[]).length?'danger':'ok'}">${(agg.disagreements||[]).length} 条</span></div>
-      <div><div class="muted">待确认问题</div><span class="pill ${(agg.open_questions||[]).length?'warn':'gray'}">${(agg.open_questions||[]).length} 条</span></div>
-    </div>
-    <section class="doctor-result-section"><h3>共识</h3>
-      ${(agg.consensus||[]).map(c=>`<p>${esc(c.topic||'')} <span class="muted">${esc((c.supporters||[]).join('、'))}</span></p>`).join('')||'<p class="muted">暂无共识记录</p>'}
-    </section>
-    <section class="doctor-result-section"><h3>分歧</h3>
-      ${(agg.disagreements||[]).map(d=>`<div class="doctor-result-row"><strong>${esc(d.topic||'')}</strong><p>${Object.entries(d.positions||{}).map(([k,v])=>esc(k)+'：'+esc(v)).join('；')}</p><p class="muted">${esc(d.resolving_info||'')}</p></div>`).join('')||'<p class="muted">暂无分歧记录</p>'}
-    </section>
-    <section class="doctor-result-section"><h3>待确认问题</h3>
-      ${(agg.open_questions||[]).map(q=>`<p>${esc(q)}</p>`).join('')||'<p class="muted">暂无待确认问题</p>'}
-      ${(agg.uncertainties||[]).map(u=>`<p class="muted">不确定：${esc(u.topic||'')}</p>`).join('')}
-    </section>
-    <details class="doctor-disclosure">
-      <summary>查看专科意见与 MDT 过程</summary>
-      <div class="doctor-disclosure-body"><div class="mdt">
-      <div class="col">
-        <div class="rt" style="font-weight:600;">左栏 · 患者画像（客观资料）</div>
-        <div class="field"><div class="muted" style="min-width:66px;">主诉</div><div style="flex:1;">${esc(prof.chief_complaint||'—')}</div></div>
-        ${(prof.symptoms_timeline||[]).map(s=>`<div class="field"><div style="flex:1;">${esc(s.symptom)} ${esc(s.onset||'')}</div></div>`).join('')}
-        ${(prof.exams||[]).map(e=>`<div class="field"><div style="flex:1;">${esc(e.item)} ${esc(e.value||'')}</div>
-          ${(e.source_refs||[]).map(x=>`<span class="ref">${esc(x)}</span>`).join('')}</div>`).join('')}
-        <h3>信息缺口</h3>${(p.gaps||[]).length?p.gaps.map(g=>`<div class="tiny">· ${esc(g)}</div>`).join(''):'<div class="tiny">（无）</div>'}
+    <section class="mdt-results" aria-labelledby="mdt-results-title">
+      <h3 id="mdt-results-title">MDT 结果</h3>
+      <div class="doctor-decision-summary">
+        <div><div class="muted">共识</div><strong>${consensus.length} 条</strong></div>
+        <div><div class="muted">分歧</div><span class="pill ${disagreements.length?'danger':'ok'}">${disagreements.length} 条</span></div>
+        <div><div class="muted">待确认问题</div><span class="pill ${questionItems.length?'warn':'gray'}">${questionItems.length} 条</span></div>
       </div>
-      <div class="col mid">
-        <div class="rt" style="font-weight:600;">中栏 · MDT 工作台（过程）</div>
-        <div class="round" data-step="1">
-          <div class="rt">第 1 轮：独立研判（互相不可见，仅基于画像）</div>
-          ${cards.length?cards.map(c=>{
-             if(c.status==='unavailable'){
-               return `<div class="opcard"><strong>${esc(c.department||'')}</strong>
-                 <div class="tiny" style="color:var(--warn);">本次未完成分析（${esc(c.error||'原因未知')}）
-                 —— 不影响其余科室，可在病例列表用「批量补齐分析」重跑该例</div></div>`;
-             }
-             return `<div class="opcard"><strong>${esc(c.specialty_name||c.department||'')}</strong>
-             <div class="tiny">事实：${esc((c.facts||[]).slice(0,2).join('；')||'—')}</div>
-             ${(c.inferences||[]).slice(0,2).map(i=>`<div class="tiny">推断：${esc(i.text||i)} <span class="pill info">AI 推断</span></div>`).join('')}
-             ${(c.checks||[]).slice(0,2).map(k=>`<div class="tiny">建议向医生确认是否需要：${esc(k.content||k)}</div>`).join('')}
-             ${c.notice?`<div class="tiny" style="color:var(--warn);">说明：${esc(c.notice)}</div>`:''}
-           </div>`;}).join(''):'<div class="tiny">本例未运行多专科分析（未配置模型或无需 MDT）</div>'}
-        </div>
-        <div class="round" data-step="2">
-          <div class="rt">分歧</div>
-          ${(agg.disagreements||[]).length?agg.disagreements.map(d=>`<div class="opcard">${esc(d.topic||'')}
-            <div class="tiny">${Object.entries(d.positions||{}).map(([k,v])=>esc(k)+'：'+esc(v)).join('　')}</div>
-            <div class="tiny">${esc(d.resolving_info||'')}</div>
-            <button class="mini" onclick="addToQuestions('${esc((d.topic||'').replace(/'/g,""))}')">加入待确认问题</button></div>`).join('')
-            :'<div class="tiny">未检出方向性分歧</div>'}
-        </div>
-        <div class="round" data-step="3">
-          <div class="rt">质询（第 2 轮）</div>
-          ${challenge.questions&&challenge.questions.length?challenge.questions.map(q=>`<div class="opcard">Q：${esc(q.question||q)}
-            ${q.answered?'<div class="tiny">→ 各科已补答，结论：'+esc(q.outcome||'待医生裁决')+'</div>':'<div class="tiny">→ 待补答</div>'}</div>`).join('')
-            :'<div class="tiny">本例未触发质询（仅在存在分歧/低置信推断时按需触发）</div>'}
-          ${(challenge.notes||[]).map(n=>`<div class="tiny">· ${esc(n)}</div>`).join('')}
-        </div>
-        <div class="round" data-step="4">
-          <div class="rt">聚合结论（共识 / 不确定性 / 待确认）</div>
-          ${(agg.consensus||[]).map(c=>`<div class="tiny">共识：${esc(c.topic||'')}（${esc((c.supporters||[]).join('、'))}）</div>`).join('')}
-          ${(agg.uncertainties||[]).map(u=>`<div class="tiny">不确定：${esc(u.topic||'')}</div>`).join('')}
-          ${(agg.open_questions||[]).map(q=>`<div class="tiny">待确认：${esc(q)}</div>`).join('')}
-        </div>
-      </div>
-      <div class="col">
-        <div class="rt" style="font-weight:600;">右栏 · 证据与裁决</div>
-        <div class="opcard"><strong>支持证据</strong>
-          ${((p.evidence||{}).judgements||[]).slice(0,3).map(j=>`<div class="tiny">· ${esc(j.judgement||'')}</div>`).join('')||'<div class="tiny">（证据请在审核条目中核对）</div>'}</div>
-        <div class="opcard"><strong>反对证据 / 不足</strong>
-          <div class="tiny">${(p.gaps||[]).slice(0,3).map(g=>'· 缺：'+esc(g)).join('<br>')||'· 无'}</div>
-          <div class="tiny muted">外部依据仅认白名单教材/共识；未命中时显示"暂无可靠外部依据"，不伪造文献。</div></div>
-        <div class="opcard"><strong>争议点</strong>
-          <div class="tiny">${(agg.disagreements||[]).length?agg.disagreements.length+' 条（见中栏）':'无'}</div></div>
-        <div class="opcard"><strong>待医生裁决</strong>
-          <div class="tiny">${(S.review&&S.review.summary&&S.review.summary.pending)||0} 条决策条目待审</div>
-          <button class="mini primary" onclick="go('review')">去逐条审核</button></div>
-        ${(S.review&&S.review.doctor_opinions||[]).length?`<div class="opcard"><strong>已录入线下医生意见</strong>
-          ${S.review.doctor_opinions.map(o=>`<div class="tiny">${esc(o.department||'')}：${esc(o.opinion||'')} ${o.is_verified?'<span class="pill ok">医生上传</span>':'<span class="pill warn">待确认</span>'}</div>`).join('')}</div>`:''}
-      </div>
-      </div></div>
-    </details>`;
-  document.querySelectorAll('#mdt-body [data-step]').forEach(el=>el.style.display='none');
-  $('mdt-note').textContent = '已暂停（点「播放过程」按顺序展开：独立研判 → 分歧 → 质询 → 聚合）';
+      <section class="mdt-result-section"><h4>共识</h4><div class="mdt-result-list">${consensusHtml}</div></section>
+      <section class="mdt-result-section"><h4>分歧</h4><div class="mdt-result-list">${disagreementHtml}</div></section>
+      <section class="mdt-result-section"><h4>待确认问题</h4><div class="mdt-result-list">${questionHtml}</div></section>
+    </section>
+    <section class="mdt-process" aria-labelledby="mdt-process-title">
+      <h3 id="mdt-process-title">MDT 过程</h3>
+      <ol class="mdt-process-list">
+        <li class="mdt-process-step"><div class="mdt-process-marker">1</div><div class="mdt-process-content"><h4>独立研判</h4><div class="tiny">各专科基于同一份病例资料独立分析。</div><div class="mdt-specialty-list">${specialtyHtml}</div></div></li>
+        <li class="mdt-process-step"><div class="mdt-process-marker">2</div><div class="mdt-process-content"><h4>分歧识别</h4><div class="tiny">比较各专科的判断，定位需要协商的主题。</div>${disagreementProcess}</div></li>
+        <li class="mdt-process-step"><div class="mdt-process-marker">3</div><div class="mdt-process-content"><h4>质询与补答</h4><div class="tiny">针对分歧或信息不足发起补充确认。</div><div class="mdt-result-list">${challengeProcess}</div></div></li>
+        <li class="mdt-process-step"><div class="mdt-process-marker">4</div><div class="mdt-process-content"><h4>形成结果</h4><div class="mdt-process-note">结果已聚合，上方“MDT 结果”展示最终共识、分歧和待确认问题。</div></div></li>
+      </ol>
+    </section>`;
 }
-function playMdt(){
-  const steps = document.querySelectorAll('#mdt-body [data-step]');
-  steps.forEach(el=>el.style.display='none');
-  S.mdtPlayback = {steps:Array.from(steps), index:0};
-  startMdtPlayback();
-}
-function startMdtPlayback(){
-  clearInterval(S.mdtTimer);
-  if(!S.mdtPlayback) return;
-  if(document.visibilityState === 'hidden'){
-    $('mdt-note').textContent = '页面不可见，已暂停';
-    return;
-  }
-  $('mdt-note').textContent = '播放中…';
-  S.mdtTimer = setInterval(()=>{
-    if(document.visibilityState === 'hidden'){
-      clearInterval(S.mdtTimer); S.mdtTimer=null;
-      $('mdt-note').textContent = '页面不可见，已暂停';
-      return;
-    }
-    const playback = S.mdtPlayback;
-    if(!playback || playback.index >= playback.steps.length){
-      clearInterval(S.mdtTimer); S.mdtTimer=null;
-      $('mdt-note').textContent = '播放完毕';
-      return;
-    }
-    playback.steps[playback.index].style.display='block';
-    playback.index += 1;
-  }, 900);
-}
-document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState === 'visible' && S.mdtPlayback
-      && S.mdtPlayback.index < S.mdtPlayback.steps.length){
-    startMdtPlayback();
-  }
-});
 function addToQuestions(topic){
   const box = $('rev-summary-inline');
   if(!box) return;
   S.extraQuestion = topic;
   go('review');
 }
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'hidden') clearInterval(S.mdtTimer);
+});
 
 /* ===================== 屏 F：逐条审核 ===================== */
 function renderReview(){
