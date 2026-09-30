@@ -245,8 +245,8 @@ class FrontendStructureTest(unittest.TestCase):
         _, html = self.get("/doctor")
         self.assertIn('href="/static/css/dsh.css"', html)
         self.assertEqual(html.count('class="rail rail-left"'), 1)
-        self.assertEqual(html.count('class="rail rail-right"'), 1)
-        for anchor in ('id="rail-filters"', 'id="rev-summary"', 'id="rev-publish"',
+        self.assertNotIn('class="rail rail-right"', html)
+        for anchor in ('id="rail-filters"', 'id="rev-summary-inline"', 'id="rev-publish-inline"',
                        'id="rev-bar"', 'id="nav"', 'class="doctor-case-header"',
                        'class="doctor-case-nav', 'class="doctor-case-main"'):
             self.assertIn(anchor, html, f"医生工作台缺少 {anchor}")
@@ -258,6 +258,7 @@ class FrontendStructureTest(unittest.TestCase):
         # 详情页的五个主要任务必须有统一导航入口
         for task in ("overview", "triage", "evidence", "mdt", "review"):
             self.assertIn(f'data-s="{task}"', html)
+        self.assertIn('class="review-help"', html)
         self.assertNotIn("--blue", html)
 
     def test_doctor_queue_has_server_pagination_controls(self):
@@ -654,15 +655,15 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="rev-publish-inline"', review.group(0),
                       "发布入口必须有主区镜像，不能只在右轨里")
         self.assertIn("publishPanelHtml", html)
-        self.assertIn("publishPanelHtml(sum, canPublish, 'rail')", html)
+        self.assertNotIn("publishPanelHtml(sum, canPublish, 'rail')", html)
         self.assertIn("publishPanelHtml(sum, canPublish, 'inline')", html)
         self.assertNotIn('id="op-text"', html, "线下意见输入框 id 应带前缀，避免两处重复 id")
 
         _, css = self.get("/static/css/dsh.css")
         packed = css.replace(" ", "")
         self.assertIn(".rail-right{display:none;}", packed)
-        self.assertIn("@media(min-width:1440px){.publish-inline{display:none;}}", packed,
-                      "宽屏才隐藏主区镜像（此时右轨常驻）")
+        self.assertIn(".publish-inline{display:block;}", html,
+                      "医生端所有宽度都保留唯一主区发布入口")
 
 
 if __name__ == "__main__":

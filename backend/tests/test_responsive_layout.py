@@ -40,7 +40,7 @@ CRITICAL_ACTIONS = {
         ("就诊后资料更新", "#upd-content", None),
     ],
     "/doctor": [
-        ("发布审核版 + 录入线下意见", "#rev-publish", "#rev-publish-inline"),
+        ("发布审核版 + 录入线下意见", "#rev-publish-inline", None),
         ("逐条审核条目与操作按钮", "#rev-body", None),
         ("病例列表（切病例）", "#list-body", None),
         ("审阅视图导航", ".view-nav", None),
@@ -305,6 +305,14 @@ class ResponsiveLayoutTest(unittest.TestCase):
         self.assertEqual(
             declarations_at(rules, ".shell.has-case", 1920).get("grid-template-columns"),
             "minmax(0,1fr)",
+        )
+
+    def test_doctor_review_stays_single_column_on_wide_screens(self):
+        """审核分组按上下顺序阅读，宽屏也不能重新变成左右两列。"""
+        _html, rules = self.page("/doctor")
+        self.assertEqual(
+            declarations_at(rules, "#rev-body", 1920).get("grid-template-columns"),
+            "1fr",
         )
 
     def test_narrow_screens_shrink_page_padding(self):

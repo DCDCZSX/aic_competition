@@ -360,7 +360,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 /* ----------------------------------------------------- 医生工作台断言 */
 {
   const doctorHtml = fs.readFileSync(path.join(TPL, 'doctor.html'), 'utf8');
-  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage };');
+  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage };');
   const D = globalThis.__D;
   check('病例详情导航只突出主要任务',
     ['overview','triage','evidence','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`)), '');
@@ -461,7 +461,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.renderReview();
   check('审核进度条按医生处理与自动处理合计', el('rev-bar').style.width === '60%', el('rev-bar').style.width);
   check('审核进度说明区分医生与自动处理', el('rev-note').textContent.includes('医生处理 6') && el('rev-note').textContent.includes('免审自动 0'), el('rev-note').textContent);
-  check('右轨审核面板有内容', el('rev-summary').innerHTML.includes('共 10 条'), '');
+  check('主区审核摘要有内容', el('rev-summary-inline').innerHTML.includes('共 10 条'), '');
 
   /* 发布入口必须"两处都有"：≥1440px 右轨常驻，<1440px 右轨被 CSS 隐藏 → 屏 F 主区兜底
      （真实缺陷：入口只在右轨里，1366/1280 屏上医生审完发不出去） */
@@ -473,17 +473,19 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     summary: { total: 1, pending: 1, human_touched: 0, doctor_reviewed: 0, auto_processed: 0, by_state: { awaiting: 1 } },
   };
   D.renderReview();
-  const railPub = el('rev-publish').innerHTML;
   const inlinePub = el('rev-publish-inline').innerHTML;
-  check('右轨渲染发布面板', railPub.includes('确认发布审核版') && railPub.includes('录入线下实际意见'), '');
-  check('主区镜像渲染同一份发布面板（窄屏右轨被隐藏时仍可发布）',
+  check('发布与意见录入不再依赖右轨', !doctorHtml.includes('class="rail rail-right"') && inlinePub.includes('录入线下实际意见'), '');
+  check('主区渲染发布面板',
     inlinePub.includes('确认发布审核版') && inlinePub.includes('处理剩余必审并发布'), '');
-  check('仍有待审条目时发布按钮禁用', railPub.includes('disabled') && inlinePub.includes('disabled'), '');
-  check('两处入口 id 不重复（用前缀区分）',
-    railPub.includes('id="rail-op-text"') && inlinePub.includes('id="inline-op-text"')
+  check('仍有待审条目时发布按钮禁用', inlinePub.includes('disabled'), '');
+  check('审核条目默认折叠非必要信息',
+    el('rev-body').innerHTML.includes('查看审核详情') && el('rev-body').innerHTML.includes('分级依据'), el('rev-body').innerHTML);
+  check('审核须知使用折叠区', doctorHtml.includes('class="review-help"') && doctorHtml.includes('审核须知'), '');
+  check('唯一发布入口使用一致的输入前缀',
+    inlinePub.includes('id="inline-op-text"')
     && !inlinePub.includes('id="op-text"'), '');
   check('镜像里的录入按钮带自己的前缀（不会写进另一处输入框）',
-    inlinePub.includes("submitOpinion('inline')") && railPub.includes("submitOpinion('rail')"), '');
+    inlinePub.includes("submitOpinion('inline')"), '');
 
   D.S.review = {
     items: [{ item_id: 'AUTO-1', title: '路径步骤：常规准备', target_type: 'path_step',
@@ -496,6 +498,14 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.renderReview();
   check('详情页单独折叠免审自动分组', el('rev-body').innerHTML.includes('免审（自动）') && el('rev-body').innerHTML.includes('auto_processed'), '');
   check('免审条目提供接管入口而非强制医生逐条确认', el('rev-body').innerHTML.includes('接管并确认'), '');
+
+  D.S.audit = { report_version:2, review:{published:true, published_by:'总审医生', published_at:'2026-09-30'},
+    versions:[{version:2, published_by:'总审医生', published_at:'2026-09-30', review_summary:{disagreements:0}}],
+    decisions:[{action_label:'接受', target_label:'科室入选', target_id:'IT-1', content_revision:2, reviewer:'总审医生', created_at:'2026-09-30', before:'AI 原稿', after:'医生版本', reason:'资料充分'}],
+    timeline:[{at:'2026-09-30', event:'发布审核版', detail:'完成逐条审核'}], items:[{title:'科室入选', state:'confirmed', state_label:'已接受'}] };
+  D.renderHistory();
+  const history = el('hist-body').innerHTML;
+  check('历史记录默认只显示版本摘要', history.includes('变更摘要') && history.includes('查看变更详情'), history);
 }
 
 /* ------------------------------------------------------------------ 输出 */

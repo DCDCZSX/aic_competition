@@ -29,7 +29,6 @@
   .view-nav a.dis,.view-nav .nav-link.dis{color:var(--ink3);cursor:not-allowed;}
   /* 屏幕 E：三栏工作台已有通用 .mdt；屏幕 F：条目两列铺开 */
   #rev-body{display:grid;gap:var(--sp-12);grid-template-columns:1fr;}
-  @media (min-width:1280px){ #rev-body{grid-template-columns:repeat(2,minmax(0,1fr));}}
   #rev-body .item{margin-bottom:0;}
   /* 病例队列：单列表格，保证病例、风险和待办量在同一视觉层级 */
   .queue-table{border:1px solid var(--line);border-radius:var(--br-12);overflow:hidden;background:var(--gray-000);}
@@ -70,17 +69,23 @@
   .shell.has-case .rail-left,.shell.has-case .rail-right{display:none;}
   .shell.has-case .work{grid-column:1;}
   .doctor-queue-mode .doctor-case-header,.doctor-queue-mode .doctor-case-nav{display:none;}
-  .shell.has-case .publish-inline{display:block;}
+  .publish-inline{display:block;}
   .doctor-decision-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:var(--sp-16);}
   .doctor-decision-summary>div{padding:12px 14px;background:var(--surface-subtle);border-radius:var(--br-8);}
   .doctor-primary-task{padding:14px 16px;margin-bottom:var(--sp-16);border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
-  .section-kicker{font-family:var(--font-mono);font-size:var(--micro);letter-spacing:.06em;color:var(--accent);margin-bottom:6px;}
   .doctor-disclosure{border-top:1px solid var(--line);padding:0 2px;}
   .doctor-disclosure+ .doctor-disclosure{margin-top:var(--sp-8);}
   .doctor-disclosure>summary{padding:12px 4px;color:var(--ink2);font-weight:600;cursor:pointer;}
   .doctor-disclosure>summary:hover{color:var(--ink);}
   .doctor-disclosure>summary:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:var(--br-6);}
   .doctor-disclosure-body{padding:0 2px var(--sp-8);}
+  .history-version{padding:14px 0;border-top:1px solid var(--line);}
+  .history-version:first-child{border-top:0;}
+  .history-version h4{margin:14px 0 6px;font-size:var(--body-3);color:var(--ink2);}
+  .review-progress-inline{margin-bottom:var(--sp-16);padding:12px 14px;background:var(--surface-subtle);border-radius:var(--br-8);}
+  .review-help{margin-top:var(--sp-16);border-top:1px solid var(--line);padding-top:var(--sp-8);}
+  .review-help>summary{padding:8px 0;color:var(--ink2);font-size:var(--body-3);cursor:pointer;}
+  .review-help-body{padding:4px 0;}
   @media (max-width:1100px){
     .queue-head{display:none;}.queue-row{grid-template-columns:1fr 1fr;gap:8px 12px;padding:14px;}
     .queue-row>div{display:flex;align-items:baseline;gap:8px;min-width:0;}
@@ -207,9 +212,7 @@
     <main class="work">
       <div class="doctor-case-header">
         <div>
-          <div class="rail-title" style="padding:0;">病例工作台</div>
-          <h1 style="margin-top:6px;">从病例概况到审核发布</h1>
-          <p class="lede muted">只在当前任务中展示必要信息，完整依据和审计记录按需展开。</p>
+          <h1 id="case-heading">病例审阅</h1>
         </div>
         <button type="button" class="ghost btn-sm" onclick="go('list')">返回病例队列</button>
       </div>
@@ -278,10 +281,18 @@
         <h2>报告审核</h2>
         <div class="banner gray" id="pub-badge">AI 生成 · 尚未经医生审核</div>
         <div id="review-task-banner" class="banner info hide" role="status" aria-live="polite"></div>
+        <div id="rev-summary-inline" class="review-progress-inline"></div>
         <div id="rev-body"></div>
-        <!-- 发布入口的**主区镜像**：<1440px 时右轨被 dsh.css 收起（.rail-right），
-             发布与"录入线下意见"不能只活在右轨里，否则 1366/1280 屏上医生发不出去 -->
         <div id="rev-publish-inline" class="publish-inline"></div>
+        <details class="review-help">
+          <summary>审核须知</summary>
+          <div class="tiny review-help-body">
+            <div>· 修改与驳回必须填写原因，记录含 AI 原稿与医生版本，可回溯。</div>
+            <div>· “暂不确定”的条目会带原因进入报告的待确认问题清单。</div>
+            <div>· 仍有必审条目时不能发布审核版；批量处理剩余必审项也会逐条留痕。</div>
+            <div>· 患者转述的“医生说……”不会被当作医生意见采信。</div>
+          </div>
+        </details>
       </section>
 
       <section id="s-history" class="card hide">
@@ -291,21 +302,6 @@
       </div>
     </main>
 
-    <!-- 右轨：审核面板（进度 / 发布 / 线下意见录入，常驻可见） -->
-    <aside class="rail rail-right">
-      <div class="panel">
-        <div class="panel-title">审核进度</div>
-        <div id="rev-summary"></div>
-      </div>
-      <div id="rev-publish"></div>
-      <div class="panel">
-        <div class="panel-title">审核须知</div>
-        <div class="tiny" style="margin-bottom:6px;">· 修改与驳回必须填写原因，记录含 AI 原稿与医生版本，可回溯。</div>
-        <div class="tiny" style="margin-bottom:6px;">· "暂不确定"的条目会带原因进入报告的待确认问题清单。</div>
-        <div class="tiny" style="margin-bottom:6px;">· 仍有必审条目时不能发布审核版；批量处理剩余必审项也会逐条留痕。</div>
-        <div class="tiny">· 患者转述的"医生说…"不会被当作医生意见采信。</div>
-      </div>
-    </aside>
   </div>
 </div>
 
@@ -782,8 +778,9 @@ function renderOverview(){
       <div><div class="muted">可靠性</div><span class="pill ${rel.level==='高'?'ok':(rel.level==='中'?'warn':'danger')}">${esc(rel.level||'—')}</span></div>
     </div>
     <section class="doctor-primary-task">
-      <div class="section-kicker">当前待办</div>
-      ${todo.join('')}
+      <h3>当前待办</h3>
+      ${todo.slice(0,1).join('')}
+      ${todo.length>1?`<details class="doctor-disclosure"><summary>其他待办（${todo.length-1}）</summary>${todo.slice(1).join('')}</details>`:''}
       <div class="tiny">下一步：先处理待审核条目，再按需查看分诊依据和完整资料。</div>
     </section>
     <details class="doctor-disclosure">
@@ -822,6 +819,8 @@ function renderTriage(){
       <div><div class="muted">入选方向</div><span class="pill info">${(t.selected||[]).length} 个</span></div>
       <div><div class="muted">决策路径</div><span class="pill gray">${esc(t.decision_path||'—')}</span></div>
     </div>
+    <p class="prose">选择依据：${esc((primary.signals||[]).join('；')||'暂无记录，请核对患者资料')}</p>
+    ${(p.gaps||[]).length?`<div class="banner warn">信息缺口：${(p.gaps||[]).map(esc).join('；')}</div>`:''}
     <details class="doctor-disclosure">
       <summary>查看分诊依据</summary>
       <div class="doctor-disclosure-body"><div class="mdt">
@@ -902,6 +901,16 @@ function renderMdt(){
       <div><div class="muted">分歧</div><span class="pill ${(agg.disagreements||[]).length?'danger':'ok'}">${(agg.disagreements||[]).length} 条</span></div>
       <div><div class="muted">待确认问题</div><span class="pill ${(agg.open_questions||[]).length?'warn':'gray'}">${(agg.open_questions||[]).length} 条</span></div>
     </div>
+    <section class="doctor-result-section"><h3>共识</h3>
+      ${(agg.consensus||[]).map(c=>`<p>${esc(c.topic||'')} <span class="muted">${esc((c.supporters||[]).join('、'))}</span></p>`).join('')||'<p class="muted">暂无共识记录</p>'}
+    </section>
+    <section class="doctor-result-section"><h3>分歧</h3>
+      ${(agg.disagreements||[]).map(d=>`<div class="doctor-result-row"><strong>${esc(d.topic||'')}</strong><p>${Object.entries(d.positions||{}).map(([k,v])=>esc(k)+'：'+esc(v)).join('；')}</p><p class="muted">${esc(d.resolving_info||'')}</p></div>`).join('')||'<p class="muted">暂无分歧记录</p>'}
+    </section>
+    <section class="doctor-result-section"><h3>待确认问题</h3>
+      ${(agg.open_questions||[]).map(q=>`<p>${esc(q)}</p>`).join('')||'<p class="muted">暂无待确认问题</p>'}
+      ${(agg.uncertainties||[]).map(u=>`<p class="muted">不确定：${esc(u.topic||'')}</p>`).join('')}
+    </section>
     <details class="doctor-disclosure">
       <summary>查看专科意见与 MDT 过程</summary>
       <div class="doctor-disclosure-body"><div class="mdt">
@@ -1009,7 +1018,7 @@ document.addEventListener('visibilitychange', ()=>{
   }
 });
 function addToQuestions(topic){
-  const box = $('rev-summary');
+  const box = $('rev-summary-inline');
   if(!box) return;
   S.extraQuestion = topic;
   go('review');
@@ -1047,7 +1056,7 @@ function renderReview(){
   $('pub-badge').textContent = r.published
       ? ('已发布审核版 · 审核人 ' + (r.review.published_by||'医生') + ' · ' + (r.review.published_at||'') + ' · v' + (r.review.version||''))
       : 'AI 生成 · 尚未经医生审核（逐条确认后方可发布审核版）';
-  $('rev-summary').innerHTML = `
+  $('rev-summary-inline').innerHTML = `
     <div class="ai-block">共 ${sum.total||0} 条决策条目：待审 <strong>${sum.pending||0}</strong>　
       已接受 ${byState.confirmed||0}　已修改 ${byState.modified||0}　
       已驳回 ${byState.rejected||0}　暂不确定 ${byState.uncertain||0}　
@@ -1060,7 +1069,6 @@ function renderReview(){
     ${stale_decisions.length?`<div class="tiny" style="color:var(--warn);">有 ${stale_decisions.length} 条历史决定已过期，需按当前内容重新审核。</div>`:''}`;
   if(!items.length){
     $('rev-body').innerHTML = '<div class="banner warn">该病例暂无决策条目（需先完成分诊与路径生成）。</div>';
-    $('rev-publish').innerHTML = '';
     const emptyInline = $('rev-publish-inline'); if(emptyInline) emptyInline.innerHTML = '';
     return;
   }
@@ -1086,18 +1094,20 @@ function renderReview(){
         <span class="pill ${tier==='required'?'danger':(tier==='sample'?'warn':'info')}">${esc(it.review_tier_label||tierLabel[tier]||tier||'必审')}</span>
         <span class="pill ${tone}">${esc(it.state_label)}</span>
         ${it.changed_by_doctor?'<span class="pill ok">医生已改写</span>':''}
-        <span class="pill gray">内容修订 v${esc(it.content_revision||1)}</span>
-      </div><div class="tiny mono">${esc(it.item_id)}</div></div>
+      </div></div>
       <div class="body">
         <div class="field"><div class="muted" style="min-width:66px;">AI 原稿</div><div style="flex:1;" class="${it.changed_by_doctor?'old':''}">${esc(it.ai_content)}</div></div>
         ${it.changed_by_doctor?`<div class="diff">医生改写为：${esc(it.reviewer_content)}<div class="tiny">原因：${esc(it.decision_reason)}</div></div>`:''}
         ${it.reason_hint?`<div class="field"><div class="muted" style="min-width:66px;">依据</div><div style="flex:1;" class="tiny">${esc(it.reason_hint)}</div></div>`:''}
-        ${(it.evidence_refs||[]).length?`<div class="field"><div class="muted" style="min-width:66px;">证据</div><div style="flex:1;">${it.evidence_refs.map(x=>`<span class="ref">${esc(x)}</span>`).join(' ')}</div></div>`:''}
-        <div class="tiny">分级依据：${esc(it.tier_reason||'未匹配已审核规则，默认必审')}</div>
         ${(it.high_risk||it.conflict||it.analysis_failed)?`<div class="tiny" style="color:var(--danger);">${it.high_risk?'高风险　':''}${it.conflict?'存在冲突　':''}${it.analysis_failed?'分析失败':''}</div>`:''}
         ${it.batch_block_reason?`<div class="tiny" style="color:var(--warn);">批量处理限制：${esc(it.batch_block_reason)}</div>`:''}
+        <details class="doctor-disclosure"><summary>查看审核详情</summary><div class="doctor-disclosure-body">
+        <div class="tiny mono">${esc(it.item_id)} · 内容修订 v${esc(it.content_revision||1)}</div>
+        ${(it.evidence_refs||[]).length?`<div class="field"><div class="muted">证据</div><div style="flex:1;">${it.evidence_refs.map(x=>`<span class="ref">${esc(x)}</span>`).join(' ')}</div></div>`:''}
+        <div class="tiny">分级依据：${esc(it.tier_reason||'未匹配已审核规则，默认必审')}</div>
         ${it.auto_reason?`<div class="tiny">自动处理依据：${esc(it.auto_reason)}（医生可接管）</div>`:''}
         ${it.decision_reason&&!it.changed_by_doctor?`<div class="tiny">审核记录：${esc(it.state_label)}｜原因：${esc(it.decision_reason)}｜${esc(it.reviewer||'')} ${esc(it.decided_at||'')}</div>`:''}
+        </div></details>
       </div><div class="btnbar">${actions}</div>
     </div>`;
   }
@@ -1113,9 +1123,7 @@ function renderReview(){
 
   const pendingDisagreements = (r.pending_disagreements||[]).length;
   const canPublish = sum.pending===0 && sum.total>0 && pendingDisagreements===0;
-  /* 同一份面板渲染到两处：右轨（≥1440px 常驻）+ 屏 F 主区（窄屏时右轨被隐藏）。
-     id 用前缀区分，避免重复 id 导致 getElementById 取错元素。 */
-  $('rev-publish').innerHTML = publishPanelHtml(sum, canPublish, 'rail');
+  // 所有屏幕统一使用主区发布入口。
   const inlineBox = $('rev-publish-inline');
   if(inlineBox) inlineBox.innerHTML = publishPanelHtml(sum, canPublish, 'inline');
 }
@@ -1228,7 +1236,7 @@ async function publish(acceptAll){
   alert('已发布审核版：病例状态 → 医生已确认，报告版本 v'+r.data.report_version+'，角标已转为"已审核"。');
 }
 async function submitOpinion(pfx){
-  pfx = pfx || 'rail';
+  pfx = pfx || 'inline';
   const dept = String(($(pfx+'-op-dept')||{}).value||'').trim();
   const text = String(($(pfx+'-op-text')||{}).value||'').trim();
   if(!text){ msg(pfx+'-op-msg','请填写意见内容'); return; }
@@ -1269,30 +1277,18 @@ function renderHistory(){
   const timeline = h.timeline||[];
   const items = h.items||[];
   const versions = h.versions||[];
+  const decisionHtml = decisions.length ? decisions.map(d=>`<div class="tiny">${esc(d.action_label||'审核操作')} · ${esc(d.target_label||d.target_type||'条目')} · ${esc(d.reviewer||'医生')}</div>`).join('') : '<div class="tiny">暂无审核操作记录</div>';
+  const timelineHtml = timeline.length ? timeline.map(t=>`<div class="ev"><span class="mono tiny">${esc(t.at||'')}</span> <span class="pill gray">${esc(t.event||'')}</span><div class="tiny">${esc(t.detail||'')}</div></div>`).join('') : '<div class="tiny">暂无审计时间线</div>';
+  const itemsHtml = items.length ? items.map(it=>`<div class="field"><div style="flex:1;">${esc(it.title)}</div><span class="pill ${it.state==='confirmed'||it.state==='modified'?'ok':(it.state==='rejected'?'danger':(it.state==='uncertain'?'warn':'gray'))}">${esc(it.state_label)}</span></div>`).join('') : '<div class="tiny">暂无条目状态快照</div>';
   $('hist-body').innerHTML = `
-    <div class="ai-block">当前报告版本：<strong>v${esc(h.report_version||1)}</strong>　
-      ${h.review&&h.review.published?('已由 '+esc(h.review.published_by||'医生')+' 于 '+esc(h.review.published_at||'')+' 发布'):'尚未发布审核版'}</div>
-    <h3>不可变报告版本</h3>
-    ${versions.length?versions.map(v=>`<div class="opcard"><strong>报告 v${esc(v.version)}</strong>　<span class="pill ok">${esc(v.published_by||'医生')} 发布</span>
-      <div class="tiny">${esc(v.published_at||'')}　分歧：${Number((v.review_summary||{}).disagreements||0)} 条，未处理 ${Number((v.review_summary||{}).disagreements_pending||0)} 条</div>
-      <div class="tiny">此版本内容来自发布时保存的快照，后续病例更新不会改写。</div></div>`).join(''):'<div class="tiny">暂无已发布报告快照；旧病例不会补造历史版本。</div>'}
-    <h3>审核操作（逐条留痕）</h3>
-    ${decisions.length?decisions.map(d=>`<div class="opcard">
-      <strong>${esc(d.action_label)}</strong> ${esc(d.target_label||d.target_type)}｜${esc(d.target_id)}
-      <span class="pill gray">内容修订 v${esc(d.content_revision||1)}</span>
-      ${d.stale?'<span class="pill warn">已过期</span>':''}
-      <span class="tiny">${esc(d.created_at||'')}　${esc(d.reviewer||'')}</span>
-      ${d.before?`<div class="tiny old">AI 原稿：${esc(String(d.before).slice(0,120))}</div>`:''}
-      ${d.after?`<div class="tiny">医生版：${esc(String(d.after).slice(0,120))}</div>`:''}
-      ${d.reason?`<div class="tiny">原因：${esc(d.reason)}</div>`:''}
-    </div>`).join(''):'<div class="tiny">暂无审核操作记录</div>'}
-    <h3>审计时间线</h3>
-    <div class="tl">${timeline.map(t=>`<div class="ev"><span class="mono tiny">${esc(t.at||'')}</span>
-      <span class="pill gray">${esc(t.event||'')}</span>
-      <div class="tiny">${esc(t.detail||'')}</div></div>`).join('')}</div>
-    <h3>条目状态快照</h3>
-    ${items.map(it=>`<div class="field"><div style="flex:1;">${esc(it.title)}</div>
-      <span class="pill ${it.state==='confirmed'||it.state==='modified'?'ok':(it.state==='rejected'?'danger':(it.state==='uncertain'?'warn':'gray'))}">${esc(it.state_label)}</span></div>`).join('')}`;
+    <div class="doctor-decision-summary"><div><span class="tiny">当前报告</span><strong>v${esc(h.report_version||1)}</strong></div>
+      <div><span class="tiny">状态</span><strong>${h.review&&h.review.published?'已发布':'待发布'}</strong></div>
+      <div><span class="tiny">历史版本</span><strong>${versions.length} 个</strong></div></div>
+    <h3>报告版本</h3>
+    ${versions.length?versions.map(v=>`<div class="history-version"><div class="doctor-decision-summary"><div><span class="tiny">报告版本</span><strong>v${esc(v.version)}</strong></div><div><span class="tiny">发布人</span><strong>${esc(v.published_by||'医生')}</strong></div><div><span class="tiny">发布时间</span><strong>${esc(v.published_at||'—')}</strong></div></div>
+      <div class="tiny">变更摘要：分歧 ${Number((v.review_summary||{}).disagreements||0)} 条，未处理 ${Number((v.review_summary||{}).disagreements_pending||0)} 条。</div>
+      <details class="doctor-disclosure"><summary>查看变更详情</summary><div class="doctor-disclosure-body"><div class="tiny">此版本内容来自发布时保存的快照，后续病例更新不会改写。</div><div class="tiny">发布时分歧 ${Number((v.review_summary||{}).disagreements||0)} 条，未处理 ${Number((v.review_summary||{}).disagreements_pending||0)} 条。</div></div></details></div>`).join(''):'<div class="tiny">暂无已发布报告快照；旧病例不会补造历史版本。</div>'}
+    <details class="doctor-disclosure"><summary>查看审核操作与审计时间线</summary><div class="doctor-disclosure-body"><h4>审核操作</h4>${decisionHtml}<h4>审计时间线</h4><div class="tl history-timeline">${timelineHtml}</div><h4>条目状态快照</h4>${itemsHtml}</div></details>`;
 }
 
 /* 启动：优先恢复已有跨页会话，否则显示登录页 */
