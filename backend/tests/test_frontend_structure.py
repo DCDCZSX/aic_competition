@@ -698,6 +698,12 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="case-stage-hint"', html)
         self.assertIn("updateWorkflowStage", html)
 
+    def test_doctor_case_header_is_compact_in_case_mode(self):
+        """病例详情标题区应压缩留白，避免挤占首屏病例内容。"""
+        _, html = self.get("/doctor")
+        self.assertIn("body.doctor-case-mode #doctor-shell.has-case{padding-top:12px;}", html)
+        self.assertIn("body.doctor-case-mode .doctor-case-header{margin-bottom:0;padding:0;min-height:0;}", html)
+
     def test_doctor_overview_routes_by_mdt_decision(self):
         """病例总览不能把正式 MDT 当作所有病例的必经步骤。"""
         _, html = self.get("/doctor")
