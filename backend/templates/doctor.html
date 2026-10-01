@@ -141,6 +141,16 @@
   .mdt-specialty-more{margin-top:6px;font-size:var(--caption);}
   .mdt-specialty-more summary{color:var(--accent);cursor:pointer;}
   .mdt-specialty-empty{color:var(--ink3);font-size:var(--body-3);}
+  .mdt-ai-boundary{margin-top:12px;line-height:1.6;}
+  .mdt-prep-question-list{display:grid;gap:6px;}
+  .mdt-prep-question{padding:9px 11px;border-left:3px solid var(--info);border-radius:var(--br-8);background:var(--surface-subtle);color:var(--ink2);font-size:var(--body-3);line-height:1.55;}
+  .mdt-formal-record,.mdt-formal-route{margin-top:var(--sp-16);padding:16px;border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
+  .mdt-formal-context{margin:12px 0;padding:10px 12px;border-radius:var(--br-8);background:var(--surface-subtle);color:var(--ink2);font-size:var(--body-3);line-height:1.7;}
+  .mdt-formal-route{border-left:3px solid var(--info);}.mdt-route-ok{border-left-color:var(--ok);}.mdt-route-warn{border-left-color:var(--warn);}.mdt-route-danger{border-left-color:var(--danger);}
+  .mdt-formal-route h3{margin:0 0 8px;}.mdt-formal-route p{margin:6px 0 0;color:var(--ink2);font-size:var(--body-3);line-height:1.6;}
+  .mdt-formal-disagreements{margin-top:16px;padding-top:12px;border-top:1px solid var(--line);}
+  .mdt-formal-disagreements h4{margin:0 0 5px;}
+  .mdt-formal-disagreement{margin-top:10px;}
   .mdt-process-note{padding:10px 12px;border-radius:var(--br-8);background:var(--surface-subtle);color:var(--ink2);font-size:var(--body-3);}
   @media (max-width:720px){.mdt-specialty-list{grid-template-columns:1fr;}.mdt-specialty-card{padding:13px;}}
   .triage-department-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px;border-top:1px solid var(--line);margin-bottom:var(--sp-16);}
@@ -361,7 +371,7 @@
 
       <section id="s-mdt" class="card hide">
         <h2>MDT 协作</h2>
-        <div class="tiny" style="margin-bottom:var(--sp-16);">先完成是否需要协作的初筛，再查看专科意见、共识、分歧和后续处理。</div>
+        <div class="tiny" style="margin-bottom:var(--sp-16);">先查看 AI 多专科预分析，再由医生决定是否启动正式 MDT；正式会诊记录与报告审核分开留痕。</div>
         <div id="mdt-body"></div>
       </section>
 
@@ -776,9 +786,7 @@ function renderMdtPreparationPacket(){
   const opinions = packet.specialty_opinions||[];
   const evidenceLinks = packet.evidence_links||[];
   const gaps = packet.information_gaps||[];
-  const handling = packet.handling||{};
-  const consensus = packet.consensus||[];
-  const disagreements = handling.disagreements||[];
+  const questions = packet.open_questions||[];
   const uniqueText = list => [...new Set((list||[]).map(x=>String(x||'').trim()).filter(Boolean))];
   const groupedList = (title, items, sectionClass, limit=3) => {
     const values = uniqueText(items);
@@ -815,41 +823,15 @@ function renderMdtPreparationPacket(){
       `}
     </article>`;
   }).join('') : '<div class="tiny">本例暂未生成专科参考意见。</div>';
-  const consensusHtml = consensus.length
-    ? consensus.map(item=>`<div class="tiny">· ${esc(item['共识主题']||'')}（${esc(item['支持科室']||'')}）</div>`).join('')
-    : '<div class="tiny">暂无可汇总的共识。</div>';
-  const disagreementHtml = disagreements.length
-    ? disagreements.map(item=>{
-        const id = item['分歧编号'] || item.disagreement_id || '';
-        const topic = item['分歧主题'] || item.topic || '未命名分歧';
-        const status = item['处理状态'] || item.status || '待医生裁决';
-        const choice = item['牵头医生决定'] || item.choice || '';
-        const reason = item['处理理由'] || item.reason || '';
-        const next = item['下一步'] || item.next_step || '';
-        const statusCode = status==='已解决' ? 'resolved' : (status==='需要补充资料' ? 'need_more_info' : 'unresolved_with_followup');
-        const safeKey = String(id).replace(/[^A-Za-z0-9_-]/g,'');
-        return `<div class="opcard">
-      <div class="inline-between-tight"><strong>${esc(topic)}</strong><span class="pill ${status==='已解决'?'ok':'warn'}">${esc(status)}</span></div>
-          <div class="tiny" style="margin-top:5px;">${esc(id)}　下一步：${esc(next||'需补充证据后再判断')}</div>
-          <div class="field" style="margin-top:8px;"><label style="min-width:72px;">处理状态</label><select id="dis-status-${safeKey}" style="flex:1;">
-            <option value="resolved" ${statusCode==='resolved'?'selected':''}>已解决</option><option value="unresolved_with_followup" ${statusCode==='unresolved_with_followup'?'selected':''}>未解决，需后续跟进</option><option value="need_more_info" ${statusCode==='need_more_info'?'selected':''}>需要补充资料</option>
-          </select></div>
-          <div class="field"><label style="min-width:72px;">决定/结果</label><input id="dis-choice-${safeKey}" value="${esc(choice==='（未记录）'?'':choice)}" placeholder="已解决时填写牵头医生决定或修改结果" style="flex:1;"></div>
-          <div class="field"><label style="min-width:72px;">处理理由</label><textarea id="dis-reason-${safeKey}" placeholder="说明判断依据（必填）" style="flex:1;min-height:54px;">${esc(reason==='（未记录）'?'':reason)}</textarea></div>
-          <div class="field"><label style="min-width:72px;">下一步</label><textarea id="dis-next-${safeKey}" placeholder="未解决或需补资料时填写后续安排" style="flex:1;min-height:54px;">${esc(next)}</textarea></div>
-          <div class="inline-end"><span id="dis-msg-${safeKey}" class="tiny"></span><button class="mini" onclick="submitDisagreement('${esc(id)}','${safeKey}')">保存分歧处理</button></div>
-        </div>`;
-      }).join('')
-    : '<div class="tiny">暂无方向性分歧。</div>';
   const gapHtml = gaps.length
-    ? gaps.map((gap,i)=>`<div class="field"><div style="flex:1;">${esc(gap)}</div><span class="pill warn">${esc((((handling.information_gaps||[])[i]||{}).status)||'待补充资料')}</span></div>`).join('')
+    ? gaps.map(gap=>`<div class="field"><div style="flex:1;">${esc(gap)}</div><span class="pill warn">待补充资料</span></div>`).join('')
     : '<div class="tiny">暂无记录的信息缺口。</div>';
+  const questionHtml = questions.length
+    ? `<div class="mdt-prep-question-list">${questions.map(q=>`<div class="mdt-prep-question">${esc(q)}</div>`).join('')}</div>`
+    : '<div class="tiny">暂无预先标记的讨论问题。</div>';
   const refsHtml = evidenceLinks.length
     ? evidenceLinks.map(x=>`<span class="ref" title="结构化资料来源">${esc(x.ref||'')}</span>`).join(' ')
     : '<span class="tiny">暂无可显示的原文出处</span>';
-  const humanHtml = (packet.human_reviewed||[]).length
-    ? packet.human_reviewed.map(x=>`<div class="tiny">${esc(x.department||'线下医生')}：${esc(x.content||'')} <span class="pill ok">${esc(x.source_label||'医生审核内容')}</span></div>`).join('')
-    : '<div class="tiny">当前没有已验证的线下医生意见。</div>';
   return `<div class="card doctor-card-info" id="mdt-preparation-packet">
     <div class="inline-between">
       <h3 style="margin:0;">MDT 会前资料包</h3><span class="pill info">只读资料汇总</span>
@@ -860,12 +842,66 @@ function renderMdtPreparationPacket(){
       <div class="opcard"><strong>分诊摘要</strong><div class="tiny">牵头方向：${esc(triage.primary_department||'—')}</div><div class="tiny">协同方向：${esc((triage.secondary_departments||[]).join('、')||'—')}</div><div class="tiny">可靠性：${esc(triage.reliability||'—')}</div></div>
       <div class="opcard"><strong>证据来源</strong><div class="tiny" style="margin:6px 0;">${refsHtml}</div><div class="tiny">来源类型：患者结构化资料 / 专科 AI 参考意见 / 医生审核内容</div></div>
     </div>
+    <div class="banner info mdt-ai-boundary"><strong>仅供会前参考：</strong>以下专科内容由 AI 根据结构化病例资料生成，不代表真实医生意见或正式 MDT 结论。</div>
     <h4>信息缺口</h4>${gapHtml}
-    <h4>专科 AI 参考意见</h4><div class="tiny" style="margin-bottom:6px;">来源类型：${esc((packet.source_legend||{}).ai_reference||'专科 AI 参考意见')}</div>${specialtyHtml}
-    <h4>共识</h4>${consensusHtml}
-    <h4>分歧与处理状态</h4>${disagreementHtml}
-    <h4>已验证的医生内容</h4>${humanHtml}
+    <h4>建议讨论的问题</h4>${questionHtml}
+    <h4>AI 多专科预分析</h4><div class="tiny" style="margin-bottom:6px;">来源类型：${esc((packet.source_legend||{}).ai_reference||'专科 AI 参考意见')}</div>${specialtyHtml}
   </div>`;
+}
+
+function renderMdtFormalRecord(){
+  const screening = (S.review&&S.review.mdt_screening)||{};
+  const record = (S.review&&S.review.mdt_formal_record)||{};
+  if(screening.decision==='single_specialty') return `<section class="mdt-formal-route mdt-route-ok"><h3>正式 MDT 会诊记录</h3><strong>本例按单专科处理</strong><p>医生已判断当前问题可由单一专科继续处理，因此不启动正式 MDT。</p></section>`;
+  if(screening.decision==='need_more_info') return `<section class="mdt-formal-route mdt-route-warn"><h3>正式 MDT 会诊记录</h3><strong>补充资料后再判断</strong><p>先完成资料补充，资料齐备后重新判断是否需要正式 MDT。</p></section>`;
+  if(screening.decision==='urgent_care') return `<section class="mdt-formal-route mdt-route-danger"><h3>正式 MDT 会诊记录</h3><strong>已转急症处理</strong><p>当前病例不进入普通 MDT 流程，请按急诊安排处理。</p></section>`;
+  if(screening.decision!=='recommend_mdt') return `<section class="mdt-formal-route"><h3>正式 MDT 会诊记录</h3><p class="mdt-specialty-empty">完成 MDT 启动判断后，这里会显示对应的后续记录。</p></section>`;
+  const formal = record.status_label || '待记录';
+  const participants = (record.participants||[]).join('、');
+  const disagreements = ((S.review&&S.review.mdt_preparation_packet)||{}).handling?.disagreements||[];
+  const disagreementHtml = disagreements.length ? disagreements.map(item=>{
+    const id = item.disagreement_id || item['分歧编号'] || '';
+    const topic = item.topic || item['分歧主题'] || '未命名分歧';
+    const status = item.status || item['处理状态'] || '待医生裁决';
+    const choice = item.choice || item['牵头医生决定'] || '';
+    const reason = item.reason || item['处理理由'] || '';
+    const next = item.next_step || item['下一步'] || '';
+    const statusCode = status==='已解决' ? 'resolved' : (status==='需要补充资料' ? 'need_more_info' : 'unresolved_with_followup');
+    const safeKey = String(id).replace(/[^A-Za-z0-9_-]/g,'');
+    return `<div class="opcard mdt-formal-disagreement"><div class="inline-between-tight"><strong>${esc(topic)}</strong><span class="pill ${status==='已解决'?'ok':'warn'}">${esc(status)}</span></div>
+      <div class="tiny" style="margin-top:5px;">${esc(id)}　下一步：${esc(next||'需补充证据后再判断')}</div>
+      <div class="field" style="margin-top:8px;"><label style="min-width:72px;">处理状态</label><select id="dis-status-${safeKey}" style="flex:1;"><option value="resolved" ${statusCode==='resolved'?'selected':''}>已解决</option><option value="unresolved_with_followup" ${statusCode==='unresolved_with_followup'?'selected':''}>未解决，需后续跟进</option><option value="need_more_info" ${statusCode==='need_more_info'?'selected':''}>需要补充资料</option></select></div>
+      <div class="field"><label style="min-width:72px;">决定/结果</label><input id="dis-choice-${safeKey}" value="${esc(choice==='（未记录）'?'':choice)}" placeholder="填写牵头医生决定或修改结果" style="flex:1;"></div>
+      <div class="field"><label style="min-width:72px;">处理理由</label><textarea id="dis-reason-${safeKey}" placeholder="说明判断依据" style="flex:1;min-height:54px;">${esc(reason==='（未记录）'?'':reason)}</textarea></div>
+      <div class="field"><label style="min-width:72px;">下一步</label><textarea id="dis-next-${safeKey}" placeholder="填写后续安排" style="flex:1;min-height:54px;">${esc(next)}</textarea></div>
+      <div class="inline-end"><span id="dis-msg-${safeKey}" class="tiny"></span><button class="mini" onclick="submitDisagreement('${esc(id)}','${safeKey}')">保存分歧处理</button></div></div>`;
+  }).join('') : '<div class="tiny">AI 预分析未识别方向性分歧。</div>';
+  return `<section class="mdt-formal-record" id="mdt-formal-record">
+    <div class="inline-between"><div><h3 style="margin:0;">正式 MDT 会诊记录</h3><p class="tiny" style="margin-top:5px;">仅记录医生实际启动和讨论后的结果；AI 预分析不会自动变成会诊结论。</p></div><span class="pill ${record.status==='completed'?'ok':(record.status==='in_progress'?'warn':'gray')}">${esc(formal)}</span></div>
+    <div class="mdt-formal-context"><strong>会诊目的：</strong>${esc(screening.purpose||'—')}<br><strong>参与科室：</strong>${esc((screening.departments||[]).join('、')||'—')}</div>
+    <div class="field"><label for="mdt-formal-status">会诊状态</label><select id="mdt-formal-status" style="flex:1;"><option value="planned" ${record.status==='planned'?'selected':''}>待开始</option><option value="in_progress" ${record.status==='in_progress'?'selected':''}>进行中</option><option value="completed" ${record.status==='completed'?'selected':''}>已完成</option></select></div>
+    <div class="field"><label for="mdt-formal-participants">参与医生</label><input id="mdt-formal-participants" value="${esc(participants)}" placeholder="用顿号分隔，例如：内分泌科医生、眼科医生" style="flex:1;"></div>
+    <div class="field"><label for="mdt-formal-conclusion">会诊结论</label><textarea id="mdt-formal-conclusion" placeholder="已完成时填写医生共同形成的结论" style="flex:1;min-height:82px;">${esc(record.conclusion||'')}</textarea></div>
+    <div class="field"><label for="mdt-formal-unresolved">未解决事项</label><textarea id="mdt-formal-unresolved" placeholder="仍需补充的判断或证据，没有可留空" style="flex:1;min-height:64px;">${esc(record.unresolved||'')}</textarea></div>
+    <div class="field"><label for="mdt-formal-next">后续安排</label><textarea id="mdt-formal-next" placeholder="填写责任科室、复查或随访安排" style="flex:1;min-height:64px;">${esc(record.next_step||'')}</textarea></div>
+    <div class="inline-end"><span id="mdt-formal-msg" class="tiny"></span><button class="primary mini" onclick="submitMdtFormalRecord()">保存正式 MDT 记录</button></div>
+    <div class="mdt-formal-disagreements"><h4>正式会诊中的分歧处理</h4><p class="tiny">以下分歧需要以医生实际讨论结果为准，AI 识别内容只作提示。</p>${disagreementHtml}</div>
+  </section>`;
+}
+async function submitMdtFormalRecord(){
+  const participants = String(($('mdt-formal-participants')||{}).value||'').split(/[、,，\n]/).map(x=>x.trim()).filter(Boolean);
+  const body = {
+    status: String(($('mdt-formal-status')||{}).value||''), participants,
+    conclusion: String(($('mdt-formal-conclusion')||{}).value||'').trim(),
+    unresolved: String(($('mdt-formal-unresolved')||{}).value||'').trim(),
+    next_step: String(($('mdt-formal-next')||{}).value||'').trim(),
+  };
+  const r = await api('/api/v2/case/'+S.caseId+'/mdt-formal-record', {method:'POST', body:JSON.stringify(body)});
+  const msgBox = $('mdt-formal-msg');
+  if(r.status!==200 || !r.data.ok){ if(msgBox) msgBox.textContent=r.data.error||'保存失败'; return; }
+  if(msgBox){ msgBox.textContent='已保存正式 MDT 记录'; msgBox.className='tiny ok'; }
+  await openCase(S.caseId);
+  go('mdt');
 }
 
 /* ===================== 屏 B：病例总览 ===================== */
@@ -890,9 +926,13 @@ function renderOverview(){
       <button class="mini" onclick="go('mdt')">去 MDT 协作</button></div>`);
   }
   const pendingDisagreements = (S.review&&S.review.pending_disagreements)||[];
-  if(pendingDisagreements.length){
+  if(screening.decision==='recommend_mdt' && pendingDisagreements.length){
     todo.push(`<div class="field"><div style="flex:1;">${pendingDisagreements.length} 条分歧待处理</div>
       <button class="mini" onclick="go('mdt')">去 MDT 协作</button></div>`);
+  }
+  if(screening.decision==='recommend_mdt' && !(S.review&&S.review.mdt_formal_record)){
+    todo.push(`<div class="field"><div style="flex:1;">正式 MDT 尚未记录</div>
+      <button class="mini" onclick="go('mdt')">记录正式 MDT</button></div>`);
   }
   if(pending.pending) todo.push(`<div class="field"><div style="flex:1;">${pending.pending} 条决策条目待审核（[F]）</div>
       <button class="mini" onclick="go('review')">去报告审核</button></div>`);
@@ -912,7 +952,7 @@ function renderOverview(){
       <h3>当前待办</h3>
       ${todo.slice(0,1).join('')}
       ${todo.length>1?`<details class="doctor-disclosure"><summary>其他待办（${todo.length-1}）</summary>${todo.slice(1).join('')}</details>`:''}
-      <div class="tiny">下一步：按分流确认 → MDT 协作 → 报告审核的顺序处理；完整资料和证据可在对应页面展开。</div>
+      <div class="tiny">下一步会根据 MDT 初筛决定变化；完整资料和证据可在对应页面展开。</div>
     </section>
     <details class="doctor-disclosure">
       <summary>查看完整患者资料</summary>
@@ -927,8 +967,8 @@ function renderOverview(){
       </div>
     </details>
     <div class="doctor-disclosure workflow-next-step">
-      <div class="doctor-disclosure-body"><strong>下一步：先完成分流确认，再决定是否进入 MDT 协作。</strong>
-        <div class="actions left"><button class="mini" onclick="go('triage')">去分流确认</button><button class="mini" onclick="go('mdt')">去 MDT 协作</button></div>
+      <div class="doctor-disclosure-body"><strong>${screening.decision==='single_specialty'?'下一步：按单专科处理后进入报告审核。':(screening.decision==='need_more_info'?'下一步：补充资料后重新判断。':(screening.decision==='urgent_care'?'下一步：按急症流程处理，不进入普通 MDT。':(screening.decision==='recommend_mdt'?'下一步：记录正式 MDT 会诊，再进入报告审核。':'下一步：先完成分流确认，再决定是否启动正式 MDT。')))}</strong>
+        <div class="actions left"><button class="mini" onclick="go('triage')">去分流确认</button><button class="mini" onclick="go('mdt')">查看 MDT 判断</button></div>
       </div>
     </div>`;
 }
@@ -1055,13 +1095,12 @@ function renderEvidence(){
     </details>`;
 }
 
-/* ===================== 屏 E：MDT 结果与过程 ===================== */
+/* ===================== 屏 E：AI 预分析与正式 MDT 记录 ===================== */
 function doctorQuestionText(value){
   return String(value||'').replace(/^\s*(?:建议\s*)?(?:向医生确认|请医生确认)\s*[:：]?\s*/,'').trim() || '请结合当前资料判断下一步';
 }
 function renderMdt(){
   const mdt = (S.caseData.payload||{}).mdt||{};
-  const cards = mdt.analyses||mdt.cards||[];
   const agg = mdt.aggregation||{};
   const challenge = mdt.challenge||{};
   const consensus = agg.consensus||[];
@@ -1071,42 +1110,27 @@ function renderMdt(){
   const questionItems = [...new Set([...openQuestions, ...uncertainties]
     .map(doctorQuestionText).filter(Boolean))];
   const challengeQuestions = challenge.questions||[];
-  const consensusHtml = consensus.length ? consensus.map(c=>`<div class="mdt-result-item"><strong>${esc(c.topic||'')}</strong><p>${esc((c.supporters||[]).join('、')||'多学科一致')}</p></div>`).join('') : '<div class="mdt-result-empty">暂无共识记录</div>';
-  const disagreementHtml = disagreements.length ? disagreements.map(d=>`<div class="mdt-result-item"><strong>${esc(d.topic||'未命名分歧')}</strong><p>${Object.entries(d.positions||{}).map(([k,v])=>esc(k)+'：'+esc(v)).join('；')||'各科意见待补充'}</p>${d.resolving_info?`<p class="muted">处理方式：${esc(d.resolving_info)}</p>`:''}</div>`).join('') : '<div class="mdt-result-empty">暂无分歧记录</div>';
-  const questionHtml = questionItems.length ? questionItems.map((q,i)=>`<div class="mdt-result-item question"><strong>${i+1}. 待判断：${esc(q)}</strong></div>`).join('') : '<div class="mdt-result-empty">暂无待确认事项</div>';
-  const specialtyHtml = cards.length ? cards.map(c=>{
-    const name = c.specialty_name||c.department||'未命名科室';
-    if(c.status==='unavailable') return `<div class="mdt-specialty-item"><strong>${esc(name)}</strong><div class="tiny" style="color:var(--warn);">本次未完成分析：${esc(c.error||'原因未知')}</div></div>`;
-    const facts = (c.facts||[]).slice(0,2).join('；');
-    const inferences = (c.inferences||[]).slice(0,2).map(i=>i.text||i).join('；');
-    const checks = (c.checks||[]).slice(0,2).map(k=>k.content||k).join('；');
-    return `<div class="mdt-specialty-item"><strong>${esc(name)}</strong>${facts?`<div class="tiny">事实：${esc(facts)}</div>`:''}${inferences?`<div class="tiny">判断：${esc(inferences)}</div>`:''}${checks?`<div class="tiny">待判断：${esc(doctorQuestionText(checks))}</div>`:''}${c.notice?`<div class="tiny" style="color:var(--warn);">说明：${esc(c.notice)}</div>`:''}</div>`;
-  }).join('') : '<div class="mdt-process-note">本例未运行多学科分析。</div>';
-  const disagreementProcess = disagreements.length ? `<div class="mdt-process-note">识别到 ${disagreements.length} 条方向性分歧，已在上方结果中按主题汇总。</div>` : '<div class="mdt-process-note">未检出方向性分歧，直接进入结果聚合。</div>';
-  const challengeProcess = challengeQuestions.length ? challengeQuestions.map(q=>`<div class="mdt-result-item"><strong>${esc(q.question||q)}</strong><p>${q.answered?'已补答：'+esc(q.outcome||'结论待医生裁决'):'待补答'}</p></div>`).join('') : '<div class="mdt-process-note">本例未触发质询。</div>';
+  const consensusHtml = consensus.length ? consensus.map(c=>`<div class="mdt-result-item"><strong>${esc(c.topic||'')}</strong><p>${esc((c.supporters||[]).join('、')||'多专科观点接近')}</p></div>`).join('') : '<div class="mdt-result-empty">暂无 AI 归纳的共同关注点</div>';
+  const disagreementHtml = disagreements.length ? disagreements.map(d=>`<div class="mdt-result-item question"><strong>${esc(d.topic||'未命名分歧')}</strong><p>${Object.entries(d.positions||{}).map(([k,v])=>esc(k)+'：'+esc(v)).join('；')||'各科意见待补充'}</p></div>`).join('') : '<div class="mdt-result-empty">暂无 AI 识别的方向性分歧</div>';
+  const questionHtml = [...questionItems, ...challengeQuestions.map(q=>String(q.question||q||'').trim()).filter(Boolean)]
+    .filter((q,i,all)=>all.indexOf(q)===i)
+    .map((q,i)=>`<div class="mdt-result-item question"><strong>${i+1}. ${esc(doctorQuestionText(q))}</strong></div>`).join('') || '<div class="mdt-result-empty">暂无 AI 标记的讨论问题</div>';
   $('mdt-body').innerHTML = `
     ${renderMdtScreening()}
     ${renderMdtPreparationPacket()}
-    <section class="mdt-results" aria-labelledby="mdt-results-title">
-      <h3 id="mdt-results-title">MDT 结果</h3>
+    <section class="mdt-results" aria-labelledby="mdt-preanalysis-title">
+      <h3 id="mdt-preanalysis-title">AI 预分析提示</h3>
+      <div class="banner gray">以下共识、分歧和问题是 AI 对病例资料的预分析，供医生决定是否启动正式 MDT，不代表真实会诊结论。</div>
       <div class="doctor-decision-summary">
-        <div><div class="muted">共识</div><strong>${consensus.length} 条</strong></div>
-        <div><div class="muted">分歧</div><span class="pill ${disagreements.length?'danger':'ok'}">${disagreements.length} 条</span></div>
-        <div><div class="muted">待确认问题</div><span class="pill ${questionItems.length?'warn':'gray'}">${questionItems.length} 条</span></div>
+        <div><div class="muted">共同关注点</div><strong>${consensus.length} 条</strong></div>
+        <div><div class="muted">潜在分歧</div><span class="pill ${disagreements.length?'danger':'ok'}">${disagreements.length} 条</span></div>
+        <div><div class="muted">建议讨论问题</div><span class="pill ${questionItems.length?'warn':'gray'}">${questionItems.length} 条</span></div>
       </div>
-      <section class="mdt-result-section"><h4>共识</h4><div class="mdt-result-list">${consensusHtml}</div></section>
-      <section class="mdt-result-section"><h4>分歧</h4><div class="mdt-result-list">${disagreementHtml}</div></section>
-      <section class="mdt-result-section"><h4>待确认事项</h4><div class="mdt-result-list">${questionHtml}</div></section>
+      <section class="mdt-result-section"><h4>AI 归纳的共同关注点</h4><div class="mdt-result-list">${consensusHtml}</div></section>
+      <section class="mdt-result-section"><h4>AI 识别的潜在分歧</h4><div class="mdt-result-list">${disagreementHtml}</div></section>
+      <section class="mdt-result-section"><h4>建议讨论问题</h4><div class="mdt-result-list">${questionHtml}</div></section>
     </section>
-    <section class="mdt-process" aria-labelledby="mdt-process-title">
-      <h3 id="mdt-process-title">MDT 过程</h3>
-      <ol class="mdt-process-list">
-        <li class="mdt-process-step"><div class="mdt-process-marker">1</div><div class="mdt-process-content"><h4>独立研判</h4><div class="tiny">各专科基于同一份病例资料独立分析。</div><div class="mdt-specialty-list">${specialtyHtml}</div></div></li>
-        <li class="mdt-process-step"><div class="mdt-process-marker">2</div><div class="mdt-process-content"><h4>分歧识别</h4><div class="tiny">比较各专科的判断，定位需要协商的主题。</div>${disagreementProcess}</div></li>
-        <li class="mdt-process-step"><div class="mdt-process-marker">3</div><div class="mdt-process-content"><h4>质询与补答</h4><div class="tiny">针对分歧或信息不足发起补充确认。</div><div class="mdt-result-list">${challengeProcess}</div></div></li>
-        <li class="mdt-process-step"><div class="mdt-process-marker">4</div><div class="mdt-process-content"><h4>形成结果</h4><div class="mdt-process-note">结果已聚合，上方“MDT 结果”展示最终共识、分歧和待确认问题。</div></div></li>
-      </ol>
-    </section>`;
+    ${renderMdtFormalRecord()}`;
 }
 function addToQuestions(topic){
   const box = $('rev-summary-inline');
@@ -1127,6 +1151,8 @@ function renderReview(){
   const review_item_changes = r.review_item_changes||{};
   const reopened_item_ids = review_item_changes.reopened_item_ids||[];
   const reopened_item_labels = review_item_changes.reopened_item_labels||[];
+  const screening = r.mdt_screening||{};
+  const formalRecord = r.mdt_formal_record||{};
   const stateCls = {'awaiting':'st-awaiting','confirmed':'st-confirmed','modified':'st-modified','rejected':'st-rejected','uncertain':'st-uncertain','auto_processed':'st-auto'};
   const byState = sum.by_state||{};
   const tierCounts = sum.tier_counts||{};
@@ -1152,6 +1178,7 @@ function renderReview(){
       : 'AI 生成 · 尚未经医生审核（逐条确认后方可发布审核版）';
   $('rev-summary-inline').innerHTML = `
     <div class="ai-block">审核只需要处理会改变医疗方向或患者安全的内容；普通摘要和已明确的路径步骤由系统归档，不阻塞发布。
+      <div class="tiny" style="margin-top:5px;">${screening.decision==='recommend_mdt' ? (formalRecord.status==='completed' ? '本次报告可引用已记录的正式 MDT 结论；详细会诊记录请回到 MDT 协作查看。' : '正式 MDT 尚未记录完成，报告审核不会把 AI 预分析当作医生结论。') : '本次报告按单专科或其他分流决定处理，不包含正式 MDT 结论。'}</div>
       ${S.extraQuestion?`<div class="tiny">已从 MDT 审阅台加入待确认问题：${esc(S.extraQuestion)}（可在下方对应分歧条目上操作）</div>`:''}
     </div>
     <div class="review-level-summary" aria-label="审核责任分级">
@@ -1256,7 +1283,8 @@ function renderReview(){
     + group('已自动处理', auto, false, 'auto', true);
 
   const pendingDisagreements = (r.pending_disagreements||[]).length;
-  const canPublish = sum.pending===0 && sum.total>0 && pendingDisagreements===0;
+  const formalReady = screening.decision!=='recommend_mdt' || formalRecord.status==='completed';
+  const canPublish = sum.pending===0 && sum.total>0 && pendingDisagreements===0 && formalReady;
   // 所有屏幕统一使用主区发布入口。
   const inlineBox = $('rev-publish-inline');
   if(inlineBox) inlineBox.innerHTML = publishPanelHtml(sum, canPublish, 'inline');
@@ -1265,6 +1293,9 @@ function renderReview(){
 /* 发布审核版 + 录入线下意见（两处入口共用同一份 HTML 与同一套接口） */
 function publishPanelHtml(sum, canPublish, pfx){
   sum = sum || {};
+  const screening = (S.review&&S.review.mdt_screening)||{};
+  const formalRecord = (S.review&&S.review.mdt_formal_record)||{};
+  const formalReady = screening.decision!=='recommend_mdt' || formalRecord.status==='completed';
   const batchBlockedPending = Number(sum.batch_blocked_pending||0);
   const pendingDisagreements = Number((S.review&&S.review.pending_disagreements||[]).length||0);
   const batchAllowed = !batchBlockedPending;
@@ -1274,10 +1305,11 @@ function publishPanelHtml(sum, canPublish, pfx){
       <div class="tiny">审核进度：医生已处理 ${sum.doctor_reviewed||sum.human_touched||0}　免审（自动） ${sum.auto_processed||0}　待审 ${sum.pending||0}</div>
       <div class="tiny">规则：免审条目不会计入医生确认；批量处理只适用于已明确允许批量的条目，高风险、冲突、分析失败、科室选择和关键路径必须逐条处理。</div>
       ${batchBlockedPending?`<div class="tiny" style="color:var(--warn);">当前有 ${batchBlockedPending} 条必审项目必须逐条处理，批量入口已停用。</div>`:''}
-      ${pendingDisagreements?`<div class="tiny" style="color:var(--warn);">还有 ${pendingDisagreements} 条 MDT 分歧未记录处理状态，请先在会前资料包中保存牵头医生决定。</div>`:''}
+      ${pendingDisagreements?`<div class="tiny" style="color:var(--warn);">还有 ${pendingDisagreements} 条正式 MDT 分歧未记录处理状态，请先在 MDT 会诊记录中保存处理结果。</div>`:''}
+      ${!formalReady?'<div class="tiny" style="color:var(--warn);">正式 MDT 尚未完成记录，请先回到 MDT 协作填写会诊结论。</div>':''}
       <div class="actions">
         <button class="mini" onclick="publish(false)" ${canPublish?'':'disabled'}>确认发布审核版（${sum.pending||0} 条待审）</button>
-        <button class="primary mini" onclick="publish(true)" ${sum.total&&batchAllowed?'':'disabled'}>处理剩余必审并发布</button>
+        <button class="primary mini" onclick="publish(true)" ${sum.total&&batchAllowed&&formalReady?'':'disabled'}>处理剩余必审并发布</button>
       </div>
       <h3>录入线下实际意见（就诊后闭环）</h3>
       <div class="tiny">由医生端录入线下真实医生意见（来源=医生上传），用于生成「AI 建议 vs 医生意见」对照；患者端不承担"替医生写意见"。</div>
