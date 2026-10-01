@@ -503,8 +503,10 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('主区渲染发布面板',
     inlinePub.includes('确认发布审核版') && inlinePub.includes('处理剩余必审并发布'), '');
   check('仍有待审条目时发布按钮禁用', inlinePub.includes('disabled'), '');
-  check('审核条目默认折叠非必要信息',
-    el('rev-body').innerHTML.includes('查看审核详情') && el('rev-body').innerHTML.includes('责任分级'), el('rev-body').innerHTML);
+  check('审核条目默认只显示摘要并可进入详情',
+    el('rev-body').innerHTML.includes('查看详情')
+    && doctorHtml.includes('id="rev-detail"')
+    && doctorHtml.includes('openReviewDetail'), el('rev-body').innerHTML);
   check('审核须知使用折叠区', doctorHtml.includes('class="review-help"') && doctorHtml.includes('审核须知'), '');
   check('唯一发布入口使用一致的输入前缀',
     inlinePub.includes('id="inline-op-text"')

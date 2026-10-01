@@ -235,7 +235,7 @@ git commit -m "refine: distill doctor case information"
 - Consumes: 现有 `S.review.items`, `sum`, `tierOf`, `publishPanelHtml`, `decide()`, `openModal()`。
 - Produces: 单列审核流；必审默认展开，其余分组默认折叠；发布和线下意见位于主内容末尾；审核须知为折叠区。
 
-- [ ] **Step 1: Write failing review layout assertions**
+- [x] **Step 1: Write failing review layout assertions**
 
 增加以下 Node 断言：
 
@@ -245,7 +245,7 @@ check('审核页默认只有必审分组展开',
   /review-group pending[^>]*open/.test(review)
   && !/review-group sample[^>]*open/.test(review)
   && !/review-group processed[^>]*open/.test(review), review);
-check('审核细节默认折叠', review.includes('查看审核详情') && review.includes('分级依据'), review);
+check('审核条目可进入单条详情', review.includes('查看详情') && doctorHtml.includes('id="rev-detail"'), review);
 check('发布区位于审核主流程末尾', review.indexOf('rev-publish-inline') > review.indexOf('rev-body'), review);
 ```
 
@@ -256,28 +256,28 @@ self.assertIn("#rev-body{display:grid;gap:var(--sp-12);grid-template-columns:1fr
 self.assertNotIn("repeat(2,minmax(0,1fr))", doctor)
 ```
 
-- [ ] **Step 2: Run focused tests and confirm the layout assertions fail**
+- [x] **Step 2: Run focused tests and confirm the layout assertions fail**
 
 ```powershell
 node backend/verify_frontend_logic.mjs
 python -m unittest tests.test_frontend_structure tests.test_responsive_layout -q
 ```
 
-Expected: current review item markup exposes metadata directly and the wide-screen two-column rule is still present.
+Expected before implementation: the review item markup does not yet expose a dedicated detail work area or doctor-facing labels.
 
-- [ ] **Step 3: Implement the review flow**
+- [x] **Step 3: Implement the review flow**
 
-Keep `需要医生决定` open by default. Render `建议抽查`, `已完成审核`, and `自动处理` closed unless a user-selected state requires them to be visible. In `itemMarkup`, keep title, AI content, one evidence summary, and action buttons visible; move tier reason, evidence refs, revision history, decision history and automatic-processing rationale into a `查看审核详情` disclosure.
+Keep `需要医生决定` open by default. Render `建议抽查`, `已完成审核`, and `自动处理` closed unless a user-selected state requires them to be visible. In `itemMarkup`, keep title, AI content, risk/handling hints, and action buttons visible; move tier reason, evidence refs, revision history, decision history and automatic-processing rationale into the single-item `查看详情` work area. The detail work area keeps a `返回审核列表` control and uses doctor-facing Chinese labels.
 
 Move the main publish/line-offline-opinion panel into the end of `s-review`; keep the existing `rev-publish` id as a compatibility mirror only when necessary, and prevent duplicate visible actions. Convert the right-rail “审核须知” into a collapsed details block after the publish area.
 
 Keep all action handlers, disabled publish conditions, auto-processing takeover, and stale-decision notices unchanged.
 
-- [ ] **Step 4: Implement history as a compact timeline**
+- [x] **Step 4: Implement history as a compact timeline**
 
 In `renderHistory`, keep version, operator, timestamp, and change summary visible. Put per-field diffs and raw audit entries under an accessible `<details>` per version. Keep published status and review version semantics unchanged.
 
-- [ ] **Step 5: Run logic, structure, and responsive tests**
+- [x] **Step 5: Run logic, structure, and responsive tests**
 
 ```powershell
 node backend/verify_frontend_logic.mjs

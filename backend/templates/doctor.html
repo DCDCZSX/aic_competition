@@ -61,6 +61,14 @@
   .review-card-summary{margin:10px 0 0;padding:10px 12px;border-radius:var(--br-8);background:var(--surface-subtle);line-height:1.6;}
   .review-card-summary .muted{margin-right:6px;}
   .review-card-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;}
+  .review-detail{margin-top:var(--sp-12);}
+  .review-detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;}
+  .review-detail-content{display:grid;gap:var(--sp-16);margin-top:var(--sp-16);}
+  .review-detail-content .review-copy{font-size:var(--body-2);line-height:1.75;white-space:pre-wrap;}
+  .review-detail-content .review-meta{font-size:var(--caption);line-height:1.65;color:var(--ink2);}
+  .review-detail-section{padding:var(--sp-16);border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
+  .review-detail-section h3{margin:0 0 var(--sp-8);font-size:var(--body-1);}
+  .review-detail-back{margin-bottom:var(--sp-12);}
   .review-group.sample>summary{background:var(--surface-warm);}
   .review-group.auto>summary{color:var(--ink2);}
   @media (max-width:720px){.review-level-summary{grid-template-columns:1fr;}}
@@ -344,6 +352,7 @@
         <div id="review-task-banner" class="banner info hide" role="status" aria-live="polite"></div>
         <div id="rev-summary-inline" class="review-progress-inline"></div>
         <div id="rev-body"></div>
+        <div id="rev-detail" class="review-detail hide"></div>
         <div id="rev-publish-inline" class="publish-inline"></div>
         <details class="review-help">
           <summary>审核须知</summary>
@@ -761,7 +770,7 @@ function renderMdtPreparationPacket(){
         <div class="tiny" style="margin-top:6px;">关注点：${esc(op.focus||'—')}</div>
         ${(op.facts||[]).slice(0,4).map(x=>`<div class="tiny">事实：${esc(x)}</div>`).join('')}
         ${(op.inferences||[]).slice(0,3).map(x=>`<div class="tiny">参考判断：${esc(x.text||'')} ${(x.evidence_refs||[]).map(ref=>`<span class="ref">${esc(ref)}</span>`).join(' ')}</div>`).join('')}
-        ${(op.checks||[]).slice(0,3).map(x=>`<div class="tiny">待向医生确认：${esc(x.content||'')}</div>`).join('')}
+        ${(op.checks||[]).slice(0,3).map(x=>`<div class="tiny">待医生判断：${esc(x.content||'')}</div>`).join('')}
         ${(op.information_gaps||[]).slice(0,3).map(x=>`<div class="tiny">缺口：${esc(x)}</div>`).join('')}
       `}
     </div>`;
@@ -1090,13 +1099,15 @@ function renderReview(){
     const emptyInline = $('rev-publish-inline'); if(emptyInline) emptyInline.innerHTML = '';
     return;
   }
-  const typeLabel = {'department_selection':'科室入选','path_step':'路径步骤','consensus_item':'共识/分歧','patient_advice':'患者建议'};
+  const typeLabel = {'department_selection':'科室选择','path_step':'就医路径','consensus_item':'共识与分歧','patient_advice':'患者沟通建议'};
   // API 分级值固定为 review_tier==='required'、review_tier==='sample'、review_tier==='automatic'。
   const tierOf = it=>it.review_tier || (it.needs_doctor_review===false?'automatic':'required');
   const tierLabel = {required:'必审', sample:'建议抽查', automatic:'自动处理'};
-  function itemMarkup(it, index, compact){
+  function doctorFacingContent(value){
+    return String(value||'').replace(/^\s*(?:建议\s*)?(?:向医生确认|请医生确认)\s*[:：]?\s*/,'待医生判断：').trim();
+  }
+  function reviewActions(it, compact){
     const tier = tierOf(it);
-    const tone=it.state==='confirmed'||it.state==='modified'?'ok':(it.state==='rejected'?'danger':(it.state==='uncertain'?'warn':(it.state==='auto_processed'?'info':'gray')));
     const actions = compact
       ? `<button class="primary mini" onclick="decide('${esc(it.item_id)}','accept')">接管并确认</button>
          <button class="mini" onclick="openModal('modify','${esc(it.item_id)}')">修改</button>
@@ -1104,31 +1115,68 @@ function renderReview(){
       : `<button class="primary mini" onclick="decide('${esc(it.item_id)}','accept')">接受</button>
          <button class="mini" onclick="openModal('modify','${esc(it.item_id)}')">修改</button>
          <button class="mini" onclick="openModal('reject','${esc(it.item_id)}')">驳回</button>
-         <button class="mini" onclick="openModal('uncertain','${esc(it.item_id)}')">暂不确定</button>
-         <button class="mini" onclick="openModal('request_more_info','${esc(it.item_id)}')">请求补资料</button>`;
+          <button class="mini" onclick="openModal('uncertain','${esc(it.item_id)}')">暂不确定</button>
+          <button class="mini" onclick="openModal('request_more_info','${esc(it.item_id)}')">请求补资料</button>`;
+    return actions;
+  }
+  function itemMarkup(it, index, compact){
+    const tier = tierOf(it);
+    const tone=it.state==='confirmed'||it.state==='modified'?'ok':(it.state==='rejected'?'danger':(it.state==='uncertain'?'warn':(it.state==='auto_processed'?'info':'gray')));
+    const actions = reviewActions(it, compact);
     return `<div class="item ${stateCls[it.state]||''} review-decision-card" data-state="${esc(it.state)}">
       <div class="head review-card-head"><div class="review-card-title"><strong>${index}. ${esc(it.title)}</strong>
-        <div class="review-card-tags"><span class="pill gray">${esc(typeLabel[it.target_type]||it.target_type)}</span>
+        <div class="review-card-tags"><span class="pill gray">${esc(typeLabel[it.target_type]||'审核内容')}</span>
         <span class="pill ${tier==='required'?'danger':(tier==='sample'?'warn':'info')}">${esc(it.review_tier_label||tierLabel[tier]||tier||'必审')}</span>
         <span class="pill ${tone}">${esc(it.state_label)}</span>
         ${it.changed_by_doctor?'<span class="pill ok">医生已改写</span>':''}</div>
       </div></div>
-      <div class="review-card-summary"><span class="muted">AI 建议</span><span class="${it.changed_by_doctor?'old':''}">${esc(it.changed_by_doctor?it.reviewer_content:it.ai_content)}</span></div>
-      <div class="body">
-        ${it.changed_by_doctor?`<div class="diff">医生改写为：${esc(it.reviewer_content)}<div class="tiny">原因：${esc(it.decision_reason)}</div></div>`:''}
-        ${it.reason_hint?`<div class="field"><div class="muted" style="min-width:66px;">依据</div><div style="flex:1;" class="tiny">${esc(it.reason_hint)}</div></div>`:''}
-        ${(it.high_risk||it.conflict||it.analysis_failed)?`<div class="tiny" style="color:var(--danger);">${it.high_risk?'高风险　':''}${it.conflict?'存在冲突　':''}${it.analysis_failed?'分析失败':''}</div>`:''}
-        ${it.batch_block_reason?`<div class="tiny" style="color:var(--warn);">批量处理限制：${esc(it.batch_block_reason)}</div>`:''}
-        <details class="doctor-disclosure"><summary>查看审核详情</summary><div class="doctor-disclosure-body">
-        <div class="tiny mono">${esc(it.item_id)} · 内容修订 v${esc(it.content_revision||1)}</div>
-        ${(it.evidence_refs||[]).length?`<div class="field"><div class="muted">证据</div><div style="flex:1;">${sourceRefHtml(it.evidence_refs)}</div></div>`:''}
-        <div class="tiny">责任分级：${esc(it.tier_reason||'未匹配已审核规则，默认必审')}</div>
-        ${it.auto_reason?`<div class="tiny">自动处理：${esc(it.auto_reason)}（医生可接管）</div>`:''}
-        ${it.decision_reason&&!it.changed_by_doctor?`<div class="tiny">审核记录：${esc(it.state_label)}｜原因：${esc(it.decision_reason)}｜${esc(it.reviewer||'')} ${esc(it.decided_at||'')}</div>`:''}
-        </div></details>
-      </div><div class="review-card-actions">${actions}</div>
+       <div class="review-card-summary"><span class="muted">${it.changed_by_doctor?'审核后表述':'AI 初稿'}</span><span class="${it.changed_by_doctor?'old':''}">${esc(doctorFacingContent(it.changed_by_doctor?it.reviewer_content:it.ai_content))}</span></div>
+       <div class="body">
+         ${(it.high_risk||it.conflict||it.analysis_failed)?`<div class="tiny" style="color:var(--danger);">${it.high_risk?'高风险　':''}${it.conflict?'存在冲突　':''}${it.analysis_failed?'分析失败':''}</div>`:''}
+         ${it.batch_block_reason?`<div class="tiny" style="color:var(--warn);">处理要求：${esc(it.batch_block_reason)}</div>`:''}
+       </div><div class="review-card-actions">${actions}</div>
+       <div class="review-card-actions"><button class="ghost mini" aria-label="查看审核详情" onclick="openReviewDetail('${esc(it.item_id)}')">查看详情</button></div>
+     </div>`;
+  }
+  function reviewDetailMarkup(it){
+    const typeLabel = {'department_selection':'科室选择','path_step':'就医路径','consensus_item':'共识与分歧','patient_advice':'患者沟通建议'};
+    const tier = tierOf(it);
+    const tone=it.state==='confirmed'||it.state==='modified'?'ok':(it.state==='rejected'?'danger':(it.state==='uncertain'?'warn':(it.state==='auto_processed'?'info':'gray')));
+    const current = doctorFacingContent(it.changed_by_doctor?it.reviewer_content:it.ai_content);
+    return `<div class="card review-detail-content">
+      <div class="review-detail-head">
+        <div><button class="ghost mini review-detail-back" onclick="closeReviewDetail()">← 返回审核列表</button>
+          <h3 style="margin:0;">${esc(it.title||'待审核内容')}</h3>
+          <div class="review-card-tags"><span class="pill gray">${esc(typeLabel[it.target_type]||'审核内容')}</span>
+            <span class="pill ${tier==='required'?'danger':(tier==='sample'?'warn':'info')}">${esc(it.review_tier_label||'审核')}</span>
+            <span class="pill ${tone}">${esc(it.state_label||'待审')}</span></div>
+        </div>
+      </div>
+      <div class="review-detail-section"><h3>${it.changed_by_doctor?'审核后表述':'AI 初稿'}</h3><div class="review-copy">${esc(current)}</div></div>
+      ${it.changed_by_doctor?`<div class="review-detail-section"><h3>修改说明</h3><div class="review-copy">${esc(it.decision_reason||'已由医生改写')}</div></div>`:''}
+      ${it.reason_hint?`<div class="review-detail-section"><h3>判断依据</h3><div class="review-copy">${esc(it.reason_hint)}</div></div>`:''}
+      ${(it.high_risk||it.conflict||it.analysis_failed||it.batch_block_reason)?`<div class="review-detail-section"><h3>处理提示</h3><div class="review-copy">${it.high_risk?'高风险。 ':''}${it.conflict?'存在意见冲突。 ':''}${it.analysis_failed?'分析未完成。 ':''}${it.batch_block_reason?'处理要求：'+esc(it.batch_block_reason):''}</div></div>`:''}
+      ${(it.evidence_refs||[]).length?`<div class="review-detail-section"><h3>证据</h3>${sourceRefHtml(it.evidence_refs)}</div>`:''}
+      <div class="review-detail-section"><h3>审核信息</h3><div class="review-meta">审核要求：${esc(it.tier_reason||'需要医生判断')}<br>内容版本：${esc(it.content_revision||1)}${it.auto_reason?`<br>自动处理说明：${esc(it.auto_reason)}`:''}${it.decision_reason&&!it.changed_by_doctor?`<br>审核记录：${esc(it.state_label||'')}｜${esc(it.decision_reason)}｜${esc(it.reviewer||'')} ${esc(it.decided_at||'')}`:''}</div></div>
+      <div class="review-card-actions">${reviewActions(it, tier==='automatic')}</div>
     </div>`;
   }
+  function openReviewDetail(itemId){
+    const item = (S.review&&S.review.items||[]).find(it=>it.item_id===itemId);
+    if(!item) return;
+    $('rev-body').classList.add('hide');
+    $('rev-detail').classList.remove('hide');
+    $('rev-detail').innerHTML = reviewDetailMarkup(item);
+    $('rev-detail').scrollIntoView({behavior:'smooth', block:'start'});
+  }
+  function closeReviewDetail(){
+    $('rev-detail').classList.add('hide');
+    $('rev-detail').innerHTML = '';
+    $('rev-body').classList.remove('hide');
+  }
+  // 内联按钮由浏览器事件属性调用，显式挂到全局避免局部作用域丢失。
+  window.openReviewDetail = openReviewDetail;
+  window.closeReviewDetail = closeReviewDetail;
   const pending=items.filter(it=>tierOf(it)==='required' && it.state==='awaiting');
   const sample=items.filter(it=>tierOf(it)==='sample' && it.state==='awaiting');
   const auto=items.filter(it=>tierOf(it)==='automatic' && (it.state==='auto_processed' || !it.decision_id));
