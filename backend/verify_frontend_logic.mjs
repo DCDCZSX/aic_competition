@@ -450,6 +450,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   const overview = el('ov-body').innerHTML;
   check('总览默认只突出当前待办', overview.includes('当前待办') && overview.includes('下一步'), overview);
   check('总览将完整资料折叠', /<details[^>]*>/.test(overview) && overview.includes('完整患者资料'), overview);
+  check('总览待办指向实际处理阶段', overview.includes("go('triage')") && overview.includes("go('mdt')"), overview);
   D.renderTriage();
   const triage = el('tri-body').innerHTML;
   check('分诊默认突出牵头科室', triage.includes('内分泌科') && triage.includes('科室分诊结果'), triage);
@@ -458,6 +459,10 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     && triage.includes('triage-department-item') && triage.includes('依据：'), triage);
   D.renderMdt();
   const mdt = el('mdt-body').innerHTML;
+  check('MDT 页面先显示初筛和会前资料包',
+    mdt.indexOf('MDT 初筛与病例分流') >= 0
+      && mdt.indexOf('MDT 会前资料包') >= 0
+      && mdt.indexOf('MDT 结果') > mdt.indexOf('MDT 会前资料包'), mdt);
   check('MDT 结果区突出共识分歧待确认',
     ['MDT 结果','共识','分歧','待确认事项'].every(x=>mdt.includes(x)), mdt);
   check('MDT 过程直接展示为四步',

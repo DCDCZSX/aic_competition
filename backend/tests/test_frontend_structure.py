@@ -624,6 +624,36 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("review-detail-content .review-copy", html)
         self.assertIn("review-detail-content .review-meta", html)
 
+    def test_doctor_case_navigation_uses_processing_order(self):
+        """病例导航应按医生实际处理顺序组织，而不是按内部屏幕编号组织。"""
+        _, html = self.get("/doctor")
+        nav = html[html.index('id="nav"'):html.index('id="s-list"')]
+        for label in ("病例摘要", "分流确认", "MDT 协作", "报告审核", "历史记录"):
+            self.assertIn(label, nav)
+        self.assertLess(nav.index("病例摘要"), nav.index("分流确认"))
+        self.assertLess(nav.index("分流确认"), nav.index("MDT 协作"))
+        self.assertLess(nav.index("MDT 协作"), nav.index("报告审核"))
+
+    def test_mdt_controls_live_in_mdt_screen(self):
+        """MDT 初筛和分歧处理应位于 MDT 页面，而不是藏在病例总览折叠区。"""
+        _, html = self.get("/doctor")
+        overview_start = html.index('id="s-overview"')
+        mdt_start = html.index('id="s-mdt"')
+        review_start = html.index('id="s-review"')
+        overview = html[overview_start:mdt_start]
+        mdt = html[mdt_start:review_start]
+        self.assertIn("renderMdtScreening", html)
+        self.assertIn("renderMdtPreparationPacket", html)
+        self.assertIn("MDT 初筛与病例分流", html)
+        self.assertNotIn("查看分诊与 MDT 资料", overview)
+        self.assertIn("MDT 协作", mdt)
+
+    def test_doctor_case_header_exposes_current_workflow_stage(self):
+        """病例页标题下应告诉医生当前要处理的阶段。"""
+        _, html = self.get("/doctor")
+        self.assertIn('id="case-stage-hint"', html)
+        self.assertIn("updateWorkflowStage", html)
+
     def test_doctor_empty_context_hides_right_rail_and_reclaims_grid(self):
         """未选择病例时右栏不应占用宽屏布局，选中病例后再恢复。"""
         _, html = self.get("/doctor")
