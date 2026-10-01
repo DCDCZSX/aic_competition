@@ -551,6 +551,18 @@ class FrontendStructureTest(unittest.TestCase):
             "会前资料包应在逐条审核渲染函数之前定义并可被总览调用",
         )
 
+    def test_doctor_mdt_specialty_packet_groups_content_by_section(self):
+        """专科资料包应按事实、判断、待判断和缺口分组，避免细小长列表。"""
+        _, html = self.get("/doctor")
+        for token in (
+            "mdt-specialty-card", "mdt-specialty-section", "mdt-specialty-facts",
+            "mdt-specialty-inferences", "mdt-specialty-checks", "mdt-specialty-gaps",
+            "已掌握事实", "AI 参考判断", "待医生判断", "查看全部",
+        ):
+            self.assertIn(token, html, f"MDT 专科资料包缺少分组结构：{token}")
+        self.assertIn("mdt-specialty-copy", html)
+        self.assertIn("mdt-specialty-more", html)
+
     def test_patient_stage3_uses_plain_direction_path_and_specialty_summary(self):
         """第三步只给患者方向、关联任务和通俗专科摘要，内部推理留在医生端。"""
         _, html = self.get("/patient")
