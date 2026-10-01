@@ -1210,9 +1210,15 @@ class CaseFlow:
         return {"case_id": case_id, "status": status, "ready": bool(mdt), "mdt": mdt}
 
     # ------------------------------------------------------------------ 查询
-    def list_patient_cases(self, owner_id: str) -> List[Dict[str, Any]]:
+    def list_patient_cases(self, owner_id: str, *, page: int = 1,
+                           page_size: int = 10) -> Dict[str, Any]:
         """Build a patient-safe list of their cases without exposing raw payloads."""
-        cases = self.store.list_cases_for_owner(owner_id) if self.store else []
+        safe_page = max(1, int(page))
+        safe_size = max(1, min(int(page_size), 50))
+        total = self.store.count_cases_for_owner(owner_id) if self.store else 0
+        cases = self.store.list_cases_for_owner(
+            owner_id, limit=safe_size, offset=(safe_page - 1) * safe_size
+        ) if self.store else []
         result = []
         for case in cases:
             payload = case.get("payload") or {}
@@ -1236,7 +1242,32 @@ class CaseFlow:
                 "has_updates": bool(payload.get("updates")),
                 "next_step": (payload.get("mdt_screening") or {}).get("patient_next_step") or "等待系统整理",
             })
-        return result
+        return {"cases": result, "page": safe_page, "page_size": safe_size,
+                "total": total, "has_more": safe_page * safe_size < total}
+
+    def get_patient_record(self, case_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
+        case = self.store.load_case(case_id) if self.store else None
+        if not case or case.get("owner_id") != owner_id:
+            return None
+        payload = case.get("payload") or {}
+        updates = []
+        for item in payload.get("updates") or []:
+            updates.append({key: item.get(key) for key in
+                            ("update_id", "kind", "content", "source", "at")
+                            if item.get(key) not in (None, "")})
+        return {
+            "case_id": case_id,
+            "title": f"病例 #{case_id} · {case.get('main_issue') or '未填写主要问题'}",
+            "main_issue": case.get("main_issue") or "",
+            "submitted_material": {
+                "medical_history": payload.get("initial_medical_history") or payload.get("masked_history") or "",
+                "profile": payload.get("profile") or {},
+                "submitted_at": case.get("created_at") or "",
+            },
+            "updates": updates,
+            "report_version": int(case.get("report_version") or 1),
+            "case_state": case.get("case_state") or "",
+        }
 
     @serialized_case
     def submit_case_for_review(
@@ -2655,6 +2686,8 @@ class CaseFlow:
                 "goals": list(result.goals),
                 # 不要使用 masked_preview：它是前端展示窗口，最多 2000 字。
                 "masked_history": result.masked_history or result.masked_preview.get("medical_history", ""),
+                # 后续补充会合并到 masked_history，保留首次提交内容供患者回看。
+                "initial_medical_history": result.masked_history or result.masked_preview.get("medical_history", ""),
                 "masked_main_issue": result.masked_main_issue or result.masked_preview.get("main_issue", ""),
                 "gaps": list(result.gaps),
                 "completeness": result.completeness,

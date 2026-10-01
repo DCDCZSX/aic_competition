@@ -757,7 +757,26 @@ def list_my_cases():
         return error
     if not session or session.role != ROLE_PATIENT:
         return jsonify({'error': '当前角色无权访问患者病例记录'}), 403
-    return jsonify({'cases': case_flow.list_patient_cases(session.username)})
+    try:
+        page = max(1, int(request.args.get('page', '1')))
+        page_size = max(1, min(50, int(request.args.get('page_size', '10'))))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'page 和 page_size 必须是整数'}), 400
+    return jsonify(case_flow.list_patient_cases(
+        session.username, page=page, page_size=page_size))
+
+
+@app.route('/api/v2/case/<case_id>/patient-record', methods=['GET'])
+def get_patient_record(case_id):
+    session, _case, error = _guard_case(case_id)
+    if error:
+        return error
+    if not session or session.role != ROLE_PATIENT:
+        return jsonify({'error': '当前角色无权访问患者病历记录'}), 403
+    record = case_flow.get_patient_record(case_id, session.username)
+    if record is None:
+        return jsonify({'error': '病例不存在或无权访问'}), 404
+    return jsonify({'record': record})
 
 
 @app.route('/api/v2/case/<case_id>/access', methods=['POST', 'DELETE'])
