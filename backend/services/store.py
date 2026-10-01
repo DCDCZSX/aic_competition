@@ -263,6 +263,17 @@ class Store:
                 ).fetchall()
         return [self._row_to_case(r) for r in rows]
 
+    def list_cases_for_owner(self, owner_id: str) -> List[Dict[str, Any]]:
+        """Return only cases owned by one patient, newest first."""
+        if not owner_id:
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM cases WHERE owner_id=? ORDER BY updated_at DESC, created_at DESC",
+                (owner_id,),
+            ).fetchall()
+        return [self._row_to_case(r) for r in rows]
+
     def list_cases_for_reviewer(self, reviewer_id: str, *, limit: Optional[int] = None,
                                 offset: int = 0) -> List[Dict[str, Any]]:
         """只读取已明确授权给审核员的病例。"""

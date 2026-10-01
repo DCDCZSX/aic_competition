@@ -63,6 +63,13 @@
   .stage-details[open]>summary{border-bottom:1px solid var(--line);}
   .stage-details[open]>summary::before{content:'－';}
   .stage-details>#path-body,.stage-details>#mdt-body{padding:0 14px 14px;}
+  .patient-record-entry{margin-top:var(--sp-16);padding-top:var(--sp-12);border-top:1px solid var(--line);}
+  .patient-record-entry button{width:100%;text-align:left;}
+  .patient-record-list{display:grid;gap:10px;}
+  .patient-record-card{padding:14px 16px;border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
+  .patient-record-card:hover{border-color:var(--accent);background:var(--surface-warm);}
+  .patient-record-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;color:var(--ink2);font-size:var(--micro);}
+  .patient-record-timeline{display:grid;gap:8px;margin-top:12px;}
 </style>
 </head>
 <body>
@@ -174,10 +181,16 @@
         <div class="progress"><i id="steps-bar" style="width:0%"></i></div>
         <div class="tiny" id="steps-note">共 4 个阶段 · 尚未开始</div>
       </div>
+      <div class="patient-record-entry"><button class="ghost" type="button" onclick="goRecords()">我的病历</button></div>
     </aside>
 
     <!-- 中轨：工作区 -->
     <main class="work">
+    <section id="s-records" class="card hide" data-stage="records">
+      <div class="stage-heading"><h2>我的病历</h2><p class="muted">查看你提交过的病例、当前处理状态、报告版本和资料更新记录。</p></div>
+      <div id="records-msg"></div>
+      <div id="records-body"></div>
+    </section>
     <!-- 阶段 1：填写情况（目标与资料在同一栏目完成） -->
   <section id="s-stage1" class="card" data-stage="stage1">
     <div class="stage-heading">
@@ -422,7 +435,7 @@
 
 <script>
 /* ===================== 状态 ===================== */
-const S = { token:null, role:null, label:null, previewToken:null, goals:[], caseId:null, questions:[], answers:{}, gaps:[],
+const S = { token:null, role:null, label:null, previewToken:null, goals:[], caseId:null, questions:[], answers:{}, gaps:[], recordCases:[],
             profile:null, mode:'paste', triage:null, path:null, mdt:null, report:null,
             mdtPending:false, mdtStatus:null, reportView:'summary',
             answerSubmitPending:false, answerSubmitStatus:null,
@@ -471,14 +484,63 @@ function syncStagePanels(step){
 }
 function go(step){
   const stage=stageFor(step);
-  if(['update','changes','done'].includes(step)){ show('s-'+step); renderSteps(step); }
+  if(['update','changes','done','records'].includes(step)){ show('s-'+step); renderSteps(step); }
   else { syncStagePanels(step); show('s-'+stage); renderSteps(stage); }
   if(stage==='stage3') renderStage3Analysis();
   renderContext(); window.scrollTo({top:0,behavior:'smooth'});
 }
+function goRecords(){
+  show('s-records');
+  renderSteps('records');
+  loadPatientRecords();
+  renderContext();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+async function loadPatientRecords(){
+  const box=document.getElementById('records-body');
+  if(box && !S.recordCases.length) box.innerHTML='<div class="tiny">正在加载你的病例记录…</div>';
+  const r=await api('/api/v2/my-cases');
+  if(r.status!==200){ msg('records-msg', esc((r.data||{}).error||'病例记录加载失败')); return; }
+  S.recordCases=(r.data||{}).cases||[];
+  renderPatientRecords();
+}
+function patientCaseStatus(row){
+  if(row.case_state==='doctor_confirmed') return ['医生已发布报告','ok'];
+  if(row.routing_status==='submitted') return ['已提交，等待医生审核','warn'];
+  if(row.has_updates) return ['资料更新后待复核','warn'];
+  return ['资料整理中','gray'];
+}
+function renderPatientRecords(){
+  const box=document.getElementById('records-body'); if(!box) return;
+  if(!S.recordCases.length){ box.innerHTML='<div class="banner info">还没有已保存的病例。填写病情资料后，病例会自动出现在这里。</div>'; return; }
+  box.innerHTML='<div class="patient-record-list">'+S.recordCases.map(row=>{
+    const [status, tone]=patientCaseStatus(row);
+    return `<article class="patient-record-card"><div class="inline-between"><strong>${esc(row.main_issue||'未填写主要问题')}</strong><span class="pill ${tone}">${status}</span></div>
+      <div class="patient-record-meta"><span>病例 ${esc(row.case_id)}</span><span>更新于 ${esc(row.updated_at||row.created_at||'—')}</span>${row.primary_department?`<span>主责方向：${esc(row.primary_department)}</span>`:''}<span>报告 v${esc(row.report_version||1)}</span></div>
+      <div class="tiny" style="margin-top:6px;">${esc(row.next_step||'可继续查看当前病例')}</div>
+      <div class="actions" style="justify-content:flex-start;margin-top:10px;"><button class="primary mini" onclick="openPatientCase('${esc(row.case_id)}')">查看当前报告</button><button class="ghost mini" onclick="showPatientCaseHistory('${esc(row.case_id)}')">查看记录</button></div></article>`;
+  }).join('')+'</div>';
+}
+async function openPatientCase(caseId){
+  S.caseId=caseId;
+  S.report=null;
+  await goReport();
+}
+async function showPatientCaseHistory(caseId){
+  const box=document.getElementById('records-body'); if(!box) return;
+  const [versions, changes]=await Promise.all([
+    api(`/api/v2/case/${caseId}/versions`), api(`/api/v2/case/${caseId}/changes`)
+  ]);
+  if(versions.status!==200 || changes.status!==200){ msg('records-msg','暂时无法加载该病例的历史记录'); return; }
+  const rows=(versions.data||{}).versions||[];
+  const updates=(changes.data||{}).updates||[];
+  box.innerHTML=`<div class="inline-between"><h3 style="margin:0;">病例 ${esc(caseId)} 的记录</h3><button class="ghost mini" onclick="renderPatientRecords()">返回病例列表</button></div>
+    <div class="patient-record-timeline">${rows.length?rows.map(v=>`<div class="field"><div style="flex:1;"><strong>报告 v${esc(v.version)}</strong><div class="tiny">${esc(v.published_at||'')} · 已保存的患者版报告</div></div><span class="pill ok">已发布</span></div>`).join(''):'<div class="tiny">暂时没有已发布的报告版本。</div>'}
+    ${updates.map(u=>`<div class="field"><div style="flex:1;"><strong>补充资料：${esc(u.kind||'资料更新')}</strong><div class="tiny">${esc(u.created_at||'')} · ${esc(u.source||'患者上传')}</div></div><span class="pill info">已记录</span></div>`).join('')}</div>`;
+}
 /* 左轨：四个用户阶段；报告生成后允许在四个阶段之间自由回看。
    就诊后资料更新 / 变化摘要不属于首次准备资料的四个阶段。 */
-const EXTRA_STEPS = {update:'就诊后资料更新', changes:'变化摘要', done:'收尾'};
+const EXTRA_STEPS = {records:'我的病历', update:'就诊后资料更新', changes:'变化摘要', done:'收尾'};
 function renderSteps(active){
   const stage = stageFor(active);
   const idx = STEPS.findIndex(([k])=>k===stage);
@@ -1893,7 +1955,8 @@ function renderReviewSubmission(){
   if(route.status === 'submitted'){
     const submittedName = requested.name || departmentNameForCode(requested.code) || primary.name;
     box.innerHTML = `<div class="banner ok"><strong>已提交至${esc(submittedName)}，等待医生审核</strong>
-      <div class="tiny" style="margin-top:4px;">病例只对${esc(submittedName)}医生可见；如需调整，请先联系平台管理员。</div></div>`;
+      <div class="tiny" style="margin-top:4px;">病例只对${esc(submittedName)}医生可见；如需调整，请先联系平台管理员。</div>
+      <div class="actions" style="justify-content:flex-start;margin-top:8px;"><button class="ghost mini" type="button" onclick="goRecords()">查看我的病历记录</button></div></div>`;
     return;
   }
   const options = [];

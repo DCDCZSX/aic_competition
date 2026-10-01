@@ -148,6 +148,8 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('href="/static/css/dsh.css"', html)
         self.assertIn('class="appbar"', html)
         self.assertIn('class="shell patient-shell"', html)
+        self.assertIn("我的病历", html)
+        self.assertIn("/api/v2/my-cases", html)
         self.assertEqual(html.count('class="rail rail-left"'), 1)
         self.assertEqual(html.count('class="rail rail-right"'), 0)
         self.assertNotIn('id="ctx-panel"', html)
