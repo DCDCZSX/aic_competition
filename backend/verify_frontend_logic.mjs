@@ -445,7 +445,9 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     mdt: { analyses:[{department:'内分泌科', facts:['血糖偏高'], inferences:[], checks:[]}], aggregation:{consensus:[{topic:'先完善检查', supporters:['内分泌科']}], disagreements:[], open_questions:['是否需要复查']}, challenge:{} },
     gaps:['缺少近期检查结果']
   }};
-  D.S.review = { published:false, case_state_label:'待医生审核', summary:{pending:2}, mdt_screening:null, mdt_preparation_packet:{} };
+  D.S.review = { published:false, case_state_label:'待医生审核', summary:{pending:2}, mdt_screening:null, mdt_preparation_packet:{
+    specialty_opinions:[{department:'内分泌科',status:'available',focus:'评估代谢异常',facts:['血糖偏高','血糖偏高','视物模糊','体重变化','家族史','血压记录'],inferences:[{text:'建议结合糖化血红蛋白',evidence_refs:['检验单']}],checks:[{content:'是否需要补充复查'}],information_gaps:['缺少近期检查结果','缺少近期检查结果','缺少用药记录','缺少复查时间']}]
+  } };
   D.renderOverview();
   const overview = el('ov-body').innerHTML;
   check('总览默认只突出当前待办', overview.includes('当前待办') && overview.includes('下一步'), overview);
@@ -463,6 +465,11 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     mdt.indexOf('MDT 初筛与病例分流') >= 0
       && mdt.indexOf('MDT 会前资料包') >= 0
       && mdt.indexOf('MDT 结果') > mdt.indexOf('MDT 会前资料包'), mdt);
+  const mdtGroupingTokens = ['mdt-specialty-card','mdt-specialty-facts','mdt-specialty-inferences','mdt-specialty-checks','mdt-specialty-gaps','已掌握事实','AI 参考判断','待医生判断','信息缺口','查看全部'];
+  check('MDT 专科资料按四类内容分组并可展开', mdtGroupingTokens.every(x=>mdt.includes(x)), mdtGroupingTokens.filter(x=>!mdt.includes(x)).join(','));
+  const packetHtml = mdt.slice(mdt.indexOf('MDT 会前资料包'), mdt.indexOf('MDT 结果'));
+  check('MDT 专科事实与缺口去重',
+    (packetHtml.match(/血糖偏高/g)||[]).length === 1 && (packetHtml.match(/缺少近期检查结果/g)||[]).length === 1, packetHtml);
   check('MDT 结果区突出共识分歧待确认',
     ['MDT 结果','共识','分歧','待确认事项'].every(x=>mdt.includes(x)), mdt);
   check('MDT 过程直接展示为四步',

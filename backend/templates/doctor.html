@@ -120,11 +120,29 @@
   .mdt-process-content{min-width:0;padding:2px 0 0;}
   .mdt-process-content h4{margin:0;font-size:var(--body-1);font-weight:650;}
   .mdt-process-content>.tiny{margin:3px 0 8px;}
-  .mdt-specialty-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;}
-  .mdt-specialty-item{padding:10px 12px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--surface-subtle);}
+  .mdt-specialty-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;}
+  .mdt-specialty-item{padding:12px 14px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--surface-subtle);}
   .mdt-specialty-item .tiny{margin-top:4px;line-height:1.5;}
+  .mdt-specialty-card{padding:16px;border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
+  .mdt-specialty-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
+  .mdt-specialty-heading strong{font-size:var(--body-1);font-weight:700;}
+  .mdt-specialty-focus{padding:10px 12px;border-radius:var(--br-8);background:var(--surface-subtle);color:var(--ink2);font-size:var(--body-3);line-height:1.6;}
+  .mdt-specialty-sections{display:grid;gap:10px;margin-top:12px;}
+  .mdt-specialty-section{padding-top:10px;border-top:1px solid var(--line);}
+  .mdt-specialty-section-title{display:flex;align-items:center;gap:6px;margin-bottom:6px;color:var(--ink);font-size:var(--body-3);font-weight:700;}
+  .mdt-specialty-section-title .count{color:var(--ink3);font-size:var(--caption);font-weight:500;}
+  .mdt-specialty-copy{margin:0;color:var(--ink2);font-size:var(--body-3);line-height:1.65;}
+  .mdt-specialty-copy ul{margin:0;padding-left:20px;display:grid;gap:4px;}
+  .mdt-specialty-copy li{padding-left:2px;}
+  .mdt-specialty-inferences .mdt-specialty-copy{display:grid;gap:7px;}
+  .mdt-inference{padding:8px 10px;border-radius:var(--br-8);background:var(--surface-subtle);}
+  .mdt-specialty-checks{border-left:3px solid var(--warn);padding-left:10px;}
+  .mdt-specialty-gaps{border-left:3px solid var(--gray-300);padding-left:10px;}
+  .mdt-specialty-more{margin-top:6px;font-size:var(--caption);}
+  .mdt-specialty-more summary{color:var(--accent);cursor:pointer;}
+  .mdt-specialty-empty{color:var(--ink3);font-size:var(--body-3);}
   .mdt-process-note{padding:10px 12px;border-radius:var(--br-8);background:var(--surface-subtle);color:var(--ink2);font-size:var(--body-3);}
-  @media (max-width:720px){.mdt-specialty-list{grid-template-columns:1fr;}}
+  @media (max-width:720px){.mdt-specialty-list{grid-template-columns:1fr;}.mdt-specialty-card{padding:13px;}}
   .triage-department-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px;border-top:1px solid var(--line);margin-bottom:var(--sp-16);}
   .triage-department-item{padding:12px 2px;border-bottom:1px solid var(--line);}
   .triage-department-item .tiny{margin-top:5px;max-width:var(--text-width-body);font-size:var(--body-3);color:var(--ink2);}
@@ -761,21 +779,41 @@ function renderMdtPreparationPacket(){
   const handling = packet.handling||{};
   const consensus = packet.consensus||[];
   const disagreements = handling.disagreements||[];
+  const uniqueText = list => [...new Set((list||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  const groupedList = (title, items, sectionClass, limit=3) => {
+    const values = uniqueText(items);
+    if(!values.length) return '';
+    const visible = values.slice(0, limit);
+    const renderItems = list => `<ul>${list.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`;
+    const more = values.length>limit
+      ? `<details class="mdt-specialty-more"><summary>查看全部 ${values.length} 条</summary>${renderItems(values.slice(limit))}</details>` : '';
+    return `<section class="mdt-specialty-section ${sectionClass}"><div class="mdt-specialty-section-title">${title}<span class="count">${values.length} 条</span></div><div class="mdt-specialty-copy">${renderItems(visible)}${more}</div></section>`;
+  };
+  const inferenceSection = items => {
+    const values = (items||[]).filter(x=>String(x&&x.text||'').trim());
+    if(!values.length) return '';
+    const renderItems = list => list.map(x=>`<div class="mdt-inference">${esc(x.text||'')} ${(x.evidence_refs||[]).map(ref=>`<span class="ref">${esc(ref)}</span>`).join(' ')}</div>`).join('');
+    const visible = values.slice(0,3);
+    const more = values.length>3 ? `<details class="mdt-specialty-more"><summary>查看全部 ${values.length} 条</summary>${renderItems(values.slice(3))}</details>` : '';
+    return `<section class="mdt-specialty-section mdt-specialty-inferences"><div class="mdt-specialty-section-title">AI 参考判断<span class="count">${values.length} 条</span></div><div class="mdt-specialty-copy">${renderItems(visible)}${more}</div></section>`;
+  };
   const specialtyHtml = opinions.length ? opinions.map(op=>{
     const unavailable = op.status !== 'available';
-    return `<div class="opcard">
-      <div class="inline-between-tight">
+    return `<article class="mdt-specialty-card">
+      <div class="mdt-specialty-heading">
         <strong>${esc(op.department||'未注明科室')}</strong>
         <span class="pill ${unavailable?'gray':'info'}">${esc(op.source_label||'专科 AI 参考意见')}</span>
       </div>
-      ${unavailable ? `<div class="tiny" style="margin-top:6px;">${esc(op.notice||'本专科参考意见暂未生成')}</div>` : `
-        <div class="tiny" style="margin-top:6px;">关注点：${esc(op.focus||'—')}</div>
-        ${(op.facts||[]).slice(0,4).map(x=>`<div class="tiny">事实：${esc(x)}</div>`).join('')}
-        ${(op.inferences||[]).slice(0,3).map(x=>`<div class="tiny">参考判断：${esc(x.text||'')} ${(x.evidence_refs||[]).map(ref=>`<span class="ref">${esc(ref)}</span>`).join(' ')}</div>`).join('')}
-        ${(op.checks||[]).slice(0,3).map(x=>`<div class="tiny">待医生判断：${esc(x.content||'')}</div>`).join('')}
-        ${(op.information_gaps||[]).slice(0,3).map(x=>`<div class="tiny">缺口：${esc(x)}</div>`).join('')}
+      ${unavailable ? `<div class="mdt-specialty-empty">${esc(op.notice||'本专科参考意见暂未生成')}</div>` : `
+        <div class="mdt-specialty-focus"><strong>关注点：</strong>${esc(op.focus||'—')}</div>
+        <div class="mdt-specialty-sections">
+          ${groupedList('已掌握事实', op.facts, 'mdt-specialty-facts', 4)}
+          ${inferenceSection(op.inferences)}
+          ${groupedList('待医生判断', (op.checks||[]).map(x=>x.content||x), 'mdt-specialty-checks', 3)}
+          ${groupedList('信息缺口', op.information_gaps, 'mdt-specialty-gaps', 3)}
+        </div>
       `}
-    </div>`;
+    </article>`;
   }).join('') : '<div class="tiny">本例暂未生成专科参考意见。</div>';
   const consensusHtml = consensus.length
     ? consensus.map(item=>`<div class="tiny">· ${esc(item['共识主题']||'')}（${esc(item['支持科室']||'')}）</div>`).join('')
