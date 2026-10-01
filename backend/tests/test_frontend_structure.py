@@ -686,6 +686,34 @@ class FrontendStructureTest(unittest.TestCase):
             self.assertIn(token, html)
         self.assertIn("正式 MDT 尚未记录", html)
 
+    def test_doctor_overview_has_prominent_full_record_action(self):
+        """完整资料入口必须是可见按钮，不能伪装成弱化的折叠标题。"""
+        _, html = self.get("/doctor")
+        self.assertIn("overview-full-record-action", html)
+        self.assertIn("查看完整病历资料", html)
+        self.assertIn("overview-workflow-actions", html)
+
+    def test_doctor_overview_expresses_triage_before_mdt_as_conditional_flow(self):
+        """摘要页应先引导分流确认，再按条件进入 MDT 预分析。"""
+        _, html = self.get("/doctor")
+        self.assertIn("先完成分流确认，再查看 MDT 预分析", html)
+        self.assertIn("查看 MDT 预分析", html)
+        self.assertIn("启动正式 MDT", html)
+        self.assertNotIn('onclick="go(\'triage\')">去分流确认</button><button class="mini" onclick="go(\'mdt\')">查看 MDT 判断</button>', html)
+
+    def test_doctor_triage_departments_use_readable_selection_grid(self):
+        """分流确认的协同科室必须给名称留出稳定空间。"""
+        _, html = self.get("/doctor")
+        self.assertIn("triage-secondary-grid", html)
+        self.assertIn("triage-secondary-option", html)
+        self.assertIn("triage-secondary-count", html)
+
+    def test_doctor_case_header_is_compact(self):
+        """病例页标题栏应使用紧凑布局，避免首屏被标题区占满。"""
+        _, html = self.get("/doctor")
+        self.assertIn("doctor-case-header-compact", html)
+        self.assertIn("doctor-case-header-meta", html)
+
     def test_doctor_empty_context_hides_right_rail_and_reclaims_grid(self):
         """未选择病例时右栏不应占用宽屏布局，选中病例后再恢复。"""
         _, html = self.get("/doctor")

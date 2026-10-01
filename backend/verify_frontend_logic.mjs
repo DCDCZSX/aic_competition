@@ -451,7 +451,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.renderOverview();
   const overview = el('ov-body').innerHTML;
   check('总览默认只突出当前待办', overview.includes('当前待办') && overview.includes('下一步'), overview);
-  check('总览将完整资料折叠', /<details[^>]*>/.test(overview) && overview.includes('完整患者资料'), overview);
+  check('总览将完整资料折叠', /<details[^>]*>/.test(overview) && overview.includes('查看完整病历资料'), overview);
   check('总览待办指向实际处理阶段', overview.includes("go('triage')") && overview.includes("go('mdt')"), overview);
   D.renderTriage();
   const triage = el('tri-body').innerHTML;

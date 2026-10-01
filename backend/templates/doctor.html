@@ -81,7 +81,9 @@
   .inline-wrap{display:flex;gap:8px;flex-wrap:wrap;}
   .mdt-packet-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px;}
   .opinion-fields{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
-  .doctor-case-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:var(--sp-12);}
+  .doctor-case-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:var(--sp-8);padding:4px 0 8px;}
+  .doctor-case-header[data-compact="doctor-case-header-compact"] #case-heading{margin:0;font-size:var(--headline-3);line-height:1.15;}
+  .doctor-case-header-meta{margin-top:4px;line-height:1.35;}
   .doctor-case-header .lede{max-width:var(--text-width-body);}
   .doctor-case-layout{display:grid;grid-template-columns:180px minmax(0,1fr);gap:var(--sp-24);align-items:start;}
   .doctor-case-nav{display:flex;flex-direction:column;gap:3px;position:sticky;top:var(--sp-16);min-width:0;padding-right:var(--sp-12);border-right:1px solid var(--line);}
@@ -157,6 +159,16 @@
   .triage-department-item{padding:12px 2px;border-bottom:1px solid var(--line);}
   .triage-department-item .tiny{margin-top:5px;max-width:var(--text-width-body);font-size:var(--body-3);color:var(--ink2);}
   .triage-confirmation-card{margin:var(--sp-16) 0;padding:16px;border:1px solid var(--info);border-radius:var(--br-12);background:var(--surface-subtle);}
+  .triage-secondary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;flex:1;min-width:0;}
+  .triage-secondary-option{display:flex;align-items:center;gap:8px;min-width:0;min-height:44px;padding:8px 12px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--gray-000);cursor:pointer;}
+  .triage-secondary-option:hover{border-color:var(--accent);background:var(--surface-warm);}
+  .triage-secondary-option input{flex:0 0 auto;margin:0;}
+  .triage-secondary-option span{min-width:0;overflow-wrap:anywhere;line-height:1.35;}
+  .triage-secondary-count{margin-top:6px;color:var(--ink2);}
+  .overview-full-record-action{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:var(--sp-12);padding:12px 14px!important;border:1px solid var(--accent);border-radius:var(--br-8);background:var(--gray-000);color:var(--accent);font-size:var(--body-1);font-weight:650;}
+  .overview-full-record-action:hover{background:var(--surface-warm);}
+  .overview-full-record-action:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;}
+  .overview-workflow-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
   #tri-body>.doctor-decision-summary{grid-template-columns:repeat(2,minmax(0,1fr));}
   .doctor-primary-task{padding:14px 16px;margin-bottom:var(--sp-16);border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
   .doctor-disclosure{border-top:1px solid var(--line);padding:0 2px;}
@@ -315,10 +327,10 @@
     </aside>
 
     <main class="work">
-      <div class="doctor-case-header">
+      <div class="doctor-case-header" data-compact="doctor-case-header-compact">
         <div>
           <h1 id="case-heading">病例审阅</h1>
-          <div id="case-stage-hint" class="tiny" role="status" aria-live="polite"></div>
+          <div id="case-stage-hint" class="tiny doctor-case-header-meta" role="status" aria-live="polite"></div>
         </div>
         <button type="button" class="ghost btn-sm" onclick="go('list')">返回病例队列</button>
       </div>
@@ -926,6 +938,7 @@ function renderOverview(){
       <button class="mini" onclick="go('triage')">去分流确认</button></div>`);
   }
   const screening = (S.review&&S.review.mdt_screening)||{};
+  const confirmation = (S.review&&S.review.triage_doctor_confirmation)||p.triage_doctor_confirmation||{};
   if(!screening.status || screening.status!=='decided'){
     todo.push(`<div class="field"><div style="flex:1;">尚未完成 MDT 初筛</div>
       <button class="mini" onclick="go('mdt')">去 MDT 协作</button></div>`);
@@ -959,8 +972,8 @@ function renderOverview(){
       ${todo.length>1?`<details class="doctor-disclosure"><summary>其他待办（${todo.length-1}）</summary>${todo.slice(1).join('')}</details>`:''}
       <div class="tiny">下一步会根据 MDT 初筛决定变化；完整资料和证据可在对应页面展开。</div>
     </section>
-    <details class="doctor-disclosure">
-      <summary>查看完整患者资料</summary>
+    <details class="doctor-disclosure overview-full-record">
+      <summary class="overview-full-record-action"><span>查看完整病历资料</span><span class="tiny">主诉、检查、用药与信息缺口</span></summary>
       <div class="doctor-disclosure-body">
         <div class="ai-block"><strong>患者画像</strong><span class="tiny">原文出处和 AI 推断标记保留在详情中</span></div>
         <div class="field"><div class="muted">主诉</div><div style="flex:1;">${esc(prof.chief_complaint||c.main_issue||'（未提供）')}</div></div>
@@ -972,8 +985,10 @@ function renderOverview(){
       </div>
     </details>
     <div class="doctor-disclosure workflow-next-step">
-      <div class="doctor-disclosure-body"><strong>${screening.decision==='single_specialty'?'下一步：按单专科处理后进入报告审核。':(screening.decision==='need_more_info'?'下一步：补充资料后重新判断。':(screening.decision==='urgent_care'?'下一步：按急症流程处理，不进入普通 MDT。':(screening.decision==='recommend_mdt'?'下一步：记录正式 MDT 会诊，再进入报告审核。':'下一步：先完成分流确认，再决定是否启动正式 MDT。')))}</strong>
-        <div class="actions left"><button class="mini" onclick="go('triage')">去分流确认</button><button class="mini" onclick="go('mdt')">查看 MDT 判断</button></div>
+      <div class="doctor-disclosure-body"><strong>${!confirmation.status||confirmation.status!=='confirmed'?'下一步：先完成分流确认，再查看 MDT 预分析。':(screening.decision==='single_specialty'?'下一步：按单专科处理后进入报告审核。':(screening.decision==='need_more_info'?'下一步：补充资料后重新判断。':(screening.decision==='urgent_care'?'下一步：按急症流程处理，不进入普通 MDT。':(screening.decision==='recommend_mdt'?'下一步：完成正式 MDT 会诊记录，再进入报告审核。':'下一步：查看 MDT 预分析，再决定是否启动正式 MDT。'))))}</strong>
+        <div class="overview-workflow-actions">
+          ${!confirmation.status||confirmation.status!=='confirmed'?`<button class="primary mini" onclick="go('triage')">去分流确认</button><button class="mini" disabled title="完成分流确认后可查看">完成分流后查看 MDT 预分析</button>`:(screening.decision==='recommend_mdt'?`<button class="primary mini" onclick="go('mdt')">查看正式 MDT 记录</button><button class="mini" onclick="go('review')">去报告审核</button>`:`<button class="primary mini" onclick="go('mdt')">查看 MDT 预分析</button>`)}
+        </div>
       </div>
     </div>`;
 }
@@ -1014,7 +1029,7 @@ function renderTriage(){
   const deptOptions = departmentRows.map(d=>d.department).filter(Boolean);
   const confirmationHtml = confirmation.status==='confirmed'
     ? `<section class="triage-confirmation-card" id="triage-doctor-confirmation"><div class="inline-between"><h3 style="margin:0;">已确认分流方向</h3><span class="pill ok">医生已确认</span></div><div class="field"><div class="muted">主责科室</div><strong>${esc(confirmation.primary_department||'—')}</strong></div><div class="field"><div class="muted">协同科室</div><div>${esc((confirmation.secondary_departments||[]).join('、')||'无')}</div></div><div class="tiny">确认理由：${esc(confirmation.reason||'—')} · ${esc(confirmation.confirmed_at||'')}</div></section>`
-    : `<section class="triage-confirmation-card" id="triage-doctor-confirmation"><h3 style="margin-top:0;">确认主责科室与协同方向</h3><p class="muted">这一步决定病例后续由谁牵头，也决定正式 MDT 可邀请哪些科室；报告审核不会重复决定科室。</p><div class="field"><label for="triage-primary-department">主责科室</label><select id="triage-primary-department" style="flex:1;">${deptOptions.map(d=>`<option value="${esc(d)}" ${d===primary.department?'selected':''}>${esc(d)}</option>`).join('')}</select></div><div class="field"><label>协同科室</label><div class="inline-wrap" style="flex:1;">${deptOptions.filter(d=>d!==primary.department).map(d=>`<label class="chip"><input type="checkbox" data-triage-secondary value="${esc(d)}" ${(t.secondary||[]).some(x=>x.department===d)?'checked':''}> ${esc(d)}</label>`).join('')}</div></div><div class="field"><label for="triage-confirmation-reason">确认理由</label><textarea id="triage-confirmation-reason" placeholder="说明为什么由该科室牵头，以及是否需要协同" style="flex:1;min-height:64px;"></textarea></div><div class="inline-end"><span id="triage-confirmation-msg" class="tiny"></span><button class="primary mini" onclick="submitTriageConfirmation()">保存分流确认</button></div></section>`;
+    : `<section class="triage-confirmation-card" id="triage-doctor-confirmation"><h3 style="margin-top:0;">确认主责科室与协同方向</h3><p class="muted">这一步决定病例后续由谁牵头，也决定正式 MDT 可邀请哪些科室；报告审核不会重复决定科室。</p><div class="field"><label for="triage-primary-department">主责科室</label><select id="triage-primary-department" style="flex:1;">${deptOptions.map(d=>`<option value="${esc(d)}" ${d===primary.department?'selected':''}>${esc(d)}</option>`).join('')}</select></div><div class="field"><div><label>协同科室</label><div id="triage-secondary-count" class="tiny triage-secondary-count">已选择 ${(t.secondary||[]).length} 个</div></div><div class="triage-secondary-grid">${deptOptions.filter(d=>d!==primary.department).map(d=>`<label class="triage-secondary-option"><input type="checkbox" data-triage-secondary value="${esc(d)}" ${(t.secondary||[]).some(x=>x.department===d)?'checked':''} onchange="updateTriageSecondaryCount()"><span>${esc(d)}</span></label>`).join('')}</div></div><div class="field"><label for="triage-confirmation-reason">确认理由</label><textarea id="triage-confirmation-reason" placeholder="说明为什么由该科室牵头，以及是否需要协同" style="flex:1;min-height:64px;"></textarea></div><div class="inline-end"><span id="triage-confirmation-msg" class="tiny"></span><button class="primary mini" onclick="submitTriageConfirmation()">保存分流确认</button></div></section>`;
   $('tri-body').innerHTML = `
     <div class="doctor-decision-summary">
       <div><div class="muted">牵头科室</div><strong>${esc(primary.department||'—')}</strong></div>
@@ -1038,6 +1053,11 @@ async function submitTriageConfirmation(){
   if(r.status!==200 || !r.data.ok){ if(box) box.textContent=r.data.error||'保存失败'; return; }
   await openCase(S.caseId);
   go('triage');
+}
+function updateTriageSecondaryCount(){
+  const count = document.querySelectorAll('[data-triage-secondary]:checked').length;
+  const label = $('triage-secondary-count');
+  if(label) label.textContent = `已选择 ${count} 个`;
 }
 
 /* ===================== 屏 D：证据板 ===================== */
