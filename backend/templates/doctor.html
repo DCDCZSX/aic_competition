@@ -174,6 +174,10 @@
   .overview-full-record-action:hover{background:var(--surface-warm);}
   .overview-full-record-action:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;}
   .overview-workflow-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+  .overview-patient-record{margin-top:var(--sp-12);}
+  .overview-task-list{margin-top:var(--sp-16);padding:12px 14px;border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
+  .overview-task-list .doctor-disclosure-body{padding-bottom:0;}
+  .overview-task-list .doctor-primary-task{margin:0;padding:0;border:0;background:transparent;}
   #tri-body>.doctor-decision-summary{grid-template-columns:repeat(2,minmax(0,1fr));}
   .doctor-primary-task{padding:14px 16px;margin-bottom:var(--sp-16);border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
   .doctor-disclosure{border-top:1px solid var(--line);padding:0 2px;}
@@ -945,14 +949,16 @@ function renderOverview(){
           ${(x.source_refs||[]).map(r=>`<span class="ref" title="原文出处">${esc(r)}</span>`).join('')}</div>`).join('')
       : '<div class="tiny">（未提供）</div>';
   const pending = (S.review&&S.review.summary)||{};
+  const screening = (S.review&&S.review.mdt_screening)||{};
+  const confirmation = (S.review&&S.review.triage_doctor_confirmation)||p.triage_doctor_confirmation||{};
+  const formalRecord = (S.review&&S.review.mdt_formal_record)||{};
+  const formalComplete = formalRecord.status==='completed';
   let todo = [];
   const triage = p.triage||{};
   if(!triage.primary || !triage.primary.department){
     todo.push(`<div class="field"><div style="flex:1;">尚未完成分流确认</div>
       <button class="mini" onclick="go('triage')">去分流确认</button></div>`);
   }
-  const screening = (S.review&&S.review.mdt_screening)||{};
-  const confirmation = (S.review&&S.review.triage_doctor_confirmation)||p.triage_doctor_confirmation||{};
   if(!screening.status || screening.status!=='decided'){
     todo.push(`<div class="field"><div style="flex:1;">尚未完成 MDT 初筛</div>
       <button class="mini" onclick="go('mdt')">去 MDT 协作</button></div>`);
@@ -962,31 +968,33 @@ function renderOverview(){
     todo.push(`<div class="field"><div style="flex:1;">${pendingDisagreements.length} 条分歧待处理</div>
       <button class="mini" onclick="go('mdt')">去 MDT 协作</button></div>`);
   }
-  if(screening.decision==='recommend_mdt' && !(S.review&&S.review.mdt_formal_record)){
+  if(screening.decision==='recommend_mdt' && !formalComplete){
     todo.push(`<div class="field"><div style="flex:1;">正式 MDT 尚未记录</div>
       <button class="mini" onclick="go('mdt')">记录正式 MDT</button></div>`);
   }
-  if(pending.pending) todo.push(`<div class="field"><div style="flex:1;">${pending.pending} 条决策条目待审核（[F]）</div>
-      <button class="mini" onclick="go('review')">去报告审核</button></div>`);
-  if(!S.review.published) todo.push(`<div class="field"><div style="flex:1;">报告尚未生成审核版（[F]）</div>
-      <button class="mini" onclick="go('review')">去报告审核</button></div>`);
+  if(pending.pending || !S.review.published){
+    todo.push(`<div class="field"><div style="flex:1;">${pending.pending?pending.pending+' 条决策条目待审核；':''}报告审核${S.review.published?'':'版尚未完成'}</div></div>`);
+  }
   if((p.gaps||[]).length) todo.push(`<div class="field"><div style="flex:1;">仍有 ${p.gaps.length} 项信息缺口未补</div>
       <button class="mini" onclick="go('review')">去审核条目</button></div>`);
   if(!todo.length) todo.push('<div class="tiny">暂无待处理事项</div>');
 
-  $('ov-body').innerHTML = `
-    <div class="doctor-decision-summary">
-      <div><div class="muted">病例概况</div><strong>${esc(prof.chief_complaint||c.main_issue||'（未提供）')}</strong></div>
-      <div><div class="muted">当前状态</div><span class="pill gray">${esc(S.review.case_state_label||'待医生审核')}</span></div>
-      <div><div class="muted">可靠性</div><span class="pill ${rel.level==='高'?'ok':(rel.level==='中'?'warn':'danger')}">${esc(rel.level||'—')}</span></div>
-    </div>
-    <section class="doctor-primary-task">
-      <h3>当前待办</h3>
-      ${todo.slice(0,1).join('')}
-      ${todo.length>1?`<details class="doctor-disclosure"><summary>其他待办（${todo.length-1}）</summary>${todo.slice(1).join('')}</details>`:''}
-      <div class="tiny">下一步会根据 MDT 启动判断变化；完整资料和证据可在对应页面展开。</div>
-    </section>
-    <details class="doctor-disclosure overview-full-record">
+  const nextText = !confirmation.status||confirmation.status!=='confirmed'
+    ? '下一步：先完成分流确认，再查看 MDT 预分析。'
+    : (screening.decision==='single_specialty' ? '下一步：按单专科处理后进入报告审核。'
+      : (screening.decision==='need_more_info' ? '下一步：补充资料后重新判断。'
+        : (screening.decision==='urgent_care' ? '下一步：按急症流程处理，不进入普通 MDT。'
+          : (screening.decision==='recommend_mdt' ? '下一步：完成正式 MDT 会诊记录，再进入报告审核。'
+            : '下一步：查看 MDT 预分析，再决定是否启动正式 MDT。'))));
+  const nextActions = !confirmation.status||confirmation.status!=='confirmed'
+    ? `<button class="primary mini" onclick="go('triage')">去分流确认</button><button class="mini" disabled title="完成分流确认后可查看">完成分流后查看 MDT 预分析</button>`
+    : (screening.decision==='recommend_mdt'
+      ? (formalComplete ? `<button class="primary mini" onclick="go('review')">去报告审核</button>`
+        : `<button class="primary mini" onclick="go('mdt')">记录正式 MDT</button><button class="mini" disabled>完成 MDT 记录后可进入报告审核</button>`)
+      : (screening.decision==='single_specialty' ? `<button class="primary mini" onclick="go('review')">去报告审核</button>`
+        : `<button class="primary mini" onclick="go('mdt')">查看 MDT 预分析</button>`));
+
+  const patientRecord = `<details class="doctor-disclosure overview-full-record overview-patient-record" open>
       <summary class="overview-full-record-action"><span>查看完整病历资料</span><span class="tiny">主诉、检查、用药与信息缺口</span></summary>
       <div class="doctor-disclosure-body">
         <div class="ai-block"><strong>患者画像</strong><span class="tiny">原文出处和 AI 推断标记保留在详情中</span></div>
@@ -997,14 +1005,23 @@ function renderOverview(){
         <h3>用药</h3>${(prof.medications||[]).length?prof.medications.map(m=>`<div class="field"><div style="flex:1;">${esc(m.name)} ${esc(m.dose||'')}</div></div>`).join(''):'<div class="tiny">（未提供）</div>'}
         <h3>信息缺口</h3>${(p.gaps||[]).length?p.gaps.map(g=>`<div class="field"><div style="flex:1;">${esc(g)}</div></div>`).join(''):'<div class="tiny">（无）</div>'}
       </div>
-    </details>
-    <div class="doctor-disclosure workflow-next-step">
-      <div class="doctor-disclosure-body"><strong>${!confirmation.status||confirmation.status!=='confirmed'?'下一步：先完成分流确认，再查看 MDT 预分析。':(screening.decision==='single_specialty'?'下一步：按单专科处理后进入报告审核。':(screening.decision==='need_more_info'?'下一步：补充资料后重新判断。':(screening.decision==='urgent_care'?'下一步：按急症流程处理，不进入普通 MDT。':(screening.decision==='recommend_mdt'?'下一步：完成正式 MDT 会诊记录，再进入报告审核。':'下一步：查看 MDT 预分析，再决定是否启动正式 MDT。'))))}</strong>
-        <div class="overview-workflow-actions">
-          ${!confirmation.status||confirmation.status!=='confirmed'?`<button class="primary mini" onclick="go('triage')">去分流确认</button><button class="mini" disabled title="完成分流确认后可查看">完成分流后查看 MDT 预分析</button>`:(screening.decision==='recommend_mdt'?`<button class="primary mini" onclick="go('mdt')">查看正式 MDT 记录</button><button class="mini" onclick="go('review')">去报告审核</button>`:`<button class="primary mini" onclick="go('mdt')">查看 MDT 预分析</button>`)}
-        </div>
+    </details>`;
+  $('ov-body').innerHTML = `
+    <div class="doctor-decision-summary">
+      <div><div class="muted">病例概况</div><strong>${esc(prof.chief_complaint||c.main_issue||'（未提供）')}</strong></div>
+      <div><div class="muted">当前状态</div><span class="pill gray">${esc(S.review.case_state_label||'待医生审核')}</span></div>
+      <div><div class="muted">可靠性</div><span class="pill ${rel.level==='高'?'ok':(rel.level==='中'?'warn':'danger')}">${esc(rel.level||'—')}</span></div>
+    </div>
+    ${patientRecord}
+    <section class="overview-task-list">
+      <div class="doctor-primary-task">
+        <h3>当前待办</h3>
+        ${todo.slice(0,1).join('')}
+        ${todo.length>1?`<details class="doctor-disclosure"><summary>其他待办（${todo.length-1}）</summary>${todo.slice(1).join('')}</details>`:''}
+        <div class="tiny">先确认患者资料，再处理当前任务；完整资料和证据可在上方展开。</div>
+        <div class="overview-workflow-actions"><strong>${nextText}</strong>${nextActions}</div>
       </div>
-    </div>`;
+    </section>`;
 }
 function updateWorkflowStage(){
   const hint = $('case-stage-hint');
