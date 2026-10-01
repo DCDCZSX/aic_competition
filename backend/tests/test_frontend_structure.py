@@ -677,9 +677,20 @@ class FrontendStructureTest(unittest.TestCase):
         mdt = html[mdt_start:review_start]
         self.assertIn("renderMdtScreening", html)
         self.assertIn("renderMdtPreparationPacket", html)
-        self.assertIn("MDT 初筛与病例分流", html)
+        self.assertIn("MDT 启动判断", html)
         self.assertNotIn("查看分诊与 MDT 资料", overview)
         self.assertIn("MDT 协作", mdt)
+
+    def test_mdt_screening_only_decides_startup_after_triage(self):
+        """MDT 页面不能再次承担分流科室选择。"""
+        _, html = self.get("/doctor")
+        self.assertIn("是否启动正式 MDT", html)
+        self.assertIn("分流确认已经确定主责和协同科室", html)
+        self.assertIn("保存 MDT 启动判断", html)
+        mdt_start = html.index('id="s-mdt"')
+        review_start = html.index('id="s-review"')
+        mdt = html[mdt_start:review_start]
+        self.assertNotIn("data-mdt-dept", mdt)
 
     def test_doctor_case_header_exposes_current_workflow_stage(self):
         """病例页标题下应告诉医生当前要处理的阶段。"""

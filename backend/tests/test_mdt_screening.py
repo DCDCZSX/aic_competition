@@ -87,6 +87,14 @@ class MdtScreeningFlowTest(unittest.TestCase):
         self.assertFalse(duplicate["ok"])
         self.assertIn("不同", duplicate["error"])
 
+    def test_recommend_mdt_uses_confirmed_triage_departments_when_scope_is_omitted(self):
+        result = self.submit(
+            decision="recommend_mdt", reason="需要多科共同判断",
+            purpose="明确共同处理重点")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["mdt_screening"]["departments"], ["内分泌科", "眼科"])
+        self.assertEqual(result["mdt_screening"]["departments_source"], "triage_confirmation")
+
     def test_invalid_decision_and_out_of_domain_department_are_rejected(self):
         invalid_decision = self.submit(decision="auto_publish", reason="不支持的决定")
         self.assertFalse(invalid_decision["ok"])

@@ -1333,7 +1333,16 @@ class CaseFlow:
         if decision == "recommend_mdt" and not safe_purpose:
             return {"ok": False, "error": "建议 MDT 时会诊目的不能为空"}
 
-        raw_departments = departments if departments is not None else []
+        confirmation = (self.store.load_case(case_id).get("payload") or {}).get(
+            "triage_doctor_confirmation") or {}
+        departments_source = "mdt_request"
+        if decision == "recommend_mdt" and confirmation.get("status") != "confirmed":
+            return {"ok": False, "error": "请先完成分流确认，再启动正式 MDT"}
+        if decision == "recommend_mdt" and not departments:
+            raw_departments = list(confirmation.get("selected") or [])
+            departments_source = "triage_confirmation"
+        else:
+            raw_departments = departments if departments is not None else []
         if not isinstance(raw_departments, list):
             return {"ok": False, "error": "科室必须是列表"}
         if len(raw_departments) > 6:
@@ -1356,11 +1365,7 @@ class CaseFlow:
         if decision == "recommend_mdt" and len(normalized_departments) < 2:
             return {"ok": False, "error": "建议 MDT 时至少两个不同科室"}
 
-        confirmation = (self.store.load_case(case_id).get("payload") or {}).get(
-            "triage_doctor_confirmation") or {}
         if decision == "recommend_mdt":
-            if confirmation.get("status") != "confirmed":
-                return {"ok": False, "error": "请先完成分流确认，再启动正式 MDT"}
             confirmed_departments = set(confirmation.get("selected") or [])
             if not set(normalized_departments).issubset(confirmed_departments):
                 return {"ok": False, "error": "MDT 参与科室必须来自已确认的分流方向"}
@@ -1391,6 +1396,7 @@ class CaseFlow:
             "reason": safe_reason,
             "purpose": safe_purpose,
             "departments": normalized_departments,
+            "departments_source": departments_source,
             "reviewer_id": safe_reviewer,
             "decided_at": now,
             "patient_next_step": MDT_SCREENING_NEXT_STEPS[decision],
