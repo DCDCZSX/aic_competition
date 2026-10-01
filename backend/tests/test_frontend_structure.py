@@ -654,6 +654,11 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertLess(nav.index("分流确认"), nav.index("MDT 协作"))
         self.assertLess(nav.index("MDT 协作"), nav.index("报告审核"))
 
+    def test_triage_confirmation_precedes_mdt_and_review(self):
+        _, html = self.get("/doctor")
+        for token in ("triage-doctor-confirmation", "确认主责科室", "submitTriageConfirmation", "已确认分流方向"):
+            self.assertIn(token, html)
+
     def test_mdt_controls_live_in_mdt_screen(self):
         """MDT 初筛和分歧处理应位于 MDT 页面，而不是藏在病例总览折叠区。"""
         _, html = self.get("/doctor")

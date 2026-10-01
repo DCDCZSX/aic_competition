@@ -1356,6 +1356,15 @@ class CaseFlow:
         if decision == "recommend_mdt" and len(normalized_departments) < 2:
             return {"ok": False, "error": "建议 MDT 时至少两个不同科室"}
 
+        confirmation = (self.store.load_case(case_id).get("payload") or {}).get(
+            "triage_doctor_confirmation") or {}
+        if decision == "recommend_mdt":
+            if confirmation.get("status") != "confirmed":
+                return {"ok": False, "error": "请先完成分流确认，再启动正式 MDT"}
+            confirmed_departments = set(confirmation.get("selected") or [])
+            if not set(normalized_departments).issubset(confirmed_departments):
+                return {"ok": False, "error": "MDT 参与科室必须来自已确认的分流方向"}
+
         normalized_reviewer_map: Dict[str, List[str]] = {}
         if department_reviewer_map is not None:
             if not isinstance(department_reviewer_map, Mapping):
@@ -1438,6 +1447,58 @@ class CaseFlow:
             "authorized_reviewer_count": authorized_reviewer_count,
             "pending_departments": pending_departments,
         }
+
+    @serialized_case
+    def submit_triage_confirmation(
+        self, case_id: str, *, primary_department: str,
+        secondary_departments: Optional[List[str]] = None, reason: str = "",
+        reviewer_id: str = "",
+    ) -> Dict[str, Any]:
+        """保存医生对牵头/协同科室的确认，作为 MDT 和报告的前置决策。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+        if str(case.get("case_state") or "") == "doctor_confirmed":
+            return {"ok": False, "error": "已发布审核版的病例不能重新确认分流方向"}
+        try:
+            primary = department_domain.resolve(str(primary_department or "")).name
+            safe_reason = update_service.sanitize_optional_content(reason, field_name="分流确认理由")
+            safe_reviewer = update_service.sanitize_optional_content(reviewer_id, field_name="分流确认人")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not primary:
+            return {"ok": False, "error": "主责科室不能为空"}
+        if not safe_reason:
+            return {"ok": False, "error": "分流确认理由不能为空"}
+        raw_secondary = secondary_departments if secondary_departments is not None else []
+        if not isinstance(raw_secondary, list) or len(raw_secondary) > 6:
+            return {"ok": False, "error": "协同科室格式或数量不正确"}
+        secondary: List[str] = []
+        for raw in raw_secondary:
+            name = department_domain.resolve(str(raw or "")).name
+            if not name:
+                return {"ok": False, "error": f"科室不在支持的科室域内：{raw}"}
+            if name == primary or name in secondary:
+                return {"ok": False, "error": "协同科室不能与主责科室重复"}
+            secondary.append(name)
+        if not safe_reviewer:
+            return {"ok": False, "error": "分流确认人不能为空"}
+        confirmation = {
+            "status": "confirmed", "primary_department": primary,
+            "secondary_departments": secondary, "selected": [primary] + secondary,
+            "reason": safe_reason, "reviewer_id": safe_reviewer, "confirmed_at": _now(),
+        }
+        payload = dict(case.get("payload") or {})
+        payload["triage_doctor_confirmation"] = confirmation
+        self.store.save_case(case_id, owner_id=case.get("owner_id") or "",
+                             patient_name=case.get("patient_name") or "",
+                             main_issue=case.get("main_issue") or "",
+                             status=case.get("status") or "running",
+                             case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
+                             report_version=int(case.get("report_version") or 1), payload=payload)
+        self.store.add_audit(case_id, "triage_confirmation_recorded",
+                             f"primary={primary}; secondary={len(secondary)}; reviewer={safe_reviewer}")
+        return {"ok": True, "triage_doctor_confirmation": confirmation}
 
     @serialized_case
     def submit_mdt_formal_record(
@@ -2149,6 +2210,7 @@ class CaseFlow:
             "case_state": case.get("case_state"),
             "case_state_label": CASE_STATE_LABELS.get(str(case.get("case_state")), case.get("case_state")),
             "mdt_screening": payload.get("mdt_screening") or None,
+            "triage_doctor_confirmation": payload.get("triage_doctor_confirmation") or None,
             "mdt_formal_record": payload.get("mdt_formal_record") or None,
             "mdt_preparation_packet": report_service.build_mdt_preparation_packet(case),
             "items": [i.to_dict() for i in items],
@@ -2368,6 +2430,9 @@ class CaseFlow:
 
         payload = dict(case.get("payload") or {})
         screening = payload.get("mdt_screening") or {}
+        if screening.get("status") == "decided" and (payload.get("triage") or {}).get("primary") \
+                and (payload.get("triage_doctor_confirmation") or {}).get("status") != "confirmed":
+            return {"ok": False, "error": "请先在分流确认中确认主责和协同科室"}
         formal_record = payload.get("mdt_formal_record") or {}
         if (screening.get("decision") == "recommend_mdt"
                 and formal_record.get("status") != "completed"):
