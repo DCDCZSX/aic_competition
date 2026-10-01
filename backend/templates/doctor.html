@@ -273,8 +273,8 @@
       <div class="auth-preview">
         <div class="ct">审核留痕示意（脱敏示例数据）</div>
         <div class="pv-row"><span>14:00　接受</span><span class="chip ok">路径步骤 · 先查眼底</span></div>
-        <div class="pv-row"><span>14:02　修改</span><span class="chip ok">科室入选 · 牵头改为眼科</span></div>
-        <div class="pv-row"><span>14:05　驳回</span><span class="chip danger">患者建议 · 依据不足</span></div>
+        <div class="pv-row"><span>14:02　修改</span><span class="chip ok">医疗安排 · 补充眼科评估</span></div>
+        <div class="pv-row"><span>14:05　处理</span><span class="chip danger">MDT 分歧 · 需要补充资料</span></div>
         <div class="pv-row"><span>14:10　发布</span><span class="chip info">审核版 v2 · 已审核</span></div>
       </div>
 
@@ -1219,7 +1219,7 @@ function renderReview(){
       ? ('已发布审核版 · 审核人 ' + (r.review.published_by||'医生') + ' · ' + (r.review.published_at||'') + ' · v' + (r.review.version||''))
       : 'AI 生成 · 尚未经医生审核（逐条确认后方可发布审核版）';
   $('rev-summary-inline').innerHTML = `
-    <div class="ai-block">审核只需要处理会改变医疗方向或患者安全的内容；普通摘要和已明确的路径步骤由系统归档，不阻塞发布。
+    <div class="ai-block">审核只处理会改变医疗方向或影响患者安全的医学内容；分流科室和患者沟通内容分别在前置分流确认与报告预览中处理，不在这里重复审核。普通摘要和已明确的路径步骤由系统归档，不阻塞发布。
       <div class="tiny" style="margin-top:5px;">${screening.decision==='recommend_mdt' ? (formalRecord.status==='completed' ? '本次报告可引用已记录的正式 MDT 结论；详细会诊记录请回到 MDT 协作查看。' : '正式 MDT 尚未记录完成，报告审核不会把 AI 预分析当作医生结论。') : '本次报告按单专科或其他分流决定处理，不包含正式 MDT 结论。'}</div>
       ${S.extraQuestion?`<div class="tiny">已从 MDT 审阅台加入待确认问题：${esc(S.extraQuestion)}（可在下方对应分歧条目上操作）</div>`:''}
     </div>
@@ -1236,7 +1236,7 @@ function renderReview(){
     const emptyInline = $('rev-publish-inline'); if(emptyInline) emptyInline.innerHTML = '';
     return;
   }
-  const typeLabel = {'department_selection':'科室选择','path_step':'就医路径','consensus_item':'共识与分歧','patient_advice':'患者沟通建议'};
+  const typeLabel = {'path_step':'医疗安排','consensus_item':'共识与分歧'};
   // API 分级值固定为 review_tier==='required'、review_tier==='sample'、review_tier==='automatic'。
   const tierOf = it=>it.review_tier || (it.needs_doctor_review===false?'automatic':'required');
   const tierLabel = {required:'必审', sample:'建议抽查', automatic:'自动处理'};
@@ -1276,7 +1276,7 @@ function renderReview(){
      </div>`;
   }
   function reviewDetailMarkup(it){
-    const typeLabel = {'department_selection':'科室选择','path_step':'就医路径','consensus_item':'共识与分歧','patient_advice':'患者沟通建议'};
+    const typeLabel = {'path_step':'医疗安排','consensus_item':'共识与分歧'};
     const tier = tierOf(it);
     const tone=it.state==='confirmed'||it.state==='modified'?'ok':(it.state==='rejected'?'danger':(it.state==='uncertain'?'warn':(it.state==='auto_processed'?'info':'gray')));
     const current = doctorFacingContent(it.changed_by_doctor?it.reviewer_content:it.ai_content);
@@ -1348,7 +1348,7 @@ function publishPanelHtml(sum, canPublish, pfx){
     <div class="card" style="margin-top:6px;">
       <h3 style="margin-top:0;">发布审核版报告</h3>
       <div class="tiny">审核进度：医生已处理 ${sum.doctor_reviewed||sum.human_touched||0}　免审（自动） ${sum.auto_processed||0}　待审 ${sum.pending||0}</div>
-      <div class="tiny">规则：免审条目不会计入医生确认；批量处理只适用于已明确允许批量的条目，高风险、冲突、分析失败、科室选择和关键路径必须逐条处理。</div>
+      <div class="tiny">规则：免审条目不会计入医生确认；批量处理只适用于已明确允许批量的条目，高风险、冲突、分析失败和关键医疗安排必须逐条处理。</div>
       ${batchBlockedPending?`<div class="tiny" style="color:var(--warn);">当前有 ${batchBlockedPending} 条必审项目必须逐条处理，批量入口已停用。</div>`:''}
       ${pendingDisagreements?`<div class="tiny" style="color:var(--warn);">还有 ${pendingDisagreements} 条正式 MDT 分歧未记录处理状态，请先在 MDT 会诊记录中保存处理结果。</div>`:''}
       ${!formalReady?'<div class="tiny" style="color:var(--warn);">正式 MDT 尚未完成记录，请先回到 MDT 协作填写会诊结论。</div>':''}

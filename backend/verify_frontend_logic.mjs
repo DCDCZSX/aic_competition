@@ -503,7 +503,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   /* 发布入口必须"两处都有"：≥1440px 右轨常驻，<1440px 右轨被 CSS 隐藏 → 屏 F 主区兜底
      （真实缺陷：入口只在右轨里，1366/1280 屏上医生审完发不出去） */
   D.S.review = {
-    items: [{ item_id: 'IT-1', title: '科室入选：内分泌科', target_type: 'department_selection',
+    items: [{ item_id: 'IT-1', title: '待医生确认的医疗安排', target_type: 'path_step',
               ai_content: '建议内分泌科牵头', state: 'awaiting', state_label: '待审',
               changed_by_doctor: false, reason_hint: '规则命中', evidence_refs: ['S-1:3'] }],
     published: false, case_state: 'awaiting_doctor', review: {}, doctor_opinions: [],
