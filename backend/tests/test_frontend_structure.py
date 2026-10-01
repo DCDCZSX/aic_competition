@@ -637,6 +637,14 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertNotIn("内容修订 v${esc(it.content_revision||1)}", html)
         self.assertNotIn("${esc(it.item_id)} ·", html)
 
+    def test_doctor_review_scope_excludes_triage_and_patient_communication(self):
+        """报告审核的前端分类只保留医学安排与共识分歧。"""
+        _, html = self.get("/doctor")
+        self.assertIn("医疗安排", html)
+        self.assertIn("共识与分歧", html)
+        self.assertNotIn("'department_selection':'科室选择'", html)
+        self.assertNotIn("'patient_advice':'患者沟通建议'", html)
+
     def test_doctor_review_detail_typography_is_readable(self):
         """审核正文与证据不能继续使用 11px 的 tiny 字号。"""
         _, html = self.get("/doctor")
