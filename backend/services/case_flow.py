@@ -1283,7 +1283,8 @@ class CaseFlow:
         if updated is None:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
         for reviewer_id in reviewers:
-            self.store.grant_case_access(case_id, reviewer_id, granted_by=actor)
+            self.store.grant_case_access(
+                case_id, reviewer_id, granted_by=actor, case_role="primary")
         self.store.add_audit(
             case_id,
             "case_submitted_for_review",
@@ -1432,7 +1433,8 @@ class CaseFlow:
                 authorized_departments.append(department)
                 authorized_reviewer_count += len(reviewers)
                 for reviewer in reviewers:
-                    self.store.grant_case_access(case_id, reviewer, granted_by=safe_reviewer)
+                    self.store.grant_case_access(
+                        case_id, reviewer, granted_by=safe_reviewer, case_role="collaborator")
             if authorized_departments:
                 self.store.add_audit(
                     case_id,
