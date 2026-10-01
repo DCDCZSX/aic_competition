@@ -26,9 +26,10 @@ class PatientRecordsHttpTest(unittest.TestCase):
         app_module.auth_service = self.auth
         app_module.app.config.update(TESTING=True)
         self.client = app_module.app.test_client()
-        self.store.save_case("C-ALICE-1", owner_id="alice", main_issue="血糖控制不佳",
+        self.store.save_case("C-ALICE-1", owner_id="alice", main_issue="",
                              case_state="awaiting_doctor", payload={
                                  "triage": {"primary": {"department": "内分泌科"}},
+                                 "masked_main_issue": "血糖控制不佳",
                                  "masked_history": "首次提交：近两周口渴、夜尿增多"})
         self.store.save_case("C-ALICE-2", owner_id="alice", main_issue="视物模糊",
                              case_state="doctor_confirmed", report_version=2, payload={
@@ -83,6 +84,25 @@ class PatientRecordsHttpTest(unittest.TestCase):
         self.assertEqual(body["page_size"], 5)
         self.assertEqual(body["total"], 14)
         self.assertEqual(len(body["cases"]), 5)
+
+    def test_patient_case_list_falls_back_to_masked_main_issue(self):
+        token = self._token("alice")
+        response = self.client.get("/api/v2/my-cases?page_size=50",
+                                   headers={"Authorization": f"Bearer {token}"})
+        rows = {row["case_id"]: row for row in response.get_json()["cases"]}
+        self.assertEqual(rows["C-ALICE-1"]["main_issue"], "血糖控制不佳")
+
+    def test_patient_can_archive_and_restore_own_case(self):
+        token = self._token("alice")
+        headers = {"Authorization": f"Bearer {token}"}
+        archive = self.client.post("/api/v2/case/C-ALICE-1/archive", headers=headers)
+        self.assertEqual(archive.status_code, 200, archive.get_json())
+        listed = self.client.get("/api/v2/my-cases?page_size=50", headers=headers).get_json()
+        self.assertNotIn("C-ALICE-1", {row["case_id"] for row in listed["cases"]})
+        restore = self.client.delete("/api/v2/case/C-ALICE-1/archive", headers=headers)
+        self.assertEqual(restore.status_code, 200, restore.get_json())
+        listed = self.client.get("/api/v2/my-cases?page_size=50", headers=headers).get_json()
+        self.assertIn("C-ALICE-1", {row["case_id"] for row in listed["cases"]})
 
     def test_patient_record_detail_contains_submitted_material_without_internal_review(self):
         token = self._token("alice")
