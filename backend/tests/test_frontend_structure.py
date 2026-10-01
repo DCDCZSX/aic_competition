@@ -742,6 +742,15 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("查看完整病历资料", html)
         self.assertIn("overview-workflow-actions", html)
 
+    def test_doctor_overview_prioritizes_patient_record_before_todos(self):
+        """总览按先理解病例、再处理待办的顺序组织，避免待办卡片占满首屏。"""
+        _, html = self.get("/doctor")
+        overview = html
+        self.assertLess(overview.index("overview-patient-record"), overview.index("overview-task-list"))
+        self.assertIn("overview-patient-record", overview)
+        self.assertIn("overview-task-list", overview)
+        self.assertIn("formalComplete", html)
+
     def test_doctor_overview_expresses_triage_before_mdt_as_conditional_flow(self):
         """摘要页应先引导分流确认，再按条件进入 MDT 预分析。"""
         _, html = self.get("/doctor")
