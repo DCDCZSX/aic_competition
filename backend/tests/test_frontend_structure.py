@@ -600,6 +600,30 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("查看审核详情", html)
         self.assertIn("自动处理不会阻塞发布", html)
 
+    def test_doctor_review_has_a_dedicated_detail_view_for_each_item(self):
+        """审核列表只放摘要，单条内容在工作台详情视图中展开。"""
+        _, html = self.get("/doctor")
+        self.assertIn('id="rev-detail"', html)
+        self.assertIn("openReviewDetail", html)
+        self.assertIn("返回审核列表", html)
+        self.assertIn("查看详情", html)
+
+    def test_doctor_review_uses_doctor_facing_chinese_labels(self):
+        """医生端不应把内部枚举或患者侧措辞直接展示给医生。"""
+        _, html = self.get("/doctor")
+        self.assertIn("AI 初稿", html)
+        self.assertIn("待医生判断", html)
+        self.assertIn("内容版本：", html)
+        self.assertNotIn("内容修订 v${esc(it.content_revision||1)}", html)
+        self.assertNotIn("${esc(it.item_id)} ·", html)
+
+    def test_doctor_review_detail_typography_is_readable(self):
+        """审核正文与证据不能继续使用 11px 的 tiny 字号。"""
+        _, html = self.get("/doctor")
+        self.assertIn("review-detail-content", html)
+        self.assertIn("review-detail-content .review-copy", html)
+        self.assertIn("review-detail-content .review-meta", html)
+
     def test_doctor_empty_context_hides_right_rail_and_reclaims_grid(self):
         """未选择病例时右栏不应占用宽屏布局，选中病例后再恢复。"""
         _, html = self.get("/doctor")
