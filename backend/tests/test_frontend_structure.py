@@ -161,6 +161,14 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="s-stage3"', html)
         self.assertIn('id="s-stage4"', html)
 
+    def test_patient_record_center_has_pagination_and_safe_detail_fields(self):
+        _, html = self.get("/patient")
+        for token in (
+            "recordPageSize", "page_size=", "patient-record-pager", "上一页", "下一页",
+            "病例 #", "/patient-record", "我提交的病情资料",
+        ):
+            self.assertIn(token, html, f"患者病历中心缺少 {token}")
+
     def test_patient_sections_live_inside_main(self):
         """所有业务屏必须在 <main class="work"> 内：两条轨道都必须在 main 之外。
 
