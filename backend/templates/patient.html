@@ -64,6 +64,7 @@
   .stage-details[open]>summary::before{content:'－';}
   .stage-details>#path-body,.stage-details>#mdt-body{padding:0 14px 14px;}
   .patient-record-entry{margin-top:var(--sp-16);padding-top:var(--sp-12);border-top:1px solid var(--line);}
+  .patient-record-actions{display:grid;gap:8px;}
   .patient-record-entry button{width:100%;text-align:left;}
   .patient-record-list{display:grid;gap:10px;}
   .patient-record-card{padding:14px 16px;border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
@@ -182,7 +183,10 @@
         <div class="progress"><i id="steps-bar" style="width:0%"></i></div>
         <div class="tiny" id="steps-note">共 4 个阶段 · 尚未开始</div>
       </div>
-      <div class="patient-record-entry"><button class="ghost" type="button" onclick="goRecords()">我的病历</button></div>
+      <div class="patient-record-entry"><div class="patient-record-actions">
+        <button class="primary" type="button" onclick="startNewCase()">新增病历</button>
+        <button class="ghost" type="button" onclick="goRecords()">我的病历</button>
+      </div></div>
     </aside>
 
     <!-- 中轨：工作区 -->
@@ -496,6 +500,25 @@ function goRecords(page=1){
   loadPatientRecords(page);
   renderContext();
   window.scrollTo({top:0,behavior:'smooth'});
+}
+function startNewCase(){
+  // 新病例必须清掉上一病例的运行态，避免把旧资料、报告或病例号带入新提交。
+  S.caseId=null; S.previewToken=null; S.goals=[]; S.questions=[]; S.answers={}; S.gaps=[];
+  S.profile=null; S.triage=null; S.path=null; S.mdt=null; S.report=null; S.routing=null;
+  S.mdtPending=false; S.mdtStatus=null; S.analysisStatus=null; S.analysisWarnings=[];
+  S.reviewDepartment=''; S.reviewSubmissionError='';
+  ['history','main-issue','f-age','f-symptoms','f-meds','f-exams'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value='';
+  });
+  document.querySelectorAll('#disease-chips .chip').forEach(el=>{
+    el.classList.remove('on'); el.setAttribute('aria-pressed','false');
+  });
+  document.querySelectorAll('#s-goal .goal').forEach(el=>{
+    el.classList.remove('sel'); el.setAttribute('aria-pressed','false');
+  });
+  pickGoal('unknown_department'); switchTab('paste');
+  ['intake-msg','flow-msg','records-msg'].forEach(id=>msg(id,''));
+  go('stage1');
 }
 async function loadPatientRecords(page=1){
   const box=document.getElementById('records-body');

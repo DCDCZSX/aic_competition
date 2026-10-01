@@ -161,6 +161,13 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="s-stage3"', html)
         self.assertIn('id="s-stage4"', html)
 
+    def test_patient_has_sibling_new_case_entry_and_resets_old_case_state(self):
+        _, html = self.get("/patient")
+        self.assertIn("我的病历", html)
+        self.assertIn('onclick="startNewCase()"', html)
+        self.assertIn("S.caseId=null", html)
+        self.assertIn("['history','main-issue'", html)
+
     def test_patient_record_center_has_pagination_and_safe_detail_fields(self):
         _, html = self.get("/patient")
         for token in (
