@@ -732,6 +732,8 @@ def get_case(case_id):
         safe_payload = dict(case.get('payload') or {})
         safe_payload['mdt_screening'] = patient_safe_mdt_screening(
             safe_payload.get('mdt_screening'))
+        # 正式 MDT 记录属于医生协作和审核范围，患者端只通过患者安全摘要获取下一步。
+        safe_payload.pop('mdt_formal_record', None)
         safe_case['payload'] = safe_payload
         case = safe_case
     return jsonify({'case': case, 'audit': _shared_store.list_audit(case_id, limit=50)})
@@ -876,6 +878,31 @@ def submit_mdt_screening(case_id):
     )
     if not result.get('ok'):
         result.setdefault('code', 'invalid_request')
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/mdt-formal-record', methods=['POST'])
+def submit_mdt_formal_record(case_id):
+    """记录真实医生 MDT，会前 AI 预分析不自动视为正式会诊结论。"""
+    session, error = _guard_doctor_case(case_id, 'decision')
+    if error:
+        return error
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        status = string_field(data, 'status', default='', max_length=32)
+        participants = string_list(data, 'participants', default=(), max_items=12)
+        conclusion = string_field(data, 'conclusion', default='', max_length=6000)
+        unresolved = string_field(data, 'unresolved', default='', max_length=3000)
+        next_step = string_field(data, 'next_step', default='', max_length=3000)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    result = case_flow.submit_mdt_formal_record(
+        case_id, status=status, participants=participants,
+        conclusion=conclusion, unresolved=unresolved, next_step=next_step,
+        reviewer_id=session.username,
+    )
     return jsonify(result), (200 if result.get('ok') else 400)
 
 

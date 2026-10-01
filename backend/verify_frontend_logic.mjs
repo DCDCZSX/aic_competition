@@ -445,7 +445,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     mdt: { analyses:[{department:'内分泌科', facts:['血糖偏高'], inferences:[], checks:[]}], aggregation:{consensus:[{topic:'先完善检查', supporters:['内分泌科']}], disagreements:[], open_questions:['是否需要复查']}, challenge:{} },
     gaps:['缺少近期检查结果']
   }};
-  D.S.review = { published:false, case_state_label:'待医生审核', summary:{pending:2}, mdt_screening:null, mdt_preparation_packet:{
+  D.S.review = { published:false, case_state_label:'待医生审核', summary:{pending:2}, mdt_screening:{status:'decided',decision:'recommend_mdt',decision_label:'建议 MDT',purpose:'明确共同处理重点',departments:['内分泌科','眼科']}, mdt_formal_record:null, mdt_preparation_packet:{
     specialty_opinions:[{department:'内分泌科',status:'available',focus:'评估代谢异常',facts:['血糖偏高','血糖偏高','视物模糊','体重变化','家族史','血压记录'],inferences:[{text:'建议结合糖化血红蛋白',evidence_refs:['检验单']}],checks:[{content:'是否需要补充复查'}],information_gaps:['缺少近期检查结果','缺少近期检查结果','缺少用药记录','缺少复查时间']}]
   } };
   D.renderOverview();
@@ -461,20 +461,20 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     && triage.includes('triage-department-item') && triage.includes('依据：'), triage);
   D.renderMdt();
   const mdt = el('mdt-body').innerHTML;
+  const mdtOrderTokens = ['MDT 会前资料包','AI 预分析提示','正式 MDT 会诊记录'];
   check('MDT 页面先显示初筛和会前资料包',
-    mdt.indexOf('MDT 初筛与病例分流') >= 0
+    (mdt.indexOf('MDT 初筛与病例分流') >= 0 || mdt.indexOf('MDT 初筛结果') >= 0)
       && mdt.indexOf('MDT 会前资料包') >= 0
-      && mdt.indexOf('MDT 结果') > mdt.indexOf('MDT 会前资料包'), mdt);
+      && mdt.indexOf('AI 预分析提示') > mdt.indexOf('MDT 会前资料包')
+      && mdt.indexOf('正式 MDT 会诊记录') > mdt.indexOf('AI 预分析提示'), mdtOrderTokens.filter(x=>!mdt.includes(x)).join(','));
   const mdtGroupingTokens = ['mdt-specialty-card','mdt-specialty-facts','mdt-specialty-inferences','mdt-specialty-checks','mdt-specialty-gaps','已掌握事实','AI 参考判断','待医生判断','信息缺口','查看全部'];
   check('MDT 专科资料按四类内容分组并可展开', mdtGroupingTokens.every(x=>mdt.includes(x)), mdtGroupingTokens.filter(x=>!mdt.includes(x)).join(','));
-  const packetHtml = mdt.slice(mdt.indexOf('MDT 会前资料包'), mdt.indexOf('MDT 结果'));
+  const packetHtml = mdt.slice(mdt.indexOf('MDT 会前资料包'), mdt.indexOf('AI 预分析提示'));
   check('MDT 专科事实与缺口去重',
     (packetHtml.match(/血糖偏高/g)||[]).length === 1 && (packetHtml.match(/缺少近期检查结果/g)||[]).length === 1, packetHtml);
-  check('MDT 结果区突出共识分歧待确认',
-    ['MDT 结果','共识','分歧','待确认事项'].every(x=>mdt.includes(x)), mdt);
-  check('MDT 过程直接展示为四步',
-    ['MDT 过程','独立研判','分歧识别','质询与补答','形成结果'].every(x=>mdt.includes(x))
-      && (mdt.match(/mdt-process-step/g)||[]).length === 4, mdt);
+  check('AI 预分析提示与正式 MDT 记录职责分开',
+    ['AI 预分析提示','AI 识别的潜在分歧','建议讨论问题','正式 MDT 会诊记录','待记录'].every(x=>mdt.includes(x))
+      && !mdt.includes('MDT 过程'), mdt);
   check('MDT 不重复展示患者画像和证据侧栏',
     !mdt.includes('左栏 · 患者画像') && !mdt.includes('右栏 · 证据与裁决'), mdt);
   check('MDT 不再使用播放过程交互',
@@ -483,8 +483,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.S.caseData.payload.mdt.aggregation.open_questions = ['建议向医生确认是否需要复查'];
   D.renderMdt();
   const doctorMdtCopy = el('mdt-body').innerHTML;
-  check('医生端待确认事项使用决策语义',
-    doctorMdtCopy.includes('待确认事项') && doctorMdtCopy.includes('待判断：是否需要复查')
+  check('医生端建议讨论问题使用决策语义',
+    doctorMdtCopy.includes('建议讨论问题') && doctorMdtCopy.includes('是否需要复查')
       && !doctorMdtCopy.includes('向医生确认'), doctorMdtCopy);
 
   D.S.caseId = 'CAAA1111';

@@ -158,6 +158,41 @@ class MdtScreeningFlowTest(unittest.TestCase):
         events = self.store.list_audit(self.case_id)
         self.assertTrue(any(item["event"] == "mdt_access_pending" for item in events))
 
+    def test_formal_mdt_record_requires_recommendation_and_persists_latest_record(self):
+        before = self.flow.submit_mdt_formal_record(
+            self.case_id, status="completed", participants=["内分泌科医生"],
+            conclusion="不应在未启动正式 MDT 时记录", unresolved="", next_step="",
+            reviewer_id="doctor")
+        self.assertFalse(before["ok"])
+        self.assertIn("启动正式 MDT", before["error"])
+
+        screening = self.submit(
+            decision="recommend_mdt", reason="需要多科共同判断", purpose="明确共同处理重点",
+            departments=["内分泌科", "眼科"])
+        self.assertTrue(screening["ok"], screening)
+        for status in ("planned", "in_progress", "completed"):
+            result = self.flow.submit_mdt_formal_record(
+                self.case_id, status=status, participants=["内分泌科医生", "眼科医生"],
+                conclusion="共同确认后续检查" if status == "completed" else "",
+                unresolved="待补充检查" if status != "completed" else "",
+                next_step="完成检查后复评", reviewer_id="doctor")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["mdt_formal_record"]["status"], status)
+        payload = self.store.load_case(self.case_id)["payload"]
+        self.assertEqual(payload["mdt_formal_record"]["status"], "completed")
+        self.assertEqual(payload["mdt_formal_record"]["participants"], ["内分泌科医生", "眼科医生"])
+
+    def test_formal_mdt_completed_requires_conclusion(self):
+        screening = self.submit(
+            decision="recommend_mdt", reason="需要多科共同判断", purpose="明确共同处理重点",
+            departments=["内分泌科", "眼科"])
+        self.assertTrue(screening["ok"], screening)
+        result = self.flow.submit_mdt_formal_record(
+            self.case_id, status="completed", participants=[], conclusion="",
+            unresolved="", next_step="", reviewer_id="doctor")
+        self.assertFalse(result["ok"])
+        self.assertIn("结论", result["error"])
+
 
 class MdtScreeningHttpTest(unittest.TestCase):
     def setUp(self):
@@ -262,6 +297,25 @@ class MdtScreeningHttpTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json().get("code"), "invalid_request")
+
+    def test_authorized_doctor_can_record_formal_mdt_after_screening(self):
+        doctor = self._token("doctor", "doctor-password")
+        screening = self.client.post(
+            "/api/v2/case/C-MDT/mdt-screening", headers=self._headers(doctor),
+            json={"decision": "recommend_mdt", "reason": "需要共同评估",
+                  "purpose": "明确共同处理重点", "departments": ["眼科", "内分泌科"]})
+        self.assertEqual(screening.status_code, 200, screening.get_json())
+        response = self.client.post(
+            "/api/v2/case/C-MDT/mdt-formal-record", headers=self._headers(doctor),
+            json={"status": "completed", "participants": ["眼科医生", "内分泌科医生"],
+                  "conclusion": "共同确认后续检查", "unresolved": "", "next_step": "复查后复评"})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()["mdt_formal_record"]["status"], "completed")
+        review = self.client.get("/api/v2/case/C-MDT/review", headers=self._headers(doctor))
+        self.assertEqual(review.get_json()["mdt_formal_record"]["conclusion"], "共同确认后续检查")
+        patient = self._token("alice", "alice-password")
+        patient_case = self.client.get("/api/v2/case/C-MDT", headers=self._headers(patient))
+        self.assertNotIn("mdt_formal_record", patient_case.get_json()["case"]["payload"])
 
 
 if __name__ == "__main__":

@@ -541,7 +541,7 @@ class FrontendStructureTest(unittest.TestCase):
         _, html = self.get("/doctor")
         for token in (
             "mdt_preparation_packet", "会前资料包", "专科 AI 参考意见",
-            "来源类型", "信息缺口", "分歧与处理状态",
+            "来源类型", "信息缺口", "建议讨论的问题", "仅供会前参考",
         ):
             self.assertIn(token, html, f"医生端会前资料包缺少：{token}")
         self.assertIn("renderMdtPreparationPacket", html)
@@ -562,6 +562,14 @@ class FrontendStructureTest(unittest.TestCase):
             self.assertIn(token, html, f"MDT 专科资料包缺少分组结构：{token}")
         self.assertIn("mdt-specialty-copy", html)
         self.assertIn("mdt-specialty-more", html)
+
+    def test_doctor_mdt_boundary_labels_and_formal_record_are_explicit(self):
+        _, html = self.get("/doctor")
+        for token in (
+            "AI 多专科预分析", "正式 MDT 会诊记录", "need_more_info", "urgent_care",
+            "mdt_formal_record", "仅供会前参考", "待记录",
+        ):
+            self.assertIn(token, html, f"医生端 MDT 状态边界缺少：{token}")
 
     def test_patient_stage3_uses_plain_direction_path_and_specialty_summary(self):
         """第三步只给患者方向、关联任务和通俗专科摘要，内部推理留在医生端。"""
@@ -665,6 +673,13 @@ class FrontendStructureTest(unittest.TestCase):
         _, html = self.get("/doctor")
         self.assertIn('id="case-stage-hint"', html)
         self.assertIn("updateWorkflowStage", html)
+
+    def test_doctor_overview_routes_by_mdt_decision(self):
+        """病例总览不能把正式 MDT 当作所有病例的必经步骤。"""
+        _, html = self.get("/doctor")
+        for token in ("按单专科处理后进入报告审核", "补充资料后重新判断", "不进入普通 MDT", "记录正式 MDT"):
+            self.assertIn(token, html)
+        self.assertIn("正式 MDT 尚未记录", html)
 
     def test_doctor_empty_context_hides_right_rail_and_reclaims_grid(self):
         """未选择病例时右栏不应占用宽屏布局，选中病例后再恢复。"""

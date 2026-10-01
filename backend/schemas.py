@@ -73,6 +73,18 @@ MDT_SCREENING_LABELS: Dict[str, str] = {
     "urgent_care": "急症处理",
 }
 
+# 正式 MDT 会诊记录状态；与 AI 预分析和医生初筛保持独立。
+MDT_FORMAL_RECORD_STATUSES = (
+    "planned",
+    "in_progress",
+    "completed",
+)
+MDT_FORMAL_RECORD_STATUS_LABELS: Dict[str, str] = {
+    "planned": "待开始",
+    "in_progress": "进行中",
+    "completed": "已完成",
+}
+
 # 证据状态（规格书 §5 / 主文档 §9.3）
 EVIDENCE_STATES = (
     "direct",            # 有明确证据
