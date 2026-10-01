@@ -386,8 +386,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.S.caseData = { payload: { triage: { selected: ['内分泌科', '眼科'] } } };
   D.S.review = { mdt_screening: null };
   const screeningPanel = D.renderMdtScreening();
-  check('医生端显示 MDT 初筛表单', screeningPanel.includes('MDT 初筛与病例分流')
-    && screeningPanel.includes('recommend_mdt') && screeningPanel.includes('保存初筛决定'), screeningPanel);
+  check('医生端显示 MDT 启动判断表单', screeningPanel.includes('MDT 启动判断')
+    && screeningPanel.includes('recommend_mdt') && screeningPanel.includes('保存 MDT 启动判断'), screeningPanel);
 
   fetchPayload = {
     status: 200,
@@ -463,7 +463,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   const mdt = el('mdt-body').innerHTML;
   const mdtOrderTokens = ['MDT 会前资料包','AI 预分析提示','正式 MDT 会诊记录'];
   check('MDT 页面先显示初筛和会前资料包',
-    (mdt.indexOf('MDT 初筛与病例分流') >= 0 || mdt.indexOf('MDT 初筛结果') >= 0)
+    (mdt.indexOf('MDT 启动判断') >= 0 || mdt.indexOf('MDT 启动判断结果') >= 0)
       && mdt.indexOf('MDT 会前资料包') >= 0
       && mdt.indexOf('AI 预分析提示') > mdt.indexOf('MDT 会前资料包')
       && mdt.indexOf('正式 MDT 会诊记录') > mdt.indexOf('AI 预分析提示'), mdtOrderTokens.filter(x=>!mdt.includes(x)).join(','));
