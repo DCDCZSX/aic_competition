@@ -749,6 +749,17 @@ def get_case(case_id):
                     'audit': _shared_store.list_audit(case_id, limit=50)})
 
 
+@app.route('/api/v2/my-cases', methods=['GET'])
+def list_my_cases():
+    """患者安全的病例记录列表，只返回当前患者自己的摘要。"""
+    session, error = _guard('case:own')
+    if error:
+        return error
+    if not session or session.role != ROLE_PATIENT:
+        return jsonify({'error': '当前角色无权访问患者病例记录'}), 403
+    return jsonify({'cases': case_flow.list_patient_cases(session.username)})
+
+
 @app.route('/api/v2/case/<case_id>/access', methods=['POST', 'DELETE'])
 def manage_case_access(case_id):
     """The case owner explicitly grants or revokes access for a reviewer account."""

@@ -1210,6 +1210,34 @@ class CaseFlow:
         return {"case_id": case_id, "status": status, "ready": bool(mdt), "mdt": mdt}
 
     # ------------------------------------------------------------------ 查询
+    def list_patient_cases(self, owner_id: str) -> List[Dict[str, Any]]:
+        """Build a patient-safe list of their cases without exposing raw payloads."""
+        cases = self.store.list_cases_for_owner(owner_id) if self.store else []
+        result = []
+        for case in cases:
+            payload = case.get("payload") or {}
+            triage = payload.get("triage") or {}
+            primary = (triage.get("primary") or {}).get("department") or ""
+            routing = payload.get("routing") or {}
+            requested = (routing.get("requested_department") or {}).get("name") or primary
+            versions = self.store.list_report_versions(
+                case.get("case_id") or "", include_reports=False) if self.store else []
+            result.append({
+                "case_id": case.get("case_id") or "",
+                "created_at": case.get("created_at") or "",
+                "updated_at": case.get("updated_at") or "",
+                "main_issue": case.get("main_issue") or "",
+                "case_state": case.get("case_state") or "",
+                "case_state_label": case.get("case_state_label") or case.get("case_state") or "",
+                "primary_department": requested,
+                "routing_status": routing.get("status") or "not_submitted",
+                "report_version": int(case.get("report_version") or 1),
+                "published_versions": len(versions),
+                "has_updates": bool(payload.get("updates")),
+                "next_step": (payload.get("mdt_screening") or {}).get("patient_next_step") or "等待系统整理",
+            })
+        return result
+
     @serialized_case
     def submit_case_for_review(
         self,
