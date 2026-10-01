@@ -253,11 +253,12 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertNotIn('id="rail-cases"', html, "病例队列不应在左轨重复渲染")
         # 业务屏必须在 <main> 内（与患者端同一约束）
         ids = set(self.sections_of(html, "main"))
-        expected = {"s-list", "s-overview", "s-triage", "s-evidence", "s-mdt", "s-review", "s-history"}
+        expected = {"s-list", "s-overview", "s-triage", "s-mdt", "s-review", "s-history"}
         self.assertTrue(expected.issubset(ids), f"main 内缺少屏：{expected - ids}")
         # 详情页的五个主要任务必须有统一导航入口
-        for task in ("overview", "triage", "evidence", "mdt", "review"):
+        for task in ("overview", "triage", "mdt", "review"):
             self.assertIn(f'data-s="{task}"', html)
+        self.assertNotIn('data-s="evidence"', html)
         self.assertIn('class="review-help"', html)
         self.assertNotIn("--blue", html)
 
@@ -588,6 +589,16 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="review-task-banner"', html)
         self.assertIn("还有 ${sum.pending||0} 项必审", html)
         self.assertIn('aria-live="polite"', html)
+
+    def test_doctor_review_uses_decision_level_groups_and_compact_cards(self):
+        """审核页应按责任分组，默认卡片只显示决策摘要，详情折叠。"""
+        _, html = self.get("/doctor")
+        for label in ("必须医生决定", "建议抽查", "已自动处理"):
+            self.assertIn(label, html)
+        self.assertIn("review-decision-card", html)
+        self.assertIn("review-card-summary", html)
+        self.assertIn("查看审核详情", html)
+        self.assertIn("自动处理不会阻塞发布", html)
 
     def test_doctor_empty_context_hides_right_rail_and_reclaims_grid(self):
         """未选择病例时右栏不应占用宽屏布局，选中病例后再恢复。"""

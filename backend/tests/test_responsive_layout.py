@@ -314,6 +314,9 @@ class ResponsiveLayoutTest(unittest.TestCase):
             declarations_at(rules, ".shell.has-case", 1920).get("grid-template-columns"),
             "minmax(0,1fr)",
         )
+        self.assertIn("#doctor-shell.has-case .doctor-case-main", _html)
+        self.assertIn("overflow-y:auto", _html)
+        self.assertIn("doctor-case-mode", _html)
 
     def test_doctor_review_stays_single_column_on_wide_screens(self):
         """审核分组按上下顺序阅读，宽屏也不能重新变成左右两列。"""

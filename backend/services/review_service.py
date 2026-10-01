@@ -44,8 +44,8 @@ UNCERTAIN = "uncertain"
 # 与"医生已接受"必须严格区分 —— 报告、审计都不能把它写成医生确认过（红线）。
 AUTO_PROCESSED = "auto_processed"
 
-# 审核责任分级。当前比赛版只有现有的明确自动处理规则；没有经过临床/产品
-# 审核的新规则不会把条目降为抽查或自动处理。
+# 审核责任分级：只有明确不需要医生决定的内容才自动归档；普通摘要可抽查，
+# 分歧、风险、资料缺口和医疗安排仍保持必审，并可在后续标记中自动升级。
 REQUIRED = "required"
 SAMPLE = "sample"
 AUTOMATIC = "automatic"
@@ -368,8 +368,8 @@ def build_items(case: Any) -> List[ReviewItem]:
             ai_content=str(entry.get("example") or topic),
             reason_hint="多科室在同一方向上一致（" + "、".join(entry.get("supporters") or []) + "）",
             evidence_refs=refs,
-            review_tier=REQUIRED,
-            tier_reason="共识内容仍需医生确认",
+            review_tier=SAMPLE,
+            tier_reason="与上方 MDT 结果一致，建议抽查，不阻塞发布",
         ))
     for idx, entry in enumerate(agg.get("disagreements") or [], start=1):
         topic = str(entry.get("topic") or "")
@@ -404,8 +404,8 @@ def build_items(case: Any) -> List[ReviewItem]:
             title="待医生确认问题",
             ai_content=text,
             reason_hint="由多学科分析聚合产出",
-            review_tier=REQUIRED,
-            tier_reason="待医生确认的问题不能自动处理",
+            review_tier=SAMPLE,
+            tier_reason="MDT 建议项，建议抽查；出现风险或具体资料缺口时自动升级",
         ))
 
     # ---- ④ 患者建议（来自一页摘要的可审核段落）----
@@ -415,6 +415,9 @@ def build_items(case: Any) -> List[ReviewItem]:
     except Exception:       # 报告不可用时降级：不因此丢掉其他条目
         summary = {}
     for section in ADVICE_SECTIONS:
+        if section == "建议咨询方向":
+            # 分诊结果已经单独审核；这里不再生成一条重复的患者建议条目。
+            continue
         value = summary.get(section)
         entries = value if isinstance(value, list) else ([value] if value else [])
         for idx, text in enumerate(entries, start=1):
@@ -428,8 +431,8 @@ def build_items(case: Any) -> List[ReviewItem]:
                 title=f"患者建议：{section}",
                 ai_content=text,
                 reason_hint="来自一页就医摘要",
-                review_tier=REQUIRED,
-                tier_reason="患者建议需要医生确认",
+                review_tier=SAMPLE,
+                tier_reason="患者摘要中的补充建议，建议抽查，不阻塞发布",
             ))
 
     _annotate_item_flags(items, payload)
@@ -527,9 +530,10 @@ def _annotate_item_flags(items: Sequence[ReviewItem], payload: Dict[str, Any]) -
         gap_match = False
         for gap in gaps:
             label = re.split(r"[:：]", gap, maxsplit=1)[0].strip()
-            # 带字段名的缺口只影响相关条目；没有字段名的缺口按未知情况处理，
-            # 不能让自动规则静默放行。
-            if (label and label in item_text) or (not re.search(r"[:：]", gap)):
+            # 带字段名的缺口只影响相关条目；没有字段名的缺口不指向具体决策，
+            # 不能把整条就医路径、MDT 摘要和患者建议一起升级为必审。
+            generic_gap = not re.search(r"[:：]", gap)
+            if (label and label in item_text) or (generic_gap and item.target_type == "department_selection"):
                 gap_match = True
                 break
 

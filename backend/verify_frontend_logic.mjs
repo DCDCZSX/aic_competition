@@ -363,11 +363,16 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage };');
   const D = globalThis.__D;
   check('病例详情导航只突出主要任务',
-    ['overview','triage','evidence','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`)), '');
+    ['overview','triage','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`))
+      && !doctorHtml.includes('data-s="evidence"'), '');
   check('病例详情目录位于左侧布局栏',
     doctorHtml.includes('class="doctor-case-layout"')
       && doctorHtml.includes('class="doctor-case-nav view-nav"')
       && doctorHtml.includes('class="doctor-case-main"'), '');
+  check('病例详情桌面端仅主内容区滚动',
+    doctorHtml.includes('body.doctor-case-mode')
+      && doctorHtml.includes('#doctor-shell.has-case .doctor-case-main')
+      && doctorHtml.includes('overflow-y:auto'), '');
 
   D.S.me = {username:'doctor_endo', label:'内分泌审核医生', role:'doctor', department_name:'内分泌科', department_code:'endocrinology'};
   D.renderDoctorScope();
@@ -447,14 +452,28 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('总览将完整资料折叠', /<details[^>]*>/.test(overview) && overview.includes('完整患者资料'), overview);
   D.renderTriage();
   const triage = el('tri-body').innerHTML;
-  check('分诊默认突出牵头科室', triage.includes('内分泌科') && triage.includes('查看分诊依据'), triage);
-  D.renderEvidence();
-  const evidence = el('ev-body').innerHTML;
-  check('证据默认突出判断关联', evidence.includes('判断 ↔ 证据') && evidence.includes('查看完整证据时间线'), evidence);
+  check('分诊默认突出牵头科室', triage.includes('内分泌科') && triage.includes('科室分诊结果'), triage);
+  check('分诊不重复展示内部过程', !triage.includes('triage-process') && !triage.includes('规则命中（确定性）'), triage);
+  check('分诊默认按科室列表展示依据', triage.includes('triage-department-list')
+    && triage.includes('triage-department-item') && triage.includes('依据：'), triage);
   D.renderMdt();
   const mdt = el('mdt-body').innerHTML;
-  check('MDT 默认突出共识分歧待确认',
-    ['共识','分歧','待确认问题'].every(x=>mdt.includes(x)) && mdt.includes('专科意见'), mdt);
+  check('MDT 结果区突出共识分歧待确认',
+    ['MDT 结果','共识','分歧','待确认事项'].every(x=>mdt.includes(x)), mdt);
+  check('MDT 过程直接展示为四步',
+    ['MDT 过程','独立研判','分歧识别','质询与补答','形成结果'].every(x=>mdt.includes(x))
+      && (mdt.match(/mdt-process-step/g)||[]).length === 4, mdt);
+  check('MDT 不重复展示患者画像和证据侧栏',
+    !mdt.includes('左栏 · 患者画像') && !mdt.includes('右栏 · 证据与裁决'), mdt);
+  check('MDT 不再使用播放过程交互',
+    !doctorHtml.includes('播放过程') && !doctorHtml.includes('mdt-note'), '');
+  D.S.caseData.payload.mdt.analyses[0].checks = [{content:'建议向医生确认是否需要复查'}];
+  D.S.caseData.payload.mdt.aggregation.open_questions = ['建议向医生确认是否需要复查'];
+  D.renderMdt();
+  const doctorMdtCopy = el('mdt-body').innerHTML;
+  check('医生端待确认事项使用决策语义',
+    doctorMdtCopy.includes('待确认事项') && doctorMdtCopy.includes('待判断：是否需要复查')
+      && !doctorMdtCopy.includes('向医生确认'), doctorMdtCopy);
 
   D.S.caseId = 'CAAA1111';
   D.S.review = {
@@ -465,7 +484,9 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.renderReview();
   check('审核进度条按医生处理与自动处理合计', el('rev-bar').style.width === '60%', el('rev-bar').style.width);
   check('审核进度说明区分医生与自动处理', el('rev-note').textContent.includes('医生处理 6') && el('rev-note').textContent.includes('免审自动 0'), el('rev-note').textContent);
-  check('主区审核摘要有内容', el('rev-summary-inline').innerHTML.includes('共 10 条'), '');
+  check('主区审核摘要有责任分级',
+    el('rev-summary-inline').innerHTML.includes('必须医生决定')
+      && el('rev-summary-inline').innerHTML.includes('建议抽查'), '');
 
   /* 发布入口必须"两处都有"：≥1440px 右轨常驻，<1440px 右轨被 CSS 隐藏 → 屏 F 主区兜底
      （真实缺陷：入口只在右轨里，1366/1280 屏上医生审完发不出去） */
@@ -483,7 +504,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     inlinePub.includes('确认发布审核版') && inlinePub.includes('处理剩余必审并发布'), '');
   check('仍有待审条目时发布按钮禁用', inlinePub.includes('disabled'), '');
   check('审核条目默认折叠非必要信息',
-    el('rev-body').innerHTML.includes('查看审核详情') && el('rev-body').innerHTML.includes('分级依据'), el('rev-body').innerHTML);
+    el('rev-body').innerHTML.includes('查看审核详情') && el('rev-body').innerHTML.includes('责任分级'), el('rev-body').innerHTML);
   check('审核须知使用折叠区', doctorHtml.includes('class="review-help"') && doctorHtml.includes('审核须知'), '');
   check('唯一发布入口使用一致的输入前缀',
     inlinePub.includes('id="inline-op-text"')
