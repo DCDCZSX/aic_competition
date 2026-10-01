@@ -692,6 +692,13 @@ class FrontendStructureTest(unittest.TestCase):
         mdt = html[mdt_start:review_start]
         self.assertNotIn("data-mdt-dept", mdt)
 
+    def test_collaborating_doctor_sees_read_only_lead_decisions(self):
+        """协同医生可以看资料，但不能看到主责决策表单。"""
+        _, html = self.get("/doctor")
+        self.assertIn("等待主责医生决定是否启动正式 MDT", html)
+        self.assertIn("等待主责医生确认分流", html)
+        self.assertIn("你是协同医生", html)
+
     def test_doctor_case_header_exposes_current_workflow_stage(self):
         """病例页标题下应告诉医生当前要处理的阶段。"""
         _, html = self.get("/doctor")

@@ -212,7 +212,7 @@ def _guard_doctor(required_scope='review'):
     return session, None
 
 
-def _guard_doctor_case(case_id, required_scope='review'):
+def _guard_doctor_case(case_id, required_scope='review', required_case_role=None):
     session, error = _guard_doctor(required_scope)
     if error:
         return session, error
@@ -220,6 +220,11 @@ def _guard_doctor_case(case_id, required_scope='review'):
         return session, None
     if not _shared_store.has_case_access(case_id, session.username):
         return session, (jsonify({'error': '病例不存在或未授权给当前审核账号'}), 404)
+    if required_case_role:
+        case_role = _shared_store.get_case_access_role(case_id, session.username)
+        allowed_roles = {required_case_role} if isinstance(required_case_role, str) else set(required_case_role)
+        if case_role not in allowed_roles:
+            return session, (jsonify({'error': '当前账号是协同医生，不能执行该病例的牵头决策'}), 403)
     return session, None
 
 
@@ -737,7 +742,11 @@ def get_case(case_id):
         safe_payload.pop('mdt_formal_record', None)
         safe_case['payload'] = safe_payload
         case = safe_case
-    return jsonify({'case': case, 'audit': _shared_store.list_audit(case_id, limit=50)})
+    case_role = None
+    if session and session.role == ROLE_DOCTOR and not auth_service.has_global_case_access(session):
+        case_role = _shared_store.get_case_access_role(case_id, session.username)
+    return jsonify({'case': case, 'case_role': case_role,
+                    'audit': _shared_store.list_audit(case_id, limit=50)})
 
 
 @app.route('/api/v2/case/<case_id>/access', methods=['POST', 'DELETE'])
@@ -843,7 +852,7 @@ def get_mdt(case_id):
 @app.route('/api/v2/case/<case_id>/mdt-screening', methods=['POST'])
 def submit_mdt_screening(case_id):
     """医生提交 MDT 初筛决定；初筛是病例子状态，不改变 case_state。"""
-    session, error = _guard_doctor_case(case_id, 'decision')
+    session, error = _guard_doctor_case(case_id, 'decision', ('primary', 'coordinator'))
     if error:
         return error
     data, error = _json_object()
@@ -858,6 +867,10 @@ def submit_mdt_screening(case_id):
         return _invalid_input(exc)
     department_reviewer_map = None
     if decision == 'recommend_mdt':
+        if not departments:
+            current_case = _shared_store.load_case(case_id) or {}
+            confirmed = (current_case.get('payload') or {}).get('triage_doctor_confirmation') or {}
+            departments = list(confirmed.get('selected') or [])
         department_reviewer_map = {}
         for department in departments:
             department_name = department_domain.to_name(department)
@@ -885,7 +898,7 @@ def submit_mdt_screening(case_id):
 @app.route('/api/v2/case/<case_id>/triage-confirmation', methods=['POST'])
 def submit_triage_confirmation(case_id):
     """保存医生确认的主责/协同科室，作为 MDT 前置决策。"""
-    session, error = _guard_doctor_case(case_id, 'decision')
+    session, error = _guard_doctor_case(case_id, 'decision', ('primary', 'coordinator'))
     if error:
         return error
     data, error = _json_object()
@@ -906,7 +919,7 @@ def submit_triage_confirmation(case_id):
 @app.route('/api/v2/case/<case_id>/mdt-formal-record', methods=['POST'])
 def submit_mdt_formal_record(case_id):
     """记录真实医生 MDT，会前 AI 预分析不自动视为正式会诊结论。"""
-    session, error = _guard_doctor_case(case_id, 'decision')
+    session, error = _guard_doctor_case(case_id, 'decision', ('primary', 'coordinator'))
     if error:
         return error
     data, error = _json_object()
@@ -1120,7 +1133,7 @@ def submit_decision(case_id):
 @app.route('/api/v2/case/<case_id>/disagreement-decisions', methods=['POST'])
 def submit_disagreement_decision(case_id):
     """记录牵头医生对单条 MDT 分歧的处理状态与后续安排。"""
-    session, error = _guard_doctor_case(case_id, 'decision')
+    session, error = _guard_doctor_case(case_id, 'decision', ('primary', 'coordinator'))
     if error:
         return error
     data, error = _json_object()

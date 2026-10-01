@@ -338,6 +338,23 @@ class MdtScreeningHttpTest(unittest.TestCase):
         self.assertEqual(report.get_json()["mdt_screening"]["decision"], "recommend_mdt")
         self.assertNotIn("reviewer_id", json.dumps(report.get_json(), ensure_ascii=False))
 
+    def test_collaborating_doctor_can_view_but_cannot_make_lead_decisions(self):
+        doctor = self._token("doctor", "doctor-password")
+        self._confirm_triage(doctor)
+        response = self.client.post(
+            "/api/v2/case/C-MDT/mdt-screening", headers=self._headers(doctor),
+            json={"decision": "recommend_mdt", "reason": "需要共同评估",
+                  "purpose": "明确共同处理重点", "departments": ["眼科", "内分泌科"]})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        eye = self._token("doctor_eye", "doctor-password")
+        case = self.client.get("/api/v2/case/C-MDT", headers=self._headers(eye))
+        self.assertEqual(case.status_code, 200)
+        self.assertEqual(case.get_json()["case_role"], "collaborator")
+        blocked = self.client.post(
+            "/api/v2/case/C-MDT/mdt-screening", headers=self._headers(eye),
+            json={"decision": "single_specialty", "reason": "仅提供专科意见"})
+        self.assertEqual(blocked.status_code, 403)
+
     def test_invalid_screening_payload_is_json_400(self):
         doctor = self._token("doctor", "doctor-password")
         response = self.client.post(

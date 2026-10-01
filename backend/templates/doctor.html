@@ -437,7 +437,7 @@
 
 <script>
 /* ===================== 状态与工具 ===================== */
-const S = { token:'', me:null, cases:[], caseId:'', caseData:null, review:null,
+const S = { token:'', me:null, cases:[], caseId:'', caseData:null, caseRole:'', review:null,
             audit:null, screen:'list', modal:null, mdtTimer:null, mdtPlayback:null,
             queue:{filter:'', sort:'risk', state:'', page:1, pageSize:20, total:0, hasMore:false,
                    scroll:0, requestId:0} };
@@ -722,6 +722,7 @@ async function openCase(caseId){
   ]);
   if(c.status!==200 || rev.status!==200){ alert('加载失败：'+((c.data&&c.data.error)||(rev.data&&rev.data.error)||c.status)); return; }
   S.caseData = (c.data.case||{});
+  S.caseRole = String(c.data.case_role||'');
   S.review = rev.data;
   S.audit = (aud.status===200? aud.data : null);
   $('doctor-shell').classList.add('has-case');
@@ -758,6 +759,11 @@ function renderMdtScreening(){
       <div class="tiny" style="margin-top:8px;">已记录于 ${esc(screening.decided_at||'')}；患者只会看到下一步提示。</div>
     </div>`;
   }
+  if(S.caseRole==='collaborator') return `<div class="card doctor-card-info">
+    <h3 style="margin-top:0;">MDT 启动判断</h3>
+    <div class="banner info">你是本病例的协同医生，等待主责医生决定是否启动正式 MDT。</div>
+    <p class="muted">你可以查看下方会前资料包并提供专科意见，但不能修改分流方向或启动判断。</p>
+  </div>`;
   const selected = triageConfirmation.status==='confirmed'
     ? (triageConfirmation.selected||[])
     : ((((S.caseData||{}).payload||{}).triage||{}).selected || []);
@@ -878,6 +884,11 @@ function renderMdtFormalRecord(){
   if(screening.decision!=='recommend_mdt') return `<section class="mdt-formal-route"><h3>正式 MDT 会诊记录</h3><p class="mdt-specialty-empty">完成 MDT 启动判断后，这里会显示对应的后续记录。</p></section>`;
   const formal = record.status_label || '待记录';
   const participants = (record.participants||[]).join('、');
+  if(S.caseRole==='collaborator') return `<section class="mdt-formal-route mdt-route-ok" id="mdt-formal-record">
+    <h3>正式 MDT 会诊记录</h3><strong>${esc(formal)}</strong>
+    <p>你是协同医生，正式会诊记录由主责医生或 MDT 协调人维护。你可以查看会诊目标和当前状态。</p>
+    <div class="mdt-formal-context"><strong>会诊目的：</strong>${esc(screening.purpose||'—')}<br><strong>参与科室：</strong>${esc((screening.departments||[]).join('、')||'—')}<br><strong>参与医生：</strong>${esc(participants||'待记录')}</div>
+  </section>`;
   const disagreements = ((S.review&&S.review.mdt_preparation_packet)||{}).handling?.disagreements||[];
   const disagreementHtml = disagreements.length ? disagreements.map(item=>{
     const id = item.disagreement_id || item['分歧编号'] || '';
@@ -1032,7 +1043,9 @@ function renderTriage(){
   const deptOptions = departmentRows.map(d=>d.department).filter(Boolean);
   const confirmationHtml = confirmation.status==='confirmed'
     ? `<section class="triage-confirmation-card" id="triage-doctor-confirmation"><div class="inline-between"><h3 style="margin:0;">已确认分流方向</h3><span class="pill ok">医生已确认</span></div><div class="field"><div class="muted">主责科室</div><strong>${esc(confirmation.primary_department||'—')}</strong></div><div class="field"><div class="muted">协同科室</div><div>${esc((confirmation.secondary_departments||[]).join('、')||'无')}</div></div><div class="tiny">确认理由：${esc(confirmation.reason||'—')} · ${esc(confirmation.confirmed_at||'')}</div></section>`
-    : `<section class="triage-confirmation-card" id="triage-doctor-confirmation"><h3 style="margin-top:0;">确认主责科室与协同方向</h3><p class="muted">这一步决定病例后续由谁牵头，也决定正式 MDT 可邀请哪些科室；报告审核不会重复决定科室。</p><div class="field"><label for="triage-primary-department">主责科室</label><select id="triage-primary-department" style="flex:1;">${deptOptions.map(d=>`<option value="${esc(d)}" ${d===primary.department?'selected':''}>${esc(d)}</option>`).join('')}</select></div><div class="field"><div><label>协同科室</label><div id="triage-secondary-count" class="tiny triage-secondary-count">已选择 ${(t.secondary||[]).length} 个</div></div><div class="triage-secondary-grid">${deptOptions.filter(d=>d!==primary.department).map(d=>`<label class="triage-secondary-option"><input type="checkbox" data-triage-secondary value="${esc(d)}" ${(t.secondary||[]).some(x=>x.department===d)?'checked':''} onchange="updateTriageSecondaryCount()"><span>${esc(d)}</span></label>`).join('')}</div></div><div class="field"><label for="triage-confirmation-reason">确认理由</label><textarea id="triage-confirmation-reason" placeholder="说明为什么由该科室牵头，以及是否需要协同" style="flex:1;min-height:64px;"></textarea></div><div class="inline-end"><span id="triage-confirmation-msg" class="tiny"></span><button class="primary mini" onclick="submitTriageConfirmation()">保存分流确认</button></div></section>`;
+    : (S.caseRole==='collaborator'
+      ? `<section class="triage-confirmation-card" id="triage-doctor-confirmation"><h3 style="margin-top:0;">等待主责医生确认分流</h3><div class="banner info">你是本病例的协同医生，暂不能修改主责科室或协同方向。</div></section>`
+      : `<section class="triage-confirmation-card" id="triage-doctor-confirmation"><h3 style="margin-top:0;">确认主责科室与协同方向</h3><p class="muted">这一步决定病例后续由谁牵头，也决定正式 MDT 可邀请哪些科室；报告审核不会重复决定科室。</p><div class="field"><label for="triage-primary-department">主责科室</label><select id="triage-primary-department" style="flex:1;">${deptOptions.map(d=>`<option value="${esc(d)}" ${d===primary.department?'selected':''}>${esc(d)}</option>`).join('')}</select></div><div class="field"><div><label>协同科室</label><div id="triage-secondary-count" class="tiny triage-secondary-count">已选择 ${(t.secondary||[]).length} 个</div></div><div class="triage-secondary-grid">${deptOptions.filter(d=>d!==primary.department).map(d=>`<label class="triage-secondary-option"><input type="checkbox" data-triage-secondary value="${esc(d)}" ${(t.secondary||[]).some(x=>x.department===d)?'checked':''} onchange="updateTriageSecondaryCount()"><span>${esc(d)}</span></label>`).join('')}</div></div><div class="field"><label for="triage-confirmation-reason">确认理由</label><textarea id="triage-confirmation-reason" placeholder="说明为什么由该科室牵头，以及是否需要协同" style="flex:1;min-height:64px;"></textarea></div><div class="inline-end"><span id="triage-confirmation-msg" class="tiny"></span><button class="primary mini" onclick="submitTriageConfirmation()">保存分流确认</button></div></section>`);
   $('tri-body').innerHTML = `
     <div class="doctor-decision-summary">
       <div><div class="muted">牵头科室</div><strong>${esc(primary.department||'—')}</strong></div>
