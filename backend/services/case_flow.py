@@ -1222,6 +1222,7 @@ class CaseFlow:
         result = []
         for case in cases:
             payload = case.get("payload") or {}
+            main_issue = case.get("main_issue") or payload.get("masked_main_issue") or ""
             triage = payload.get("triage") or {}
             primary = (triage.get("primary") or {}).get("department") or ""
             routing = payload.get("routing") or {}
@@ -1232,7 +1233,7 @@ class CaseFlow:
                 "case_id": case.get("case_id") or "",
                 "created_at": case.get("created_at") or "",
                 "updated_at": case.get("updated_at") or "",
-                "main_issue": case.get("main_issue") or "",
+                "main_issue": main_issue,
                 "case_state": case.get("case_state") or "",
                 "case_state_label": case.get("case_state_label") or case.get("case_state") or "",
                 "primary_department": requested,
@@ -1247,9 +1248,10 @@ class CaseFlow:
 
     def get_patient_record(self, case_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
         case = self.store.load_case(case_id) if self.store else None
-        if not case or case.get("owner_id") != owner_id:
+        if not case or case.get("owner_id") != owner_id or case.get("archived_at"):
             return None
         payload = case.get("payload") or {}
+        main_issue = case.get("main_issue") or payload.get("masked_main_issue") or ""
         updates = []
         for item in payload.get("updates") or []:
             updates.append({key: item.get(key) for key in
@@ -1257,8 +1259,8 @@ class CaseFlow:
                             if item.get(key) not in (None, "")})
         return {
             "case_id": case_id,
-            "title": f"病例 #{case_id} · {case.get('main_issue') or '未填写主要问题'}",
-            "main_issue": case.get("main_issue") or "",
+            "title": f"病例 #{case_id} · {main_issue or '未填写主要问题'}",
+            "main_issue": main_issue,
             "submitted_material": {
                 "medical_history": payload.get("initial_medical_history") or payload.get("masked_history") or "",
                 "profile": payload.get("profile") or {},
@@ -1268,6 +1270,12 @@ class CaseFlow:
             "report_version": int(case.get("report_version") or 1),
             "case_state": case.get("case_state") or "",
         }
+
+    def archive_patient_case(self, case_id: str, owner_id: str) -> bool:
+        return bool(self.store and self.store.archive_case_for_owner(case_id, owner_id))
+
+    def restore_patient_case(self, case_id: str, owner_id: str) -> bool:
+        return bool(self.store and self.store.restore_case_for_owner(case_id, owner_id))
 
     @serialized_case
     def submit_case_for_review(

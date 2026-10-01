@@ -76,7 +76,8 @@ class Store:
                     report_version INTEGER DEFAULT 1,
                     created_at     TEXT,
                     updated_at     TEXT,
-                    payload        TEXT              -- 患者信息等 JSON
+                    payload        TEXT,             -- 患者信息等 JSON
+                    archived_at    TEXT              -- 患者主动归档时间；归档可恢复
                 );
 
                 CREATE TABLE IF NOT EXISTS audit_log (
@@ -165,6 +166,8 @@ class Store:
             columns = {row[1] for row in self._conn.execute("PRAGMA table_info(cases)")}
             if "owner_id" not in columns:
                 self._conn.execute("ALTER TABLE cases ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''")
+            if "archived_at" not in columns:
+                self._conn.execute("ALTER TABLE cases ADD COLUMN archived_at TEXT")
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cases_owner ON cases(owner_id, created_at DESC)"
             )
@@ -269,7 +272,7 @@ class Store:
         if not owner_id:
             return []
         with self._lock:
-            query = "SELECT * FROM cases WHERE owner_id=? ORDER BY updated_at DESC, created_at DESC"
+            query = "SELECT * FROM cases WHERE owner_id=? AND archived_at IS NULL ORDER BY updated_at DESC, created_at DESC"
             args: List[Any] = [owner_id]
             if limit is not None:
                 query += " LIMIT ? OFFSET ?"
@@ -282,9 +285,34 @@ class Store:
             return 0
         with self._lock:
             row = self._conn.execute(
-                "SELECT COUNT(*) FROM cases WHERE owner_id=?", (owner_id,)
+                "SELECT COUNT(*) FROM cases WHERE owner_id=? AND archived_at IS NULL", (owner_id,)
             ).fetchone()
         return int(row[0]) if row else 0
+
+    def archive_case_for_owner(self, case_id: str, owner_id: str) -> bool:
+        if not case_id or not owner_id:
+            return False
+        now = _now()
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE cases SET archived_at=?, updated_at=? "
+                "WHERE case_id=? AND owner_id=? AND archived_at IS NULL",
+                (now, now, case_id, owner_id),
+            )
+            self._conn.commit()
+        return cur.rowcount == 1
+
+    def restore_case_for_owner(self, case_id: str, owner_id: str) -> bool:
+        if not case_id or not owner_id:
+            return False
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE cases SET archived_at=NULL, updated_at=? "
+                "WHERE case_id=? AND owner_id=? AND archived_at IS NOT NULL",
+                (_now(), case_id, owner_id),
+            )
+            self._conn.commit()
+        return cur.rowcount == 1
 
     def list_cases_for_reviewer(self, reviewer_id: str, *, limit: Optional[int] = None,
                                 offset: int = 0) -> List[Dict[str, Any]]:

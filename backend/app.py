@@ -779,6 +779,22 @@ def get_patient_record(case_id):
     return jsonify({'record': record})
 
 
+@app.route('/api/v2/case/<case_id>/archive', methods=['POST', 'DELETE'])
+def archive_patient_case(case_id):
+    """患者可归档自己的历史病例；DELETE 用于恢复，数据不做物理删除。"""
+    session, _case, error = _guard_case(case_id)
+    if error:
+        return error
+    if not session or session.role != ROLE_PATIENT:
+        return jsonify({'error': '当前角色无权管理患者病例记录'}), 403
+    changed = (case_flow.archive_patient_case(case_id, session.username)
+               if request.method == 'POST'
+               else case_flow.restore_patient_case(case_id, session.username))
+    if not changed:
+        return jsonify({'error': '病例不存在、已处理或无权操作'}), 404
+    return jsonify({'ok': True, 'archived': request.method == 'POST'})
+
+
 @app.route('/api/v2/case/<case_id>/access', methods=['POST', 'DELETE'])
 def manage_case_access(case_id):
     """The case owner explicitly grants or revokes access for a reviewer account."""
