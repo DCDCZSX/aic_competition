@@ -156,6 +156,7 @@
   .triage-department-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px;border-top:1px solid var(--line);margin-bottom:var(--sp-16);}
   .triage-department-item{padding:12px 2px;border-bottom:1px solid var(--line);}
   .triage-department-item .tiny{margin-top:5px;max-width:var(--text-width-body);font-size:var(--body-3);color:var(--ink2);}
+  .triage-confirmation-card{margin:var(--sp-16) 0;padding:16px;border:1px solid var(--info);border-radius:var(--br-12);background:var(--surface-subtle);}
   #tri-body>.doctor-decision-summary{grid-template-columns:repeat(2,minmax(0,1fr));}
   .doctor-primary-task{padding:14px 16px;margin-bottom:var(--sp-16);border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
   .doctor-disclosure{border-top:1px solid var(--line);padding:0 2px;}
@@ -726,6 +727,7 @@ function updateBadge(){
 /* ===================== MDT 初筛与病例分流 ===================== */
 function renderMdtScreening(){
   const screening = (S.review&&S.review.mdt_screening) || {};
+  const triageConfirmation = (S.review&&S.review.triage_doctor_confirmation)||{};
   if(screening.status === 'decided'){
     const tone = screening.decision==='urgent_care' ? 'danger' :
       (screening.decision==='recommend_mdt' ? 'info' : 'ok');
@@ -739,11 +741,14 @@ function renderMdtScreening(){
       <div class="tiny" style="margin-top:8px;">已记录于 ${esc(screening.decided_at||'')}；患者只会看到下一步提示。</div>
     </div>`;
   }
-  const selected = (((S.caseData||{}).payload||{}).triage||{}).selected || [];
+  const selected = triageConfirmation.status==='confirmed'
+    ? (triageConfirmation.selected||[])
+    : ((((S.caseData||{}).payload||{}).triage||{}).selected || []);
   const options = selected.length ? selected : ['内分泌科','眼科','肾内科'];
   return `<div class="card doctor-card-accent">
     <h3 style="margin-top:0;">MDT 初筛与病例分流</h3>
-    <p class="muted">先判断是否需要多学科协作，再进入后续审核。初筛决定会单独留痕。</p>
+    <p class="muted">先确认分流方向，再判断是否需要多学科协作。初筛决定会单独留痕。</p>
+    ${triageConfirmation.status==='confirmed'?'<div class="banner ok" id="mdt-screening-prereq">已完成分流确认，可从已确认科室中选择 MDT 参与方向。</div>':'<div class="banner warn" id="mdt-screening-prereq">请先在“分流确认”中确认主责和协同科室，再启动正式 MDT。</div>'}
     <div class="field"><label style="min-width:88px;">处理方向</label>
       <select id="mdt-screening-decision" onchange="toggleMdtScreeningFields()" style="flex:1;">
         <option value="single_specialty">单专科处理</option>
@@ -989,6 +994,7 @@ function updateWorkflowStage(){
 /* ===================== 屏 C：分诊依据 ===================== */
 function renderTriage(){
   const p = S.caseData.payload||{}, t = p.triage||{};
+  const confirmation = (S.review&&S.review.triage_doctor_confirmation)||p.triage_doctor_confirmation||{};
   const ruleHits = t.rule_hits||[];
   const primary = t.primary||{}, secondary = t.secondary||[];
   const deptMap = new Map();
@@ -1005,6 +1011,10 @@ function renderTriage(){
   (t.selected||[]).forEach(name=>addDept(typeof name === 'string' ? name : name.department, '协作', []));
   const departmentRows = Array.from(deptMap.values());
   const conflicts = t.conflicts||[];
+  const deptOptions = departmentRows.map(d=>d.department).filter(Boolean);
+  const confirmationHtml = confirmation.status==='confirmed'
+    ? `<section class="triage-confirmation-card" id="triage-doctor-confirmation"><div class="inline-between"><h3 style="margin:0;">已确认分流方向</h3><span class="pill ok">医生已确认</span></div><div class="field"><div class="muted">主责科室</div><strong>${esc(confirmation.primary_department||'—')}</strong></div><div class="field"><div class="muted">协同科室</div><div>${esc((confirmation.secondary_departments||[]).join('、')||'无')}</div></div><div class="tiny">确认理由：${esc(confirmation.reason||'—')} · ${esc(confirmation.confirmed_at||'')}</div></section>`
+    : `<section class="triage-confirmation-card" id="triage-doctor-confirmation"><h3 style="margin-top:0;">确认主责科室与协同方向</h3><p class="muted">这一步决定病例后续由谁牵头，也决定正式 MDT 可邀请哪些科室；报告审核不会重复决定科室。</p><div class="field"><label for="triage-primary-department">主责科室</label><select id="triage-primary-department" style="flex:1;">${deptOptions.map(d=>`<option value="${esc(d)}" ${d===primary.department?'selected':''}>${esc(d)}</option>`).join('')}</select></div><div class="field"><label>协同科室</label><div class="inline-wrap" style="flex:1;">${deptOptions.filter(d=>d!==primary.department).map(d=>`<label class="chip"><input type="checkbox" data-triage-secondary value="${esc(d)}" ${(t.secondary||[]).some(x=>x.department===d)?'checked':''}> ${esc(d)}</label>`).join('')}</div></div><div class="field"><label for="triage-confirmation-reason">确认理由</label><textarea id="triage-confirmation-reason" placeholder="说明为什么由该科室牵头，以及是否需要协同" style="flex:1;min-height:64px;"></textarea></div><div class="inline-end"><span id="triage-confirmation-msg" class="tiny"></span><button class="primary mini" onclick="submitTriageConfirmation()">保存分流确认</button></div></section>`;
   $('tri-body').innerHTML = `
     <div class="doctor-decision-summary">
       <div><div class="muted">牵头科室</div><strong>${esc(primary.department||'—')}</strong></div>
@@ -1014,9 +1024,20 @@ function renderTriage(){
     <h3>科室分诊结果</h3>
     <div class="triage-department-list">
       ${departmentRows.length?departmentRows.map(d=>`<div class="triage-department-item"><div class="inline-between-tight"><strong>${esc(d.department)}</strong><span class="pill ${d.role==='牵头'?'ok':(d.role==='未入选'?'gray':'info')}">${esc(d.role)}</span></div><div class="tiny">依据：${esc(d.signals.join('；')||'暂无具体依据，请医生核对')}</div></div>`).join(''):'<div class="tiny">暂无明确科室方向，请核对患者资料。</div>'}
-    </div>
+    </div>${confirmationHtml}
     ${conflicts.length?`<div class="banner danger" style="margin-top:12px;">模型与规则存在分歧（${conflicts.length} 条）：分歧保留并进入报告分歧区，不由 AI 静默覆盖
       ${conflicts.map(c=>`<div class="tiny">· ${esc(c.department||'')}：${esc(c.reason||c.model_reason||'待医生核对')}</div>`).join('')}</div>`:'<div class="banner ok" style="margin-top:12px;">分诊结果未发现冲突</div>'}`;
+}
+
+async function submitTriageConfirmation(){
+  const primaryDepartment = String(($('triage-primary-department')||{}).value||'').trim();
+  const secondaryDepartments = Array.from(document.querySelectorAll('[data-triage-secondary]:checked')).map(x=>x.value);
+  const reason = String(($('triage-confirmation-reason')||{}).value||'').trim();
+  const r = await api('/api/v2/case/'+S.caseId+'/triage-confirmation', {method:'POST', body:JSON.stringify({primary_department:primaryDepartment, secondary_departments:secondaryDepartments, reason})});
+  const box = $('triage-confirmation-msg');
+  if(r.status!==200 || !r.data.ok){ if(box) box.textContent=r.data.error||'保存失败'; return; }
+  await openCase(S.caseId);
+  go('triage');
 }
 
 /* ===================== 屏 D：证据板 ===================== */
@@ -1152,6 +1173,7 @@ function renderReview(){
   const reopened_item_ids = review_item_changes.reopened_item_ids||[];
   const reopened_item_labels = review_item_changes.reopened_item_labels||[];
   const screening = r.mdt_screening||{};
+  const triageConfirmation = r.triage_doctor_confirmation||{};
   const formalRecord = r.mdt_formal_record||{};
   const stateCls = {'awaiting':'st-awaiting','confirmed':'st-confirmed','modified':'st-modified','rejected':'st-rejected','uncertain':'st-uncertain','auto_processed':'st-auto'};
   const byState = sum.by_state||{};
@@ -1283,8 +1305,9 @@ function renderReview(){
     + group('已自动处理', auto, false, 'auto', true);
 
   const pendingDisagreements = (r.pending_disagreements||[]).length;
+  const triageReady = !screening.decision || triageConfirmation.status==='confirmed';
   const formalReady = screening.decision!=='recommend_mdt' || formalRecord.status==='completed';
-  const canPublish = sum.pending===0 && sum.total>0 && pendingDisagreements===0 && formalReady;
+  const canPublish = sum.pending===0 && sum.total>0 && pendingDisagreements===0 && triageReady && formalReady;
   // 所有屏幕统一使用主区发布入口。
   const inlineBox = $('rev-publish-inline');
   if(inlineBox) inlineBox.innerHTML = publishPanelHtml(sum, canPublish, 'inline');
@@ -1294,6 +1317,8 @@ function renderReview(){
 function publishPanelHtml(sum, canPublish, pfx){
   sum = sum || {};
   const screening = (S.review&&S.review.mdt_screening)||{};
+  const triageConfirmation = (S.review&&S.review.triage_doctor_confirmation)||{};
+  const triageReady = !screening.decision || triageConfirmation.status==='confirmed';
   const formalRecord = (S.review&&S.review.mdt_formal_record)||{};
   const formalReady = screening.decision!=='recommend_mdt' || formalRecord.status==='completed';
   const batchBlockedPending = Number(sum.batch_blocked_pending||0);
@@ -1307,6 +1332,7 @@ function publishPanelHtml(sum, canPublish, pfx){
       ${batchBlockedPending?`<div class="tiny" style="color:var(--warn);">当前有 ${batchBlockedPending} 条必审项目必须逐条处理，批量入口已停用。</div>`:''}
       ${pendingDisagreements?`<div class="tiny" style="color:var(--warn);">还有 ${pendingDisagreements} 条正式 MDT 分歧未记录处理状态，请先在 MDT 会诊记录中保存处理结果。</div>`:''}
       ${!formalReady?'<div class="tiny" style="color:var(--warn);">正式 MDT 尚未完成记录，请先回到 MDT 协作填写会诊结论。</div>':''}
+      ${!triageReady?'<div class="tiny" style="color:var(--warn);">尚未完成分流确认，请先确认主责和协同科室。</div>':''}
       <div class="actions">
         <button class="mini" onclick="publish(false)" ${canPublish?'':'disabled'}>确认发布审核版（${sum.pending||0} 条待审）</button>
         <button class="primary mini" onclick="publish(true)" ${sum.total&&batchAllowed&&formalReady?'':'disabled'}>处理剩余必审并发布</button>

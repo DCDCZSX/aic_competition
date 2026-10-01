@@ -732,6 +732,7 @@ def get_case(case_id):
         safe_payload = dict(case.get('payload') or {})
         safe_payload['mdt_screening'] = patient_safe_mdt_screening(
             safe_payload.get('mdt_screening'))
+        safe_payload.pop('triage_doctor_confirmation', None)
         # 正式 MDT 记录属于医生协作和审核范围，患者端只通过患者安全摘要获取下一步。
         safe_payload.pop('mdt_formal_record', None)
         safe_case['payload'] = safe_payload
@@ -878,6 +879,27 @@ def submit_mdt_screening(case_id):
     )
     if not result.get('ok'):
         result.setdefault('code', 'invalid_request')
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/triage-confirmation', methods=['POST'])
+def submit_triage_confirmation(case_id):
+    """保存医生确认的主责/协同科室，作为 MDT 前置决策。"""
+    session, error = _guard_doctor_case(case_id, 'decision')
+    if error:
+        return error
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        primary = string_field(data, 'primary_department', default='', max_length=120)
+        secondary = string_list(data, 'secondary_departments', default=(), max_items=6)
+        reason = string_field(data, 'reason', default='', max_length=2000)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    result = case_flow.submit_triage_confirmation(
+        case_id, primary_department=primary, secondary_departments=secondary,
+        reason=reason, reviewer_id=session.username)
     return jsonify(result), (200 if result.get('ok') else 400)
 
 

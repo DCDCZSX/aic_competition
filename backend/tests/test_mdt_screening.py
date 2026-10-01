@@ -34,6 +34,12 @@ class MdtScreeningFlowTest(unittest.TestCase):
         self.store.close()
 
     def submit(self, **kwargs):
+        if kwargs.get("decision") == "recommend_mdt":
+            existing = self.store.load_case(self.case_id)["payload"].get("triage_doctor_confirmation")
+            if not existing:
+                self.flow.submit_triage_confirmation(
+                    self.case_id, primary_department="内分泌科",
+                    secondary_departments=["眼科"], reason="测试前置分流确认", reviewer_id="doctor")
         return self.flow.submit_mdt_screening(
             self.case_id,
             reviewer_id="doctor",
@@ -48,6 +54,11 @@ class MdtScreeningFlowTest(unittest.TestCase):
             ("need_more_info", {}),
             ("urgent_care", {}),
         ):
+            if decision == "recommend_mdt":
+                confirmed = self.flow.submit_triage_confirmation(
+                    self.case_id, primary_department="内分泌科",
+                    secondary_departments=["眼科"], reason="先确认分流方向", reviewer_id="doctor")
+                self.assertTrue(confirmed["ok"], confirmed)
             result = self.submit(decision=decision, reason=f"经过资料核对后选择{decision}", **extra)
             self.assertTrue(result["ok"], result)
             self.assertEqual(result["mdt_screening"]["decision"], decision)
@@ -181,6 +192,9 @@ class MdtScreeningFlowTest(unittest.TestCase):
         payload = self.store.load_case(self.case_id)["payload"]
         self.assertEqual(payload["mdt_formal_record"]["status"], "completed")
         self.assertEqual(payload["mdt_formal_record"]["participants"], ["内分泌科医生", "眼科医生"])
+        report = self.flow.build_reports(self.case_id)["full"]
+        self.assertEqual(report["sections"]["分诊结果"]["牵头方向"], "内分泌科")
+        self.assertTrue(any(item.get("来源") == "正式 MDT 会诊记录" for item in report["sections"]["医生最终意见"]))
 
     def test_formal_mdt_completed_requires_conclusion(self):
         screening = self.submit(
@@ -192,6 +206,26 @@ class MdtScreeningFlowTest(unittest.TestCase):
             unresolved="", next_step="", reviewer_id="doctor")
         self.assertFalse(result["ok"])
         self.assertIn("结论", result["error"])
+
+    def test_triage_confirmation_persists_before_mdt(self):
+        result = self.flow.submit_triage_confirmation(
+            self.case_id, primary_department="内分泌科",
+            secondary_departments=["眼科"], reason="医生核对分诊依据后确认",
+            reviewer_id="doctor")
+        self.assertTrue(result["ok"], result)
+        confirmation = self.store.load_case(self.case_id)["payload"]["triage_doctor_confirmation"]
+        self.assertEqual(confirmation["primary_department"], "内分泌科")
+        self.assertEqual(confirmation["secondary_departments"], ["眼科"])
+        self.assertEqual(confirmation["selected"], ["内分泌科", "眼科"])
+        review = self.flow.get_review(self.case_id)
+        self.assertFalse(any(item["target_type"] == "department_selection" for item in review["items"]))
+
+    def test_recommend_mdt_requires_confirmed_triage_departments(self):
+        result = self.flow.submit_mdt_screening(
+            self.case_id, decision="recommend_mdt", reason="需要多科共同判断",
+            purpose="明确共同处理重点", departments=["内分泌科", "眼科"], reviewer_id="doctor")
+        self.assertFalse(result["ok"])
+        self.assertIn("分流确认", result["error"])
 
 
 class MdtScreeningHttpTest(unittest.TestCase):
@@ -233,6 +267,13 @@ class MdtScreeningHttpTest(unittest.TestCase):
     def _headers(token):
         return {"Authorization": f"Bearer {token}"}
 
+    def _confirm_triage(self, token):
+        response = self.client.post(
+            "/api/v2/case/C-MDT/triage-confirmation", headers=self._headers(token),
+            json={"primary_department": "内分泌科", "secondary_departments": ["眼科"],
+                  "reason": "先确认分流方向"})
+        self.assertEqual(response.status_code, 200, response.get_json())
+
     def test_screening_requires_authenticated_authorized_doctor(self):
         body = {"decision": "single_specialty", "reason": "先由眼科评估"}
         self.assertEqual(self.client.post("/api/v2/case/C-MDT/mdt-screening", json=body).status_code, 401)
@@ -252,6 +293,7 @@ class MdtScreeningHttpTest(unittest.TestCase):
 
     def test_authorized_doctor_can_submit_and_patient_cannot_see_reviewer_id(self):
         doctor = self._token("doctor", "doctor-password")
+        self._confirm_triage(doctor)
         response = self.client.post(
             "/api/v2/case/C-MDT/mdt-screening",
             headers=self._headers(doctor),
@@ -300,6 +342,7 @@ class MdtScreeningHttpTest(unittest.TestCase):
 
     def test_authorized_doctor_can_record_formal_mdt_after_screening(self):
         doctor = self._token("doctor", "doctor-password")
+        self._confirm_triage(doctor)
         screening = self.client.post(
             "/api/v2/case/C-MDT/mdt-screening", headers=self._headers(doctor),
             json={"decision": "recommend_mdt", "reason": "需要共同评估",
@@ -316,6 +359,7 @@ class MdtScreeningHttpTest(unittest.TestCase):
         patient = self._token("alice", "alice-password")
         patient_case = self.client.get("/api/v2/case/C-MDT", headers=self._headers(patient))
         self.assertNotIn("mdt_formal_record", patient_case.get_json()["case"]["payload"])
+        self.assertNotIn("triage_doctor_confirmation", patient_case.get_json()["case"]["payload"])
 
 
 if __name__ == "__main__":

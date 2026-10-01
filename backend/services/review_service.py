@@ -322,14 +322,17 @@ def build_items(case: Any) -> List[ReviewItem]:
         return False
 
     # ---- ① 科室入选 ----
+    # 新流程在分流确认阶段完成科室决策；确认记录存在后，报告审核只核对最终内容，
+    # 不再把“科室入选”重复生成一条审核项。保留无确认记录的旧病例兼容迁移。
     triage = payload.get("triage") or {}
     primary = triage.get("primary") or {}
-    if primary.get("department"):
-        dept = primary["department"]
-        items.append(_dept_item(case_id, dept, primary, role_label="牵头"))
-    for pick in triage.get("secondary") or []:
-        if pick.get("department"):
-            items.append(_dept_item(case_id, pick["department"], pick, role_label=pick.get("role") or "协同"))
+    if not (payload.get("triage_doctor_confirmation") or {}).get("status") == "confirmed":
+        if primary.get("department"):
+            dept = primary["department"]
+            items.append(_dept_item(case_id, dept, primary, role_label="牵头"))
+        for pick in triage.get("secondary") or []:
+            if pick.get("department"):
+                items.append(_dept_item(case_id, pick["department"], pick, role_label=pick.get("role") or "协同"))
 
     # ---- ② 路径步骤 ----
     for step in (payload.get("path") or {}).get("steps") or []:

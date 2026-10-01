@@ -748,6 +748,8 @@ def build_full_report(case: Dict[str, Any]) -> Report:
     path = payload.get("path") or {}
     mdt = payload.get("mdt") or {}
     aggregation = mdt.get("aggregation") or {}
+    triage_confirmation = payload.get("triage_doctor_confirmation") or {}
+    formal_mdt = payload.get("mdt_formal_record") or {}
     decisions = payload.get("decisions") or []
     decision_lookup = _decision_map(decisions)
 
@@ -780,6 +782,14 @@ def build_full_report(case: Dict[str, Any]) -> Report:
             str(decision.get("after") or question) if decision.get("action") == "modify"
             else str(question))
 
+    doctor_final_opinions = _doctor_opinions(decisions)
+    if formal_mdt.get("status") == "completed":
+        doctor_final_opinions.append({
+            "来源": "正式 MDT 会诊记录",
+            "会诊结论": formal_mdt.get("conclusion") or "（未记录）",
+            "未解决事项": formal_mdt.get("unresolved") or "（无）",
+            "后续安排": formal_mdt.get("next_step") or "（未记录）",
+        })
     sections: Dict[str, Any] = {
         "病例画像": {
             "基本信息": f"{profile.get('sex') or ''} {profile.get('age') or ''}".strip() or "（未提供）",
@@ -798,8 +808,10 @@ def build_full_report(case: Dict[str, Any]) -> Report:
         "时间线": patient_timeline_for_report(profile),
         "分诊结果": {
             "病例类型": BEHAVIOR_LABELS.get(str(triage.get("behavior_type")), "（未判定）"),
-            "牵头方向": (triage.get("primary") or {}).get("department") or "（未给出）",
-            "协同方向": [d.get("department") for d in (triage.get("secondary") or [])] or ["（无）"],
+            "牵头方向": triage_confirmation.get("primary_department") or
+                (triage.get("primary") or {}).get("department") or "（未给出）",
+            "协同方向": triage_confirmation.get("secondary_departments") or
+                [d.get("department") for d in (triage.get("secondary") or [])] or ["（无）"],
             "决策路径": DECISION_PATH_LABELS.get(str(triage.get("decision_path")), "（未记录）"),
             "结果可靠性": reliability.get("level") or "（未评估）",
             "可靠性说明": list(reliability.get("reasons") or []) or ["（无）"],
@@ -828,7 +840,7 @@ def build_full_report(case: Dict[str, Any]) -> Report:
             }.items()],
             "证据卡片": evidence_cards_for_report(cards),
         },
-        "医生最终意见": _doctor_opinions(decisions),
+        "医生最终意见": doctor_final_opinions,
         "AI 与医生意见差异": _differences(decisions),
         "审核记录与版本": {
             "报告版本": case.get("report_version", 1),
