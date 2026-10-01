@@ -159,11 +159,11 @@
   .triage-department-item{padding:12px 2px;border-bottom:1px solid var(--line);}
   .triage-department-item .tiny{margin-top:5px;max-width:var(--text-width-body);font-size:var(--body-3);color:var(--ink2);}
   .triage-confirmation-card{margin:var(--sp-16) 0;padding:16px;border:1px solid var(--info);border-radius:var(--br-12);background:var(--surface-subtle);}
-  .triage-secondary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;flex:1;min-width:0;}
-  .triage-secondary-option{display:flex;align-items:center;gap:8px;min-width:0;min-height:44px;padding:8px 12px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--gray-000);cursor:pointer;}
+  .triage-secondary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;flex:1;min-width:0;}
+  .triage-secondary-option{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px;min-width:0;min-height:44px;padding:8px 12px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--gray-000);cursor:pointer;}
   .triage-secondary-option:hover{border-color:var(--accent);background:var(--surface-warm);}
   .triage-secondary-option input{flex:0 0 auto;margin:0;}
-  .triage-secondary-option span{min-width:0;overflow-wrap:anywhere;line-height:1.35;}
+  .triage-secondary-option span{flex:1 1 auto;min-width:0;white-space:normal;word-break:keep-all;overflow-wrap:break-word;line-height:1.35;}
   .triage-secondary-count{margin-top:6px;color:var(--ink2);}
   .overview-full-record-action{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:var(--sp-12);padding:12px 14px!important;border:1px solid var(--accent);border-radius:var(--br-8);background:var(--gray-000);color:var(--accent);font-size:var(--body-1);font-weight:650;}
   .overview-full-record-action:hover{background:var(--surface-warm);}

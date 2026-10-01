@@ -708,6 +708,13 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("triage-secondary-option", html)
         self.assertIn("triage-secondary-count", html)
 
+    def test_doctor_triage_department_labels_keep_names_horizontal(self):
+        """科室名称不能按任意字符断行，复选框与文字应有稳定的两列布局。"""
+        _, html = self.get("/doctor")
+        self.assertIn("grid-template-columns:auto minmax(0,1fr)", html)
+        self.assertIn("word-break:keep-all", html)
+        self.assertIn(".triage-secondary-option span{flex:1", html)
+
     def test_doctor_case_header_is_compact(self):
         """病例页标题栏应使用紧凑布局，避免首屏被标题区占满。"""
         _, html = self.get("/doctor")
