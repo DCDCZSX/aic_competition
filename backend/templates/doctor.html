@@ -289,17 +289,18 @@
       <div class="doctor-case-header">
         <div>
           <h1 id="case-heading">病例审阅</h1>
+          <div id="case-stage-hint" class="tiny" role="status" aria-live="polite"></div>
         </div>
         <button type="button" class="ghost btn-sm" onclick="go('list')">返回病例队列</button>
       </div>
       <div class="doctor-case-layout">
       <nav class="doctor-case-nav view-nav" id="nav" aria-label="病例处理阶段">
         <button type="button" class="nav-link" onclick="go('list')" data-s="list" aria-current="page">病例队列</button>
-        <button type="button" class="nav-link dis" onclick="navCase('overview')" data-s="overview" aria-disabled="true">总览</button>
-        <button type="button" class="nav-link dis" onclick="navCase('triage')" data-s="triage" aria-disabled="true">判断依据</button>
-        <button type="button" class="nav-link dis" onclick="navCase('mdt')" data-s="mdt" aria-disabled="true">多学科</button>
-        <button type="button" class="nav-link dis" onclick="navCase('review')" data-s="review" aria-disabled="true">审核发布</button>
-        <button type="button" class="nav-link dis" onclick="navCase('history')" data-s="history" aria-disabled="true">历史</button>
+        <button type="button" class="nav-link dis" onclick="navCase('overview')" data-s="overview" aria-disabled="true">病例摘要</button>
+        <button type="button" class="nav-link dis" onclick="navCase('triage')" data-s="triage" aria-disabled="true">分流确认</button>
+        <button type="button" class="nav-link dis" onclick="navCase('mdt')" data-s="mdt" aria-disabled="true">MDT 协作</button>
+        <button type="button" class="nav-link dis" onclick="navCase('review')" data-s="review" aria-disabled="true">报告审核</button>
+        <button type="button" class="nav-link dis" onclick="navCase('history')" data-s="history" aria-disabled="true">历史记录</button>
       </nav>
       <div class="doctor-case-main">
       <section id="s-list" class="card">
@@ -341,8 +342,8 @@
       </section>
 
       <section id="s-mdt" class="card hide">
-        <h2>多学科会诊审阅</h2>
-        <div class="tiny" style="margin-bottom:var(--sp-16);">先看会诊结果，再按时间顺序查看形成过程；不重复展示总览中的患者画像和完整证据。</div>
+        <h2>MDT 协作</h2>
+        <div class="tiny" style="margin-bottom:var(--sp-16);">先完成是否需要协作的初筛，再查看专科意见、共识、分歧和后续处理。</div>
         <div id="mdt-body"></div>
       </section>
 
@@ -512,6 +513,7 @@ function go(screen){
     document.body.classList.remove('doctor-case-mode');
   }
   S.screen = screen;
+  updateWorkflowStage();
   document.body.classList.toggle('doctor-queue-mode', screen==='list');
   document.body.classList.toggle('doctor-case-mode', screen!=='list' && !!S.caseId);
   ['list','overview','triage','mdt','review','history'].forEach(s=>{
@@ -839,13 +841,25 @@ function renderOverview(){
       : '<div class="tiny">（未提供）</div>';
   const pending = (S.review&&S.review.summary)||{};
   let todo = [];
+  const triage = p.triage||{};
+  if(!triage.primary || !triage.primary.department){
+    todo.push(`<div class="field"><div style="flex:1;">尚未完成分流确认</div>
+      <button class="mini" onclick="go('triage')">去分流确认</button></div>`);
+  }
+  const screening = (S.review&&S.review.mdt_screening)||{};
+  if(!screening.status || screening.status!=='decided'){
+    todo.push(`<div class="field"><div style="flex:1;">尚未完成 MDT 初筛</div>
+      <button class="mini" onclick="go('mdt')">去 MDT 协作</button></div>`);
+  }
+  const pendingDisagreements = (S.review&&S.review.pending_disagreements)||[];
+  if(pendingDisagreements.length){
+    todo.push(`<div class="field"><div style="flex:1;">${pendingDisagreements.length} 条分歧待处理</div>
+      <button class="mini" onclick="go('mdt')">去 MDT 协作</button></div>`);
+  }
   if(pending.pending) todo.push(`<div class="field"><div style="flex:1;">${pending.pending} 条决策条目待审核（[F]）</div>
-      <button class="mini" onclick="go('review')">去审核</button></div>`);
-  const agg = (p.mdt||{}).aggregation||{};
-  if((agg.disagreements||[]).length) todo.push(`<div class="field"><div style="flex:1;">${agg.disagreements.length} 条分歧待裁决（[E]）</div>
-      <button class="mini" onclick="go('mdt')">看过程</button></div>`);
+      <button class="mini" onclick="go('review')">去报告审核</button></div>`);
   if(!S.review.published) todo.push(`<div class="field"><div style="flex:1;">报告尚未生成审核版（[F]）</div>
-      <button class="mini" onclick="go('review')">去发布</button></div>`);
+      <button class="mini" onclick="go('review')">去报告审核</button></div>`);
   if((p.gaps||[]).length) todo.push(`<div class="field"><div style="flex:1;">仍有 ${p.gaps.length} 项信息缺口未补</div>
       <button class="mini" onclick="go('review')">去审核条目</button></div>`);
   if(!todo.length) todo.push('<div class="tiny">暂无待处理事项</div>');
@@ -860,7 +874,7 @@ function renderOverview(){
       <h3>当前待办</h3>
       ${todo.slice(0,1).join('')}
       ${todo.length>1?`<details class="doctor-disclosure"><summary>其他待办（${todo.length-1}）</summary>${todo.slice(1).join('')}</details>`:''}
-      <div class="tiny">下一步：先处理待审核条目，再按需查看分诊依据和完整资料。</div>
+      <div class="tiny">下一步：按分流确认 → MDT 协作 → 报告审核的顺序处理；完整资料和证据可在对应页面展开。</div>
     </section>
     <details class="doctor-disclosure">
       <summary>查看完整患者资料</summary>
@@ -874,10 +888,24 @@ function renderOverview(){
         <h3>信息缺口</h3>${(p.gaps||[]).length?p.gaps.map(g=>`<div class="field"><div style="flex:1;">${esc(g)}</div></div>`).join(''):'<div class="tiny">（无）</div>'}
       </div>
     </details>
-    <details class="doctor-disclosure">
-      <summary>查看分诊与 MDT 资料</summary>
-      <div class="doctor-disclosure-body">${renderMdtScreening()}${renderMdtPreparationPacket()}</div>
-    </details>`;
+    <div class="doctor-disclosure workflow-next-step">
+      <div class="doctor-disclosure-body"><strong>下一步：先完成分流确认，再决定是否进入 MDT 协作。</strong>
+        <div class="actions left"><button class="mini" onclick="go('triage')">去分流确认</button><button class="mini" onclick="go('mdt')">去 MDT 协作</button></div>
+      </div>
+    </div>`;
+}
+function updateWorkflowStage(){
+  const hint = $('case-stage-hint');
+  if(!hint || !S.caseId){ return; }
+  const p = (S.caseData&&S.caseData.payload)||{}, triage = p.triage||{};
+  const screening = (S.review&&S.review.mdt_screening)||{};
+  const summary = (S.review&&S.review.summary)||{};
+  let stage = '当前阶段：分流确认';
+  if(triage.primary&&triage.primary.department && screening.status!=='decided') stage = '当前阶段：MDT 协作初筛';
+  else if(triage.primary&&triage.primary.department && Number(summary.pending||0)>0) stage = '当前阶段：报告审核';
+  else if(S.review&&S.review.published) stage = '当前阶段：已发布，可查看历史记录';
+  else if(triage.primary&&triage.primary.department) stage = '当前阶段：报告审核';
+  hint.textContent = stage;
 }
 
 /* ===================== 屏 C：分诊依据 ===================== */
@@ -1019,6 +1047,8 @@ function renderMdt(){
   const disagreementProcess = disagreements.length ? `<div class="mdt-process-note">识别到 ${disagreements.length} 条方向性分歧，已在上方结果中按主题汇总。</div>` : '<div class="mdt-process-note">未检出方向性分歧，直接进入结果聚合。</div>';
   const challengeProcess = challengeQuestions.length ? challengeQuestions.map(q=>`<div class="mdt-result-item"><strong>${esc(q.question||q)}</strong><p>${q.answered?'已补答：'+esc(q.outcome||'结论待医生裁决'):'待补答'}</p></div>`).join('') : '<div class="mdt-process-note">本例未触发质询。</div>';
   $('mdt-body').innerHTML = `
+    ${renderMdtScreening()}
+    ${renderMdtPreparationPacket()}
     <section class="mdt-results" aria-labelledby="mdt-results-title">
       <h3 id="mdt-results-title">MDT 结果</h3>
       <div class="doctor-decision-summary">
