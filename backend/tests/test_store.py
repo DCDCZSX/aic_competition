@@ -144,6 +144,16 @@ class TestAuditLog(StoreTestBase):
         self.assertEqual(len(logs), 2)
         self.assertEqual(logs[0]["run_id"], logs[1]["run_id"], "同一 run_id 应可串联一次运行")
 
+    def test_case_audit_limit_keeps_latest_events_in_chronological_order(self):
+        for index in range(205):
+            self.store.add_audit("C-LIMIT", f"event_{index}", str(index))
+
+        logs = self.store.list_audit("C-LIMIT", limit=200)
+
+        self.assertEqual(len(logs), 200)
+        self.assertEqual(logs[0]["event"], "event_5")
+        self.assertEqual(logs[-1]["event"], "event_204")
+
     def test_audit_survives_restart(self):
         self.store.add_audit("C005", "analysis_anomaly", "内分泌科超时")
         self.reopen()

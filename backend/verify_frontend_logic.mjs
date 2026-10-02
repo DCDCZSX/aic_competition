@@ -360,7 +360,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 /* ----------------------------------------------------- 医生工作台断言 */
 {
   const doctorHtml = fs.readFileSync(path.join(TPL, 'doctor.html'), 'utf8');
-  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage };');
+  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage, openReviewCategory: (...args) => window.openReviewCategory(...args) };');
   const D = globalThis.__D;
   check('病例详情导航只突出主要任务',
     ['overview','triage','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`))
@@ -458,7 +458,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('分诊默认突出牵头科室', triage.includes('内分泌科') && triage.includes('科室分诊结果'), triage);
   check('分诊不重复展示内部过程', !triage.includes('triage-process') && !triage.includes('规则命中（确定性）'), triage);
   check('分诊默认按科室列表展示依据', triage.includes('triage-department-list')
-    && triage.includes('triage-department-item') && triage.includes('依据：'), triage);
+    && triage.includes('triage-department-item') && triage.includes('triage-evidence-list')
+    && triage.includes('依据列表'), triage);
   D.renderMdt();
   const mdt = el('mdt-body').innerHTML;
   const mdtOrderTokens = ['MDT 会前资料包','AI 预分析提示','正式 MDT 会诊记录'];
@@ -494,11 +495,10 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
                by_state: { awaiting: 4, confirmed: 4, modified: 1, rejected: 1, uncertain: 0 } },
   };
   D.renderReview();
-  check('审核进度条按医生处理与自动处理合计', el('rev-bar').style.width === '60%', el('rev-bar').style.width);
-  check('审核进度说明区分医生与自动处理', el('rev-note').textContent.includes('医生处理 6') && el('rev-note').textContent.includes('免审自动 0'), el('rev-note').textContent);
-  check('主区审核摘要有责任分级',
-    el('rev-summary-inline').innerHTML.includes('必须医生决定')
-      && el('rev-summary-inline').innerHTML.includes('建议抽查'), '');
+  check('审核页移除顶部汇总面板',
+    !doctorHtml.includes('id="pub-badge"')
+      && !doctorHtml.includes('id="review-task-banner"')
+      && !doctorHtml.includes('id="rev-summary-inline"'), '');
 
   /* 发布入口必须"两处都有"：≥1440px 右轨常驻，<1440px 右轨被 CSS 隐藏 → 屏 F 主区兜底
      （真实缺陷：入口只在右轨里，1366/1280 屏上医生审完发不出去） */
@@ -516,10 +516,11 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     inlinePub.includes('确认发布审核版') && inlinePub.includes('处理剩余必审并发布'), '');
   check('仍有待审条目时发布按钮禁用', inlinePub.includes('disabled'), '');
   check('审核条目默认只显示摘要并可进入详情',
-    el('rev-body').innerHTML.includes('查看详情')
+    el('rev-body').innerHTML.includes('查看本类')
     && doctorHtml.includes('id="rev-detail"')
-    && doctorHtml.includes('openReviewDetail'), el('rev-body').innerHTML);
-  check('审核须知使用折叠区', doctorHtml.includes('class="review-help"') && doctorHtml.includes('审核须知'), '');
+    && doctorHtml.includes('openReviewDetail')
+    && doctorHtml.includes('openReviewCategory'), el('rev-body').innerHTML);
+  check('详情页移除低价值审核须知', !doctorHtml.includes('class="review-help"') && !doctorHtml.includes('审核须知'), '');
   check('唯一发布入口使用一致的输入前缀',
     inlinePub.includes('id="inline-op-text"')
     && !inlinePub.includes('id="op-text"'), '');
@@ -535,16 +536,23 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
                by_state: { auto_processed: 1 } },
   };
   D.renderReview();
-  check('详情页单独折叠免审自动分组', el('rev-body').innerHTML.includes('免审（自动）') && el('rev-body').innerHTML.includes('auto_processed'), '');
-  check('免审条目提供接管入口而非强制医生逐条确认', el('rev-body').innerHTML.includes('接管并确认'), '');
+  check('审核分类卡片显示自动处理入口', el('rev-body').innerHTML.includes('已自动处理') && el('rev-body').innerHTML.includes("openReviewCategory('auto')"), '');
+  D.openReviewCategory('auto');
+  check('自动处理分类进入独立清单视图', el('rev-category').innerHTML.includes('接管并确认') && el('rev-category').innerHTML.includes('返回审核分类'), el('rev-category').innerHTML);
 
   D.S.audit = { report_version:2, review:{published:true, published_by:'总审医生', published_at:'2026-09-30'},
     versions:[{version:2, published_by:'总审医生', published_at:'2026-09-30', review_summary:{disagreements:0}}],
     decisions:[{action_label:'接受', target_label:'科室入选', target_id:'IT-1', content_revision:2, reviewer:'总审医生', created_at:'2026-09-30', before:'AI 原稿', after:'医生版本', reason:'资料充分'}],
-    timeline:[{at:'2026-09-30', event:'发布审核版', detail:'完成逐条审核'}], items:[{title:'科室入选', state:'confirmed', state_label:'已接受'}] };
+    timeline:[{at:'2026-09-30', event:'report_published', detail:'审核人=总审医生 版本=2'}], items:[{title:'科室入选', state:'confirmed', state_label:'已接受'}] };
   D.renderHistory();
   const history = el('hist-body').innerHTML;
-  check('历史记录默认只显示版本摘要', history.includes('变更摘要') && history.includes('查看变更详情'), history);
+  check('历史记录提供版本与医生处理入口', history.includes('查看报告') && history.includes('医生处理记录') && history.includes('查看处理详情') && history.includes('关键流程记录') && history.includes('报告发布') && !history.includes('查看完整审计日志') && !history.includes('条目状态快照'), '');
+  check('关键流程记录准确提取处理人', history.includes('history-event-actor">总审医生</div>') && !history.includes('history-event-actor">总审医生 版本=2</div>'), history);
+  window.openHistoryDecision(0);
+  const decisionDetail = el('hist-body').innerHTML;
+  check('历史操作详情展示真实修改内容和理由', decisionDetail.includes('AI 原稿') && decisionDetail.includes('医生版本') && decisionDetail.includes('资料充分') && !decisionDetail.includes('系统事件'), '');
+  window.openHistoryVersion(2);
+  check('缺少历史正文时明确显示空状态', el('hist-body').innerHTML.includes('该版本暂无报告正文'), '');
 }
 
 /* ------------------------------------------------------------------ 输出 */

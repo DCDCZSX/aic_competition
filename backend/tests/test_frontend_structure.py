@@ -263,7 +263,7 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('href="/static/css/dsh.css"', html)
         self.assertEqual(html.count('class="rail rail-left"'), 1)
         self.assertNotIn('class="rail rail-right"', html)
-        for anchor in ('id="rail-filters"', 'id="rev-summary-inline"', 'id="rev-publish-inline"',
+        for anchor in ('id="rail-filters"', 'id="rev-publish-inline"',
                        'id="rev-bar"', 'id="nav"', 'class="doctor-case-header"',
                        'class="doctor-case-nav', 'class="doctor-case-main"'):
             self.assertIn(anchor, html, f"医生工作台缺少 {anchor}")
@@ -276,7 +276,7 @@ class FrontendStructureTest(unittest.TestCase):
         for task in ("overview", "triage", "mdt", "review"):
             self.assertIn(f'data-s="{task}"', html)
         self.assertNotIn('data-s="evidence"', html)
-        self.assertIn('class="review-help"', html)
+        self.assertNotIn('class="review-help"', html)
         self.assertNotIn("--blue", html)
 
     def test_doctor_queue_has_server_pagination_controls(self):
@@ -305,10 +305,7 @@ class FrontendStructureTest(unittest.TestCase):
 
     def test_doctor_review_template_exposes_review_tiers_and_risk_counts(self):
         _, html = self.get("/doctor")
-        for token in (
-            "review_tier", "tier_reason", "tier_counts", "建议抽查",
-            "必审", "自动处理", "高风险", "冲突", "分析失败",
-        ):
+        for token in ("review_tier", "tier_reason", "建议抽查", "必审", "自动处理"):
             self.assertIn(token, html, f"医生审核分级缺少：{token}")
         self.assertIn("review_tier==='required'", html)
         self.assertIn("review_tier==='sample'", html)
@@ -620,12 +617,11 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="stage3-safety-note"', stage3)
         self.assertEqual(stage3.count("AI 参考内容尚未经医生审核"), 1)
 
-    def test_doctor_review_exposes_primary_pending_task_banner(self):
-        """审核主区需要把剩余必审数量放在首要位置，避免三栏信息淹没下一步。"""
+    def test_doctor_review_removes_redundant_primary_task_banner(self):
+        """审核分类页不再额外显示当前主要任务提示。"""
         _, html = self.get("/doctor")
-        self.assertIn('id="review-task-banner"', html)
-        self.assertIn("还有 ${sum.pending||0} 项必审", html)
-        self.assertIn('aria-live="polite"', html)
+        self.assertNotIn('id="review-task-banner"', html)
+        self.assertNotIn("还有 ${sum.pending||0} 项必审", html)
 
     def test_doctor_review_uses_decision_level_groups_and_compact_cards(self):
         """审核页应按责任分组，默认卡片只显示决策摘要，详情折叠。"""
@@ -635,7 +631,7 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("review-decision-card", html)
         self.assertIn("review-card-summary", html)
         self.assertIn("查看审核详情", html)
-        self.assertIn("自动处理不会阻塞发布", html)
+        self.assertIn("自动处理，不阻塞发布", html)
 
     def test_doctor_review_has_a_dedicated_detail_view_for_each_item(self):
         """审核列表只放摘要，单条内容在工作台详情视图中展开。"""
@@ -662,12 +658,80 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertNotIn("'department_selection':'科室选择'", html)
         self.assertNotIn("'patient_advice':'患者沟通建议'", html)
 
+    def test_doctor_review_categories_use_responsive_three_column_cards(self):
+        """审核分类应以响应式卡片入口呈现，而不是用折叠区纵向堆叠。"""
+        _, html = self.get("/doctor")
+        self.assertIn('id="review-category-grid"', html)
+        self.assertIn('class="review-category-card ${def.cls}"', html)
+        self.assertIn('grid-template-columns:repeat(3', html)
+        self.assertIn("openReviewCategory", html)
+        self.assertNotIn('<details class="review-group', html)
+
+    def test_doctor_review_page_removes_redundant_top_status_panels(self):
+        """报告审核页不再显示 AI 生成、当前主要任务和解释性审核提醒。"""
+        _, html = self.get("/doctor")
+        self.assertNotIn('id="pub-badge"', html)
+        self.assertNotIn('id="review-task-banner"', html)
+        self.assertNotIn('id="rev-summary-inline"', html)
+        self.assertNotIn('当前主要任务</strong>', html)
+        self.assertNotIn('审核只处理会改变医疗方向', html)
+
+    def test_doctor_publish_panel_prioritizes_readable_status_and_opinion_form(self):
+        """发布区减少说明性小字，状态和线下意见输入使用更清晰的布局。"""
+        _, html = self.get("/doctor")
+        self.assertIn('class="publish-summary-grid"', html)
+        self.assertIn('class="publish-opinion-form"', html)
+        self.assertIn('.publish-opinion-form{display:grid;grid-template-columns:1fr;', html)
+        self.assertIn('class="publish-blocker"', html)
+        self.assertIn('min-height:120px', html)
+        self.assertNotIn('用于生成「AI 建议 vs 医生意见」对照；患者端不承担', html)
+        self.assertNotIn('规则：免审条目不会计入医生确认', html)
+
+    def test_doctor_overview_keeps_only_actionable_status_cards(self):
+        """病例总览顶部删除重复主诉，只突出状态和可靠性。"""
+        _, html = self.get("/doctor")
+        self.assertIn('class="overview-status-summary"', html)
+        self.assertIn('病例状态', html)
+        self.assertIn('可靠性等级', html)
+        self.assertNotIn('<div class="muted">病例概况</div>', html)
+        self.assertNotIn('<div class="field"><div class="muted">主诉</div>', html)
+
+    def test_doctor_triage_removes_duplicate_gaps_and_groups_evidence(self):
+        """分流页不重复展示信息缺口，科室依据按条目清晰分组。"""
+        _, html = self.get("/doctor")
+        self.assertNotIn('信息缺口：${(p.gaps||[]).map(esc).join', html)
+        self.assertIn('class="triage-evidence-list"', html)
+        self.assertIn('class="triage-evidence-item"', html)
+        self.assertIn('依据列表', html)
+
     def test_doctor_review_detail_typography_is_readable(self):
         """审核正文与证据不能继续使用 11px 的 tiny 字号。"""
         _, html = self.get("/doctor")
         self.assertIn("review-detail-content", html)
         self.assertIn("review-detail-content .review-copy", html)
         self.assertIn("review-detail-content .review-meta", html)
+
+    def test_doctor_review_detail_hides_aggregate_panels(self):
+        """单条详情只聚焦当前条目，不重复显示审核总览和发布面板。"""
+        _, html = self.get("/doctor")
+        self.assertIn("$('rev-publish-inline').classList.add('hide')", html)
+        self.assertIn("$('rev-publish-inline').classList.remove('hide')", html)
+
+    def test_doctor_review_detail_deduplicates_reason_and_evidence(self):
+        """判断依据保留结论，证据区只展示独立的可核对来源。"""
+        _, html = self.get("/doctor")
+        self.assertIn("uniqueEvidenceRefs", html)
+        self.assertIn("可核对证据", html)
+        self.assertIn("暂无独立证据引用", html)
+
+    def test_doctor_review_detail_hides_page_level_chrome_and_uses_prominent_back_button(self):
+        """详情页去掉页面级标题和审核状态条，返回列表按钮需要醒目。"""
+        _, html = self.get("/doctor")
+        self.assertIn('id="review-heading"', html)
+        self.assertIn("$('review-heading').classList.add('hide')", html)
+        self.assertNotIn('id="pub-badge"', html)
+        self.assertIn('class="primary review-detail-back"', html)
+        self.assertNotIn('summary>审核须知', html)
 
     def test_doctor_case_navigation_uses_processing_order(self):
         """病例导航应按医生实际处理顺序组织，而不是按内部屏幕编号组织。"""
@@ -678,6 +742,20 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertLess(nav.index("病例摘要"), nav.index("分流确认"))
         self.assertLess(nav.index("分流确认"), nav.index("MDT 协作"))
         self.assertLess(nav.index("MDT 协作"), nav.index("报告审核"))
+
+    def test_doctor_history_prioritizes_key_flow_records(self):
+        """历史页默认展示医生需要关注的关键流程。"""
+        _, html = self.get("/doctor")
+        self.assertIn("关键流程记录", html)
+        self.assertIn('class="history-event-list"', html)
+        self.assertIn('class="history-event-card"', html)
+        self.assertIn('class="history-event-copy"', html)
+
+    def test_doctor_history_hides_full_audit_log_from_workflow(self):
+        """医生历史页不显示完整审计日志入口，避免技术日志干扰临床回顾。"""
+        _, html = self.get("/doctor")
+        self.assertNotIn("查看完整审计日志", html)
+        self.assertNotIn("history-audit-row", html)
 
     def test_triage_confirmation_precedes_mdt_and_review(self):
         _, html = self.get("/doctor")
@@ -751,6 +829,29 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("overview-task-list", overview)
         self.assertIn("formalComplete", html)
 
+    def test_doctor_overview_uses_duration_language_and_removes_redundant_portrait_banner(self):
+        """摘要应表达症状持续时长，不能把它误称为时间线或重复展示患者画像横幅。"""
+        _, html = self.get("/doctor")
+        self.assertIn("症状持续情况", html)
+        self.assertNotIn('<div class="ai-block"><strong>患者画像</strong>', html)
+
+    def test_doctor_overview_source_refs_are_human_readable(self):
+        """医生默认看到来源说明，内部字符偏移只用于展开原文追溯。"""
+        _, html = self.get("/doctor")
+        self.assertIn("查看原文依据", html)
+        self.assertIn("患者原始描述", html)
+        self.assertIn("overview-fact-source", html)
+        self.assertIn(".overview-fact-source .source-ref{display:block", html)
+
+    def test_doctor_overview_deduplicates_fact_labels_and_uses_grouped_grid(self):
+        """资料条目应避免名称和值重复，并使用分组网格消除单侧留白。"""
+        _, html = self.get("/doctor")
+        self.assertIn("formatFactLabel", html)
+        self.assertIn("right.startsWith(left)", html)
+        self.assertIn("overview-fact-grid", html)
+        self.assertIn("overview-fact-section", html)
+        self.assertIn("overview-gap-item", html)
+
     def test_doctor_overview_expresses_triage_before_mdt_as_conditional_flow(self):
         """摘要页应先引导分流确认，再按条件进入 MDT 预分析。"""
         _, html = self.get("/doctor")
@@ -758,6 +859,12 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("查看 MDT 预分析", html)
         self.assertIn("启动正式 MDT", html)
         self.assertNotIn('onclick="go(\'triage\')">去分流确认</button><button class="mini" onclick="go(\'mdt\')">查看 MDT 判断</button>', html)
+
+    def test_doctor_overview_keeps_triage_review_entry_after_confirmation(self):
+        """分流完成后保留回看入口，但不抢占当前 MDT 主任务。"""
+        _, html = self.get("/doctor")
+        self.assertIn("查看分流确认", html)
+        self.assertIn("confirmation.status==='confirmed'", html)
 
     def test_doctor_triage_departments_use_readable_selection_grid(self):
         """分流确认的协同科室必须给名称留出稳定空间。"""

@@ -510,14 +510,15 @@ class Store:
         with self._lock:
             if case_id:
                 rows = self._conn.execute(
-                    "SELECT * FROM audit_log WHERE case_id = ? ORDER BY id ASC LIMIT ?",
+                    "SELECT * FROM audit_log WHERE case_id = ? ORDER BY id DESC LIMIT ?",
                     (case_id, int(limit)),
                 ).fetchall()
             else:
                 rows = self._conn.execute(
                     "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (int(limit),)
                 ).fetchall()
-        return [dict(r) for r in rows]
+        records = [dict(r) for r in rows]
+        return list(reversed(records)) if case_id else records
 
     # ------------------------------------------------------------------ 医生审核记录
     def save_decision(self, decision: Dict[str, Any]) -> None:
