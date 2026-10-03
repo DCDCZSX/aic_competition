@@ -737,6 +737,7 @@ class FrontendStructureTest(unittest.TestCase):
         """从分类详情完成审核后，应回到当前分类继续处理，而不是回到分类入口。"""
         _, html = self.get("/doctor")
         self.assertIn("S.reviewCategoryKey", html)
+        self.assertIn("S.reviewDetailReturn = 'category'", html)
         self.assertIn("const returnToCategory = S.reviewDetailReturn==='category' ? S.reviewCategoryKey : ''", html)
         self.assertIn("renderReviewCategory(returnToCategory)", html)
 

@@ -1416,6 +1416,7 @@ function renderReview(){
     const def = categoryDefs.find(entry=>entry.key===key);
     if(!def) return;
     S.reviewCategoryKey = key;
+    S.reviewDetailReturn = 'category';
     $('rev-body').classList.add('hide');
     $('rev-detail').classList.add('hide');
     $('review-heading').classList.add('hide');
