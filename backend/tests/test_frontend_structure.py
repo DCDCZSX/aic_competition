@@ -734,12 +734,21 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertNotIn('summary>审核须知', html)
 
     def test_review_decision_returns_to_current_category_list(self):
-        """从分类详情完成审核后，应回到当前分类继续处理，而不是回到分类入口。"""
+        """列表完成审核后保留当前分类，详情完成审核后继续停留在当前条目。"""
         _, html = self.get("/doctor")
         self.assertIn("S.reviewCategoryKey", html)
         self.assertIn("S.reviewDetailReturn = 'category'", html)
-        self.assertIn("const returnToCategory = S.reviewDetailReturn==='category' ? S.reviewCategoryKey : ''", html)
-        self.assertIn("renderReviewCategory(returnToCategory)", html)
+        self.assertIn("const wasInDetail = !$('rev-detail').classList.contains('hide')", html)
+        self.assertIn("if(wasInDetail) openReviewDetail(itemId, 'category')", html)
+        self.assertIn("else if(currentCategory) renderReviewCategory(currentCategory)", html)
+
+    def test_review_actions_keep_processed_item_visible_and_detail_open(self):
+        """审核动作后当前条目保留已审核状态，详情页继续停留在当前条目。"""
+        _, html = self.get("/doctor")
+        self.assertIn("S.reviewActiveItemIds", html)
+        self.assertIn("已审核", html)
+        self.assertIn("openReviewDetail(itemId, 'category')", html)
+        self.assertIn("review-complete-label", html)
 
     def test_doctor_case_navigation_uses_processing_order(self):
         """病例导航应按医生实际处理顺序组织，而不是按内部屏幕编号组织。"""
