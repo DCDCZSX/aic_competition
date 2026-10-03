@@ -1512,8 +1512,8 @@ async function decide(itemId, action, after, reason){
   if(!S.reviewActiveItemIds.includes(itemId)) S.reviewActiveItemIds.push(itemId);
   await refreshHeader();
   renderReview();
-  if(wasInDetail) openReviewDetail(itemId, 'category');
-  else if(currentCategory) renderReviewCategory(currentCategory);
+  if(wasInDetail) window.openReviewDetail(itemId, 'category');
+  else if(currentCategory) window.openReviewCategory(currentCategory);
   return true;
 }
 async function submitDisagreement(disagreementId, key){

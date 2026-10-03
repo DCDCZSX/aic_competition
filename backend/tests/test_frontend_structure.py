@@ -739,8 +739,8 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("S.reviewCategoryKey", html)
         self.assertIn("S.reviewDetailReturn = 'category'", html)
         self.assertIn("const wasInDetail = !$('rev-detail').classList.contains('hide')", html)
-        self.assertIn("if(wasInDetail) openReviewDetail(itemId, 'category')", html)
-        self.assertIn("else if(currentCategory) renderReviewCategory(currentCategory)", html)
+        self.assertIn("if(wasInDetail) window.openReviewDetail(itemId, 'category')", html)
+        self.assertIn("else if(currentCategory) window.openReviewCategory(currentCategory)", html)
 
     def test_review_actions_keep_processed_item_visible_and_detail_open(self):
         """审核动作后当前条目保留已审核状态，详情页继续停留在当前条目。"""
