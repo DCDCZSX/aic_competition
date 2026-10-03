@@ -1415,6 +1415,7 @@ function renderReview(){
   function renderReviewCategory(key){
     const def = categoryDefs.find(entry=>entry.key===key);
     if(!def) return;
+    S.reviewCategoryKey = key;
     $('rev-body').classList.add('hide');
     $('rev-detail').classList.add('hide');
     $('review-heading').classList.add('hide');
@@ -1498,8 +1499,10 @@ async function decide(itemId, action, after, reason){
   if(r.status!==200 || !r.data.ok){ alert(r.data.error||'操作失败'); return false; }
   S.review.items = r.data.items; S.review.summary = r.data.summary;
   S.review.pending_questions = S.review.pending_questions||[];
+  const returnToCategory = S.reviewDetailReturn==='category' ? S.reviewCategoryKey : '';
   await refreshHeader();
   renderReview();
+  if(returnToCategory) renderReviewCategory(returnToCategory);
   return true;
 }
 async function submitDisagreement(disagreementId, key){

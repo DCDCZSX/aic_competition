@@ -733,6 +733,13 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('class="primary review-detail-back"', html)
         self.assertNotIn('summary>审核须知', html)
 
+    def test_review_decision_returns_to_current_category_list(self):
+        """从分类详情完成审核后，应回到当前分类继续处理，而不是回到分类入口。"""
+        _, html = self.get("/doctor")
+        self.assertIn("S.reviewCategoryKey", html)
+        self.assertIn("const returnToCategory = S.reviewDetailReturn==='category' ? S.reviewCategoryKey : ''", html)
+        self.assertIn("renderReviewCategory(returnToCategory)", html)
+
     def test_doctor_case_navigation_uses_processing_order(self):
         """病例导航应按医生实际处理顺序组织，而不是按内部屏幕编号组织。"""
         _, html = self.get("/doctor")
