@@ -1289,6 +1289,17 @@ document.addEventListener('visibilitychange', ()=>{
 });
 
 /* ===================== 屏 F：逐条审核 ===================== */
+function reviewScrollHost(){
+  return document.querySelector('.doctor-case-main') || document.scrollingElement;
+}
+function captureReviewScroll(){
+  const host = reviewScrollHost();
+  return host ? {host, top:host.scrollTop} : null;
+}
+function restoreReviewScroll(snapshot){
+  if(!snapshot || !snapshot.host) return;
+  requestAnimationFrame(()=>{ snapshot.host.scrollTop = snapshot.top; });
+}
 function renderReview(){
   $('review-heading').classList.remove('hide');
   $('rev-publish-inline').classList.remove('hide');
@@ -1388,7 +1399,7 @@ function renderReview(){
       <div class="review-card-actions">${reviewActions(it, tier==='automatic')}</div>
     </div>`;
   }
-  function openReviewDetail(itemId, returnContext){
+  function openReviewDetail(itemId, returnContext, preserveScroll){
     const item = (S.review&&S.review.items||[]).find(it=>it.item_id===itemId);
     if(!item) return;
     S.reviewDetailItemId = itemId;
@@ -1399,7 +1410,7 @@ function renderReview(){
     $('rev-publish-inline').classList.add('hide');
     $('rev-detail').classList.remove('hide');
     $('rev-detail').innerHTML = reviewDetailMarkup(item);
-    $('rev-detail').scrollIntoView({behavior:'smooth', block:'start'});
+    if(!preserveScroll) $('rev-detail').scrollIntoView({behavior:'smooth', block:'start'});
   }
   function closeReviewDetail(){
     $('rev-detail').classList.add('hide');
@@ -1418,7 +1429,7 @@ function renderReview(){
     {key:'processed', title:'已完成审核', list:items.filter(it=>!['awaiting','auto_processed'].includes(it.state) && tierOf(it)!=='automatic'), cls:'processed', meta:'已处理条目，可进入查看审核记录。'},
     {key:'auto', title:'已自动处理', list:items.filter(it=>tierOf(it)==='automatic' && (it.state==='auto_processed' || !it.decision_id || S.reviewActiveItemIds.includes(it.item_id))), cls:'auto', meta:'系统自动处理，不阻塞发布，可随时接管。'}
   ];
-  function renderReviewCategory(key){
+  function renderReviewCategory(key, preserveScroll){
     const def = categoryDefs.find(entry=>entry.key===key);
     if(!def) return;
     S.reviewCategoryKey = key;
@@ -1432,9 +1443,9 @@ function renderReview(){
       <div class="review-detail-head"><div><button class="primary review-detail-back" onclick="closeReviewCategory()">← 返回审核分类</button><h3 style="margin:0;">${def.title}</h3><div class="review-meta">${def.meta}</div></div><span class="pill gray">${def.list.length} 条</span></div>
       ${def.list.length ? def.list.map((it)=>itemMarkup(it, items.indexOf(it)+1, def.key==='auto')).join('') : '<div class="banner gray">此分类暂无条目。</div>'}
     </div>`;
-    if($('rev-category').scrollIntoView) $('rev-category').scrollIntoView({behavior:'smooth', block:'start'});
+    if(!preserveScroll && $('rev-category').scrollIntoView) $('rev-category').scrollIntoView({behavior:'smooth', block:'start'});
   }
-  function openReviewCategory(key){ renderReviewCategory(key); }
+  function openReviewCategory(key, preserveScroll){ renderReviewCategory(key, preserveScroll); }
   function closeReviewCategory(){
     $('rev-category').classList.add('hide');
     $('rev-category').innerHTML = '';
@@ -1502,6 +1513,7 @@ function publishPanelHtml(sum, canPublish, pfx){
 async function decide(itemId, action, after, reason){
   const wasInDetail = !$('rev-detail').classList.contains('hide') && S.reviewDetailItemId===itemId;
   const currentCategory = S.reviewCategoryKey || '';
+  const reviewScroll = captureReviewScroll();
   const r = await api('/api/v2/case/'+S.caseId+'/decisions', {method:'POST',
     body:JSON.stringify({item_id:itemId, action:action, after:after||'', reason:reason||'',
                          reviewer: (S.me&&S.me.label)||'模拟审核员'})});
@@ -1512,8 +1524,9 @@ async function decide(itemId, action, after, reason){
   if(!S.reviewActiveItemIds.includes(itemId)) S.reviewActiveItemIds.push(itemId);
   await refreshHeader();
   renderReview();
-  if(wasInDetail) window.openReviewDetail(itemId, 'category');
-  else if(currentCategory) window.openReviewCategory(currentCategory);
+  if(wasInDetail) window.openReviewDetail(itemId, 'category', true);
+  else if(currentCategory) window.openReviewCategory(currentCategory, true);
+  restoreReviewScroll(reviewScroll);
   return true;
 }
 async function submitDisagreement(disagreementId, key){
@@ -1553,8 +1566,8 @@ function closeModal(){
   S.modal=null;
   const previous = modalPreviousFocus;
   modalPreviousFocus = null;
-  if(previous && document.contains(previous) && typeof previous.focus==='function') previous.focus();
-  else if($('rev-body')){ $('rev-body').setAttribute('tabindex','-1'); $('rev-body').focus(); }
+  if(previous && document.contains(previous) && typeof previous.focus==='function') previous.focus({preventScroll:true});
+  else if($('rev-body')){ $('rev-body').setAttribute('tabindex','-1'); $('rev-body').focus({preventScroll:true}); }
 }
 let modalSubmitting = false;
 async function submitModal(){
