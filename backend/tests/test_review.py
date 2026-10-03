@@ -65,26 +65,32 @@ class TestBuildItems(unittest.TestCase):
         for item in self.items:
             self.by_type.setdefault(item.target_type, []).append(item)
 
-    def test_all_four_target_types_present(self):
-        for target in ("department_selection", "path_step", "consensus_item", "patient_advice"):
-            self.assertIn(target, self.by_type, f"缺少 {target} 条目")
+    def test_only_medical_decision_target_types_present(self):
+        self.assertTrue(set(self.by_type).issubset({"path_step", "consensus_item"}))
+        self.assertNotIn("department_selection", self.by_type)
+        self.assertNotIn("patient_advice", self.by_type)
+
+    def test_report_review_excludes_triage_and_patient_communication_items(self):
+        """报告审核只处理医学决策，不重复审核分流或患者沟通内容。"""
+        self.assertFalse(any(item.target_type == "department_selection" for item in self.items))
+        self.assertFalse(any(item.target_type == "patient_advice" for item in self.items))
 
     def test_item_content_revision_is_read_from_case_payload(self):
         case = sample_case()
         case["payload"]["review_item_revisions"] = {
-            "department_selection:内分泌科": 3,
+            "path_step:S2": 3,
         }
         items = rs.build_items(case)
-        item = next(i for i in items if i.item_id == "department_selection:内分泌科")
+        item = next(i for i in items if i.item_id == "path_step:S2")
         self.assertEqual(item.content_revision, 3)
 
     def test_old_decision_does_not_apply_to_new_content_revision(self):
         case = sample_case()
         case["payload"]["review_item_revisions"] = {
-            "department_selection:内分泌科": 2,
+            "path_step:S2": 2,
         }
         item = next(i for i in rs.build_items(case)
-                    if i.item_id == "department_selection:内分泌科")
+                    if i.item_id == "path_step:S2")
         decision = {
             "decision_id": "old-1", "target_type": item.target_type,
             "target_id": item.target_id, "action": "accept", "after": item.ai_content,
@@ -101,10 +107,10 @@ class TestBuildItems(unittest.TestCase):
         """历史记录排序异常时，当前修订的决定仍应覆盖过期决定。"""
         case = sample_case()
         case["payload"]["review_item_revisions"] = {
-            "department_selection:内分泌科": 2,
+            "path_step:S2": 2,
         }
         item = next(i for i in rs.build_items(case)
-                    if i.item_id == "department_selection:内分泌科")
+                    if i.item_id == "path_step:S2")
         current = {
             "decision_id": "current-2", "target_type": item.target_type,
             "target_id": item.target_id, "action": "accept", "after": item.ai_content,
@@ -115,14 +121,6 @@ class TestBuildItems(unittest.TestCase):
         applied = rs.apply_decisions([item], [current, stale])[0]
         self.assertEqual(applied.state, rs.CONFIRMED)
         self.assertEqual(applied.decision_id, "current-2")
-
-    def test_department_items_include_lead(self):
-        titles = [i.title for i in self.by_type["department_selection"]]
-        self.assertTrue(any("牵头 内分泌科" in t for t in titles), titles)
-        self.assertEqual(len(self.by_type["department_selection"]), 3)
-
-    def test_lead_department_first(self):
-        self.assertEqual(self.by_type["department_selection"][0].target_id, "内分泌科")
 
     def test_item_ids_stable(self):
         again = rs.build_items(sample_case())
@@ -137,8 +135,7 @@ class TestBuildItems(unittest.TestCase):
         self.assertTrue(any("分歧待裁决" in t for t in texts), texts)
 
     def test_open_question_not_duplicated(self):
-        contents = [i.ai_content for i in self.items if i.target_type == "patient_advice"]
-        self.assertNotIn("分歧待裁决：先查眼底 vs 先查肾功", contents)
+        self.assertFalse(any(i.target_type == "patient_advice" for i in self.items))
 
     def test_no_probability_numbers(self):
         """红线：条目内容不得出现概率/置信度数字。"""
@@ -172,7 +169,6 @@ class TestBuildItems(unittest.TestCase):
         self.assertIn("未要求医生决定", by_id["path_step:S1"].tier_reason)
         self.assertEqual(by_id["path_step:S2"].review_tier, rs.REQUIRED)
         self.assertIn("明确要求医生处理", by_id["path_step:S2"].tier_reason)
-        self.assertEqual(by_id["department_selection:内分泌科"].review_tier, rs.REQUIRED)
         for item in items:
             self.assertIn(item.review_tier, rs.REVIEW_TIERS)
             self.assertTrue(item.tier_reason)
@@ -193,20 +189,17 @@ class TestBuildItems(unittest.TestCase):
 
         self.assertEqual(by_id["consensus_item:C-01"].review_tier, rs.SAMPLE)
         self.assertEqual(by_id["consensus_item:X-01"].review_tier, rs.REQUIRED)
-        question = next(item for item in items if item.item_id == "patient_advice:Q-01")
-        self.assertEqual(question.review_tier, rs.SAMPLE)
-        self.assertFalse(any(item.target_type == "patient_advice"
-                             and "建议咨询方向" in item.title for item in items))
+        self.assertFalse(any(item.target_type == "patient_advice" for item in items))
 
     def test_summary_counts_tiers_and_risk_flags(self):
         items = [
             rs.ReviewItem(
-                item_id="required:1", target_type="patient_advice", target_id="1",
+                item_id="required:1", target_type="consensus_item", target_id="1",
                 title="必审", ai_content="内容", high_risk=True,
                 conflict=True, analysis_failed=True,
             ),
             rs.ReviewItem(
-                item_id="sample:1", target_type="patient_advice", target_id="2",
+                item_id="sample:1", target_type="consensus_item", target_id="2",
                 title="抽查", ai_content="内容", review_tier=rs.SAMPLE,
                 needs_doctor_review=False, tier_reason="经审核的抽查规则",
             ),
@@ -237,13 +230,9 @@ class TestBuildItems(unittest.TestCase):
 
         items = rs.build_items(case)
         step = next(item for item in items if item.item_id == "path_step:S1")
-        department = next(item for item in items if item.item_id == "department_selection:眼科")
-
         self.assertEqual(step.review_tier, rs.REQUIRED)
         self.assertTrue(step.high_risk)
         self.assertTrue(step.analysis_failed)
-        self.assertEqual(department.review_tier, rs.REQUIRED)
-        self.assertTrue(department.analysis_failed)
         self.assertFalse(step.batch_eligible)
 
     def test_matching_information_gap_keeps_path_step_in_required_tier(self):
@@ -306,30 +295,30 @@ class TestDecisions(unittest.TestCase):
     def test_apply_decisions_states(self):
         items = rs.build_items(sample_case())
         decisions = [
-            {"target_type": "department_selection", "target_id": "内分泌科",
+            {"target_type": "consensus_item", "target_id": "X-01",
              "action": "accept", "reason": "", "after": None, "created_at": "2026-09-12",
              "reviewer": {"role": "医学生"}},
-            {"target_type": "department_selection", "target_id": "眼科",
+            {"target_type": "consensus_item", "target_id": "C-01",
              "action": "modify", "after": "改为眼科牵头", "reason": "证据更强",
              "created_at": "2026-09-12", "reviewer": {"role": "医学生"}},
         ]
         applied = {i.target_id: i for i in rs.apply_decisions(items, decisions)}
-        self.assertEqual(applied["内分泌科"].state, rs.CONFIRMED)
-        self.assertEqual(applied["眼科"].state, rs.MODIFIED)
-        self.assertEqual(applied["眼科"].final_content, "改为眼科牵头")
-        self.assertTrue(applied["眼科"].changed_by_doctor)
-        self.assertEqual(applied["肾内科"].state, rs.AWAITING)
+        self.assertEqual(applied["X-01"].state, rs.CONFIRMED)
+        self.assertEqual(applied["C-01"].state, rs.MODIFIED)
+        self.assertEqual(applied["C-01"].final_content, "改为眼科牵头")
+        self.assertTrue(applied["C-01"].changed_by_doctor)
+        self.assertEqual(applied["S2"].state, rs.AWAITING)
 
     def test_latest_decision_wins(self):
         items = rs.build_items(sample_case())
         decisions = [
-            {"target_type": "department_selection", "target_id": "眼科",
+            {"target_type": "consensus_item", "target_id": "X-01",
              "action": "reject", "reason": "先否", "created_at": "2"},
-            {"target_type": "department_selection", "target_id": "眼科",
+            {"target_type": "consensus_item", "target_id": "X-01",
              "action": "accept", "reason": "复核后接受", "created_at": "3"},
         ]
         applied = {i.target_id: i for i in rs.apply_decisions(items, decisions)}
-        self.assertEqual(applied["眼科"].state, rs.CONFIRMED)
+        self.assertEqual(applied["X-01"].state, rs.CONFIRMED)
 
     def test_summary_progress(self):
         # 免审态由 apply_decisions 派生（build_items 只给出 needs_doctor_review 语义）
@@ -520,7 +509,8 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertTrue(exempt, "本例应有免审的路径步骤")
         self.assertEqual(review["summary"]["pending"], len(ids) - len(exempt))
         self.assertEqual(review["summary"]["auto_processed"], len(exempt))
-        self.assertTrue(review["items"][0]["item_id"].startswith("department_selection:"))
+        self.assertFalse(any(i["target_type"] in ("department_selection", "patient_advice")
+                             for i in review["items"]))
         self.assertIn("tier_counts", review["summary"])
         self.assertIn("review_tier", review["items"][0])
         self.assertIn("tier_reason", review["items"][0])
@@ -544,7 +534,7 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertIn("原因", result["error"])
 
     def test_unknown_item_rejected(self):
-        result = self.flow.submit_decision(self.case_id, "department_selection:不存在", "accept")
+        result = self.flow.submit_decision(self.case_id, "patient_advice:不存在", "accept")
         self.assertFalse(result["ok"])
         self.assertIn("不存在", result["error"])
 

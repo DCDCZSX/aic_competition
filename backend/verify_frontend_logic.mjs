@@ -360,7 +360,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 /* ----------------------------------------------------- 医生工作台断言 */
 {
   const doctorHtml = fs.readFileSync(path.join(TPL, 'doctor.html'), 'utf8');
-  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage };');
+  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage, openReviewCategory: (...args) => window.openReviewCategory(...args) };');
   const D = globalThis.__D;
   check('病例详情导航只突出主要任务',
     ['overview','triage','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`))
@@ -386,8 +386,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.S.caseData = { payload: { triage: { selected: ['内分泌科', '眼科'] } } };
   D.S.review = { mdt_screening: null };
   const screeningPanel = D.renderMdtScreening();
-  check('医生端显示 MDT 初筛表单', screeningPanel.includes('MDT 初筛与病例分流')
-    && screeningPanel.includes('recommend_mdt') && screeningPanel.includes('保存初筛决定'), screeningPanel);
+  check('医生端显示 MDT 启动判断表单', screeningPanel.includes('MDT 启动判断')
+    && screeningPanel.includes('recommend_mdt') && screeningPanel.includes('保存 MDT 启动判断'), screeningPanel);
 
   fetchPayload = {
     status: 200,
@@ -445,24 +445,37 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     mdt: { analyses:[{department:'内分泌科', facts:['血糖偏高'], inferences:[], checks:[]}], aggregation:{consensus:[{topic:'先完善检查', supporters:['内分泌科']}], disagreements:[], open_questions:['是否需要复查']}, challenge:{} },
     gaps:['缺少近期检查结果']
   }};
-  D.S.review = { published:false, case_state_label:'待医生审核', summary:{pending:2}, mdt_screening:null, mdt_preparation_packet:{} };
+  D.S.review = { published:false, case_state_label:'待医生审核', summary:{pending:2}, mdt_screening:{status:'decided',decision:'recommend_mdt',decision_label:'建议 MDT',purpose:'明确共同处理重点',departments:['内分泌科','眼科']}, mdt_formal_record:null, mdt_preparation_packet:{
+    specialty_opinions:[{department:'内分泌科',status:'available',focus:'评估代谢异常',facts:['血糖偏高','血糖偏高','视物模糊','体重变化','家族史','血压记录'],inferences:[{text:'建议结合糖化血红蛋白',evidence_refs:['检验单']}],checks:[{content:'是否需要补充复查'}],information_gaps:['缺少近期检查结果','缺少近期检查结果','缺少用药记录','缺少复查时间']}]
+  } };
   D.renderOverview();
   const overview = el('ov-body').innerHTML;
   check('总览默认只突出当前待办', overview.includes('当前待办') && overview.includes('下一步'), overview);
-  check('总览将完整资料折叠', /<details[^>]*>/.test(overview) && overview.includes('完整患者资料'), overview);
+  check('总览将完整资料折叠', /<details[^>]*>/.test(overview) && overview.includes('查看完整病历资料'), overview);
+  check('总览待办指向实际处理阶段', overview.includes("go('triage')") && overview.includes("go('mdt')"), overview);
   D.renderTriage();
   const triage = el('tri-body').innerHTML;
   check('分诊默认突出牵头科室', triage.includes('内分泌科') && triage.includes('科室分诊结果'), triage);
   check('分诊不重复展示内部过程', !triage.includes('triage-process') && !triage.includes('规则命中（确定性）'), triage);
   check('分诊默认按科室列表展示依据', triage.includes('triage-department-list')
-    && triage.includes('triage-department-item') && triage.includes('依据：'), triage);
+    && triage.includes('triage-department-item') && triage.includes('triage-evidence-list')
+    && triage.includes('依据列表'), triage);
   D.renderMdt();
   const mdt = el('mdt-body').innerHTML;
-  check('MDT 结果区突出共识分歧待确认',
-    ['MDT 结果','共识','分歧','待确认事项'].every(x=>mdt.includes(x)), mdt);
-  check('MDT 过程直接展示为四步',
-    ['MDT 过程','独立研判','分歧识别','质询与补答','形成结果'].every(x=>mdt.includes(x))
-      && (mdt.match(/mdt-process-step/g)||[]).length === 4, mdt);
+  const mdtOrderTokens = ['MDT 会前资料包','AI 预分析提示','正式 MDT 会诊记录'];
+  check('MDT 页面先显示初筛和会前资料包',
+    (mdt.indexOf('MDT 启动判断') >= 0 || mdt.indexOf('MDT 启动判断结果') >= 0)
+      && mdt.indexOf('MDT 会前资料包') >= 0
+      && mdt.indexOf('AI 预分析提示') > mdt.indexOf('MDT 会前资料包')
+      && mdt.indexOf('正式 MDT 会诊记录') > mdt.indexOf('AI 预分析提示'), mdtOrderTokens.filter(x=>!mdt.includes(x)).join(','));
+  const mdtGroupingTokens = ['mdt-specialty-card','mdt-specialty-facts','mdt-specialty-inferences','mdt-specialty-checks','mdt-specialty-gaps','已掌握事实','AI 参考判断','待医生判断','信息缺口','查看全部'];
+  check('MDT 专科资料按四类内容分组并可展开', mdtGroupingTokens.every(x=>mdt.includes(x)), mdtGroupingTokens.filter(x=>!mdt.includes(x)).join(','));
+  const packetHtml = mdt.slice(mdt.indexOf('MDT 会前资料包'), mdt.indexOf('AI 预分析提示'));
+  check('MDT 专科事实与缺口去重',
+    (packetHtml.match(/血糖偏高/g)||[]).length === 1 && (packetHtml.match(/缺少近期检查结果/g)||[]).length === 1, packetHtml);
+  check('AI 预分析提示与正式 MDT 记录职责分开',
+    ['AI 预分析提示','AI 识别的潜在分歧','建议讨论问题','正式 MDT 会诊记录','待记录'].every(x=>mdt.includes(x))
+      && !mdt.includes('MDT 过程'), mdt);
   check('MDT 不重复展示患者画像和证据侧栏',
     !mdt.includes('左栏 · 患者画像') && !mdt.includes('右栏 · 证据与裁决'), mdt);
   check('MDT 不再使用播放过程交互',
@@ -471,8 +484,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   D.S.caseData.payload.mdt.aggregation.open_questions = ['建议向医生确认是否需要复查'];
   D.renderMdt();
   const doctorMdtCopy = el('mdt-body').innerHTML;
-  check('医生端待确认事项使用决策语义',
-    doctorMdtCopy.includes('待确认事项') && doctorMdtCopy.includes('待判断：是否需要复查')
+  check('医生端建议讨论问题使用决策语义',
+    doctorMdtCopy.includes('建议讨论问题') && doctorMdtCopy.includes('是否需要复查')
       && !doctorMdtCopy.includes('向医生确认'), doctorMdtCopy);
 
   D.S.caseId = 'CAAA1111';
@@ -482,16 +495,15 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
                by_state: { awaiting: 4, confirmed: 4, modified: 1, rejected: 1, uncertain: 0 } },
   };
   D.renderReview();
-  check('审核进度条按医生处理与自动处理合计', el('rev-bar').style.width === '60%', el('rev-bar').style.width);
-  check('审核进度说明区分医生与自动处理', el('rev-note').textContent.includes('医生处理 6') && el('rev-note').textContent.includes('免审自动 0'), el('rev-note').textContent);
-  check('主区审核摘要有责任分级',
-    el('rev-summary-inline').innerHTML.includes('必须医生决定')
-      && el('rev-summary-inline').innerHTML.includes('建议抽查'), '');
+  check('审核页移除顶部汇总面板',
+    !doctorHtml.includes('id="pub-badge"')
+      && !doctorHtml.includes('id="review-task-banner"')
+      && !doctorHtml.includes('id="rev-summary-inline"'), '');
 
   /* 发布入口必须"两处都有"：≥1440px 右轨常驻，<1440px 右轨被 CSS 隐藏 → 屏 F 主区兜底
      （真实缺陷：入口只在右轨里，1366/1280 屏上医生审完发不出去） */
   D.S.review = {
-    items: [{ item_id: 'IT-1', title: '科室入选：内分泌科', target_type: 'department_selection',
+    items: [{ item_id: 'IT-1', title: '待医生确认的医疗安排', target_type: 'path_step',
               ai_content: '建议内分泌科牵头', state: 'awaiting', state_label: '待审',
               changed_by_doctor: false, reason_hint: '规则命中', evidence_refs: ['S-1:3'] }],
     published: false, case_state: 'awaiting_doctor', review: {}, doctor_opinions: [],
@@ -503,9 +515,12 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('主区渲染发布面板',
     inlinePub.includes('确认发布审核版') && inlinePub.includes('处理剩余必审并发布'), '');
   check('仍有待审条目时发布按钮禁用', inlinePub.includes('disabled'), '');
-  check('审核条目默认折叠非必要信息',
-    el('rev-body').innerHTML.includes('查看审核详情') && el('rev-body').innerHTML.includes('责任分级'), el('rev-body').innerHTML);
-  check('审核须知使用折叠区', doctorHtml.includes('class="review-help"') && doctorHtml.includes('审核须知'), '');
+  check('审核条目默认只显示摘要并可进入详情',
+    el('rev-body').innerHTML.includes('查看本类')
+    && doctorHtml.includes('id="rev-detail"')
+    && doctorHtml.includes('openReviewDetail')
+    && doctorHtml.includes('openReviewCategory'), el('rev-body').innerHTML);
+  check('详情页移除低价值审核须知', !doctorHtml.includes('class="review-help"') && !doctorHtml.includes('审核须知'), '');
   check('唯一发布入口使用一致的输入前缀',
     inlinePub.includes('id="inline-op-text"')
     && !inlinePub.includes('id="op-text"'), '');
@@ -521,16 +536,23 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
                by_state: { auto_processed: 1 } },
   };
   D.renderReview();
-  check('详情页单独折叠免审自动分组', el('rev-body').innerHTML.includes('免审（自动）') && el('rev-body').innerHTML.includes('auto_processed'), '');
-  check('免审条目提供接管入口而非强制医生逐条确认', el('rev-body').innerHTML.includes('接管并确认'), '');
+  check('审核分类卡片显示自动处理入口', el('rev-body').innerHTML.includes('已自动处理') && el('rev-body').innerHTML.includes("openReviewCategory('auto')"), '');
+  D.openReviewCategory('auto');
+  check('自动处理分类进入独立清单视图', el('rev-category').innerHTML.includes('接管并确认') && el('rev-category').innerHTML.includes('返回审核分类'), el('rev-category').innerHTML);
 
   D.S.audit = { report_version:2, review:{published:true, published_by:'总审医生', published_at:'2026-09-30'},
     versions:[{version:2, published_by:'总审医生', published_at:'2026-09-30', review_summary:{disagreements:0}}],
     decisions:[{action_label:'接受', target_label:'科室入选', target_id:'IT-1', content_revision:2, reviewer:'总审医生', created_at:'2026-09-30', before:'AI 原稿', after:'医生版本', reason:'资料充分'}],
-    timeline:[{at:'2026-09-30', event:'发布审核版', detail:'完成逐条审核'}], items:[{title:'科室入选', state:'confirmed', state_label:'已接受'}] };
+    timeline:[{at:'2026-09-30', event:'report_published', detail:'审核人=总审医生 版本=2'}], items:[{title:'科室入选', state:'confirmed', state_label:'已接受'}] };
   D.renderHistory();
   const history = el('hist-body').innerHTML;
-  check('历史记录默认只显示版本摘要', history.includes('变更摘要') && history.includes('查看变更详情'), history);
+  check('历史记录提供版本与医生处理入口', history.includes('查看报告') && history.includes('医生处理记录') && history.includes('查看处理详情') && history.includes('关键流程记录') && history.includes('报告发布') && !history.includes('查看完整审计日志') && !history.includes('条目状态快照'), '');
+  check('关键流程记录准确提取处理人', history.includes('history-event-actor">总审医生</div>') && !history.includes('history-event-actor">总审医生 版本=2</div>'), history);
+  window.openHistoryDecision(0);
+  const decisionDetail = el('hist-body').innerHTML;
+  check('历史操作详情展示真实修改内容和理由', decisionDetail.includes('AI 原稿') && decisionDetail.includes('医生版本') && decisionDetail.includes('资料充分') && !decisionDetail.includes('系统事件'), '');
+  window.openHistoryVersion(2);
+  check('缺少历史正文时明确显示空状态', el('hist-body').innerHTML.includes('该版本暂无报告正文'), '');
 }
 
 /* ------------------------------------------------------------------ 输出 */

@@ -212,7 +212,7 @@ def _guard_doctor(required_scope='review'):
     return session, None
 
 
-def _guard_doctor_case(case_id, required_scope='review'):
+def _guard_doctor_case(case_id, required_scope='review', required_case_role=None):
     session, error = _guard_doctor(required_scope)
     if error:
         return session, error
@@ -220,6 +220,11 @@ def _guard_doctor_case(case_id, required_scope='review'):
         return session, None
     if not _shared_store.has_case_access(case_id, session.username):
         return session, (jsonify({'error': '病例不存在或未授权给当前审核账号'}), 404)
+    if required_case_role:
+        case_role = _shared_store.get_case_access_role(case_id, session.username)
+        allowed_roles = {required_case_role} if isinstance(required_case_role, str) else set(required_case_role)
+        if case_role not in allowed_roles:
+            return session, (jsonify({'error': '当前账号是协同医生，不能执行该病例的牵头决策'}), 403)
     return session, None
 
 
@@ -732,9 +737,62 @@ def get_case(case_id):
         safe_payload = dict(case.get('payload') or {})
         safe_payload['mdt_screening'] = patient_safe_mdt_screening(
             safe_payload.get('mdt_screening'))
+        safe_payload.pop('triage_doctor_confirmation', None)
+        # 正式 MDT 记录属于医生协作和审核范围，患者端只通过患者安全摘要获取下一步。
+        safe_payload.pop('mdt_formal_record', None)
         safe_case['payload'] = safe_payload
         case = safe_case
-    return jsonify({'case': case, 'audit': _shared_store.list_audit(case_id, limit=50)})
+    case_role = None
+    if session and session.role == ROLE_DOCTOR and not auth_service.has_global_case_access(session):
+        case_role = _shared_store.get_case_access_role(case_id, session.username)
+    return jsonify({'case': case, 'case_role': case_role,
+                    'audit': _shared_store.list_audit(case_id, limit=50)})
+
+
+@app.route('/api/v2/my-cases', methods=['GET'])
+def list_my_cases():
+    """患者安全的病例记录列表，只返回当前患者自己的摘要。"""
+    session, error = _guard('case:own')
+    if error:
+        return error
+    if not session or session.role != ROLE_PATIENT:
+        return jsonify({'error': '当前角色无权访问患者病例记录'}), 403
+    try:
+        page = max(1, int(request.args.get('page', '1')))
+        page_size = max(1, min(50, int(request.args.get('page_size', '10'))))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'page 和 page_size 必须是整数'}), 400
+    return jsonify(case_flow.list_patient_cases(
+        session.username, page=page, page_size=page_size))
+
+
+@app.route('/api/v2/case/<case_id>/patient-record', methods=['GET'])
+def get_patient_record(case_id):
+    session, _case, error = _guard_case(case_id)
+    if error:
+        return error
+    if not session or session.role != ROLE_PATIENT:
+        return jsonify({'error': '当前角色无权访问患者病历记录'}), 403
+    record = case_flow.get_patient_record(case_id, session.username)
+    if record is None:
+        return jsonify({'error': '病例不存在或无权访问'}), 404
+    return jsonify({'record': record})
+
+
+@app.route('/api/v2/case/<case_id>/archive', methods=['POST', 'DELETE'])
+def archive_patient_case(case_id):
+    """患者可归档自己的历史病例；DELETE 用于恢复，数据不做物理删除。"""
+    session, _case, error = _guard_case(case_id)
+    if error:
+        return error
+    if not session or session.role != ROLE_PATIENT:
+        return jsonify({'error': '当前角色无权管理患者病例记录'}), 403
+    changed = (case_flow.archive_patient_case(case_id, session.username)
+               if request.method == 'POST'
+               else case_flow.restore_patient_case(case_id, session.username))
+    if not changed:
+        return jsonify({'error': '病例不存在、已处理或无权操作'}), 404
+    return jsonify({'ok': True, 'archived': request.method == 'POST'})
 
 
 @app.route('/api/v2/case/<case_id>/access', methods=['POST', 'DELETE'])
@@ -840,7 +898,7 @@ def get_mdt(case_id):
 @app.route('/api/v2/case/<case_id>/mdt-screening', methods=['POST'])
 def submit_mdt_screening(case_id):
     """医生提交 MDT 初筛决定；初筛是病例子状态，不改变 case_state。"""
-    session, error = _guard_doctor_case(case_id, 'decision')
+    session, error = _guard_doctor_case(case_id, 'decision', ('primary', 'coordinator'))
     if error:
         return error
     data, error = _json_object()
@@ -855,6 +913,10 @@ def submit_mdt_screening(case_id):
         return _invalid_input(exc)
     department_reviewer_map = None
     if decision == 'recommend_mdt':
+        if not departments:
+            current_case = _shared_store.load_case(case_id) or {}
+            confirmed = (current_case.get('payload') or {}).get('triage_doctor_confirmation') or {}
+            departments = list(confirmed.get('selected') or [])
         department_reviewer_map = {}
         for department in departments:
             department_name = department_domain.to_name(department)
@@ -876,6 +938,52 @@ def submit_mdt_screening(case_id):
     )
     if not result.get('ok'):
         result.setdefault('code', 'invalid_request')
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/triage-confirmation', methods=['POST'])
+def submit_triage_confirmation(case_id):
+    """保存医生确认的主责/协同科室，作为 MDT 前置决策。"""
+    session, error = _guard_doctor_case(case_id, 'decision', ('primary', 'coordinator'))
+    if error:
+        return error
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        primary = string_field(data, 'primary_department', default='', max_length=120)
+        secondary = string_list(data, 'secondary_departments', default=(), max_items=6)
+        reason = string_field(data, 'reason', default='', max_length=2000)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    result = case_flow.submit_triage_confirmation(
+        case_id, primary_department=primary, secondary_departments=secondary,
+        reason=reason, reviewer_id=session.username)
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/mdt-formal-record', methods=['POST'])
+def submit_mdt_formal_record(case_id):
+    """记录真实医生 MDT，会前 AI 预分析不自动视为正式会诊结论。"""
+    session, error = _guard_doctor_case(case_id, 'decision', ('primary', 'coordinator'))
+    if error:
+        return error
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        status = string_field(data, 'status', default='', max_length=32)
+        participants = string_list(data, 'participants', default=(), max_items=12)
+        conclusion = string_field(data, 'conclusion', default='', max_length=6000)
+        unresolved = string_field(data, 'unresolved', default='', max_length=3000)
+        next_step = string_field(data, 'next_step', default='', max_length=3000)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    result = case_flow.submit_mdt_formal_record(
+        case_id, status=status, participants=participants,
+        conclusion=conclusion, unresolved=unresolved, next_step=next_step,
+        reviewer_id=session.username,
+    )
     return jsonify(result), (200 if result.get('ok') else 400)
 
 
@@ -1071,7 +1179,7 @@ def submit_decision(case_id):
 @app.route('/api/v2/case/<case_id>/disagreement-decisions', methods=['POST'])
 def submit_disagreement_decision(case_id):
     """记录牵头医生对单条 MDT 分歧的处理状态与后续安排。"""
-    session, error = _guard_doctor_case(case_id, 'decision')
+    session, error = _guard_doctor_case(case_id, 'decision', ('primary', 'coordinator'))
     if error:
         return error
     data, error = _json_object()

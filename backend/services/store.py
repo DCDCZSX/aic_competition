@@ -76,7 +76,8 @@ class Store:
                     report_version INTEGER DEFAULT 1,
                     created_at     TEXT,
                     updated_at     TEXT,
-                    payload        TEXT              -- 患者信息等 JSON
+                    payload        TEXT,             -- 患者信息等 JSON
+                    archived_at    TEXT              -- 患者主动归档时间；归档可恢复
                 );
 
                 CREATE TABLE IF NOT EXISTS audit_log (
@@ -131,6 +132,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS case_access (
                     case_id    TEXT NOT NULL,
                     reviewer_id TEXT NOT NULL,
+                    case_role  TEXT NOT NULL DEFAULT 'primary',
                     granted_by TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     PRIMARY KEY (case_id, reviewer_id)
@@ -164,9 +166,16 @@ class Store:
             columns = {row[1] for row in self._conn.execute("PRAGMA table_info(cases)")}
             if "owner_id" not in columns:
                 self._conn.execute("ALTER TABLE cases ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''")
+            if "archived_at" not in columns:
+                self._conn.execute("ALTER TABLE cases ADD COLUMN archived_at TEXT")
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cases_owner ON cases(owner_id, created_at DESC)"
             )
+            access_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(case_access)")}
+            if "case_role" not in access_columns:
+                self._conn.execute(
+                    "ALTER TABLE case_access ADD COLUMN case_role TEXT NOT NULL DEFAULT 'primary'"
+                )
             self._conn.commit()
 
     # ------------------------------------------------------------------ 病例
@@ -257,6 +266,54 @@ class Store:
                 ).fetchall()
         return [self._row_to_case(r) for r in rows]
 
+    def list_cases_for_owner(self, owner_id: str, *, limit: Optional[int] = None,
+                             offset: int = 0) -> List[Dict[str, Any]]:
+        """Return only cases owned by one patient, newest first."""
+        if not owner_id:
+            return []
+        with self._lock:
+            query = "SELECT * FROM cases WHERE owner_id=? AND archived_at IS NULL ORDER BY updated_at DESC, created_at DESC"
+            args: List[Any] = [owner_id]
+            if limit is not None:
+                query += " LIMIT ? OFFSET ?"
+                args.extend([max(0, int(limit)), max(0, int(offset))])
+            rows = self._conn.execute(query, args).fetchall()
+        return [self._row_to_case(r) for r in rows]
+
+    def count_cases_for_owner(self, owner_id: str) -> int:
+        if not owner_id:
+            return 0
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM cases WHERE owner_id=? AND archived_at IS NULL", (owner_id,)
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def archive_case_for_owner(self, case_id: str, owner_id: str) -> bool:
+        if not case_id or not owner_id:
+            return False
+        now = _now()
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE cases SET archived_at=?, updated_at=? "
+                "WHERE case_id=? AND owner_id=? AND archived_at IS NULL",
+                (now, now, case_id, owner_id),
+            )
+            self._conn.commit()
+        return cur.rowcount == 1
+
+    def restore_case_for_owner(self, case_id: str, owner_id: str) -> bool:
+        if not case_id or not owner_id:
+            return False
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE cases SET archived_at=NULL, updated_at=? "
+                "WHERE case_id=? AND owner_id=? AND archived_at IS NOT NULL",
+                (_now(), case_id, owner_id),
+            )
+            self._conn.commit()
+        return cur.rowcount == 1
+
     def list_cases_for_reviewer(self, reviewer_id: str, *, limit: Optional[int] = None,
                                 offset: int = 0) -> List[Dict[str, Any]]:
         """只读取已明确授权给审核员的病例。"""
@@ -282,9 +339,12 @@ class Store:
                 ).fetchall()
         return [self._row_to_case(r) for r in rows]
 
-    def grant_case_access(self, case_id: str, reviewer_id: str, *, granted_by: str) -> bool:
+    def grant_case_access(self, case_id: str, reviewer_id: str, *, granted_by: str,
+                          case_role: str = "primary") -> bool:
         if not case_id or not reviewer_id or not self.load_case(case_id):
             return False
+        if case_role not in {"primary", "collaborator", "coordinator"}:
+            raise ValueError("病例职责不受支持")
         with self._lock:
             existing = self._conn.execute(
                 "SELECT 1 FROM case_access WHERE case_id=? AND reviewer_id=?",
@@ -293,15 +353,23 @@ class Store:
             if existing:
                 return False
             self._conn.execute(
-                """INSERT INTO case_access (case_id, reviewer_id, granted_by, created_at)
-                   VALUES (?, ?, ?, ?)
+                """INSERT INTO case_access (case_id, reviewer_id, case_role, granted_by, created_at)
+                   VALUES (?, ?, ?, ?, ?)
                    """,
-                (case_id, reviewer_id, granted_by, _now()),
+                (case_id, reviewer_id, case_role, granted_by, _now()),
             )
             self._conn.commit()
         self.add_audit(case_id, "case_access_granted",
                        f"reviewer={reviewer_id}; granted_by={granted_by}")
         return True
+
+    def get_case_access_role(self, case_id: str, reviewer_id: str) -> Optional[str]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT case_role FROM case_access WHERE case_id=? AND reviewer_id=?",
+                (case_id, reviewer_id),
+            ).fetchone()
+        return str(row[0]) if row and row[0] else None
 
     def revoke_case_access(self, case_id: str, reviewer_id: str, *, revoked_by: str) -> bool:
         with self._lock:
@@ -442,14 +510,15 @@ class Store:
         with self._lock:
             if case_id:
                 rows = self._conn.execute(
-                    "SELECT * FROM audit_log WHERE case_id = ? ORDER BY id ASC LIMIT ?",
+                    "SELECT * FROM audit_log WHERE case_id = ? ORDER BY id DESC LIMIT ?",
                     (case_id, int(limit)),
                 ).fetchall()
             else:
                 rows = self._conn.execute(
                     "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (int(limit),)
                 ).fetchall()
-        return [dict(r) for r in rows]
+        records = [dict(r) for r in rows]
+        return list(reversed(records)) if case_id else records
 
     # ------------------------------------------------------------------ 医生审核记录
     def save_decision(self, decision: Dict[str, Any]) -> None:

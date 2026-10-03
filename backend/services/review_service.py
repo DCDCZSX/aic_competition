@@ -1,11 +1,10 @@
 """医生端审核台服务（规格书 §5.6 / §7.1，任务 4.1-4.5）。
 
 职责：
-1. **枚举可审核的"决策条目"**（审核单位 = 决策条目，不是整份报告）：
-   - `department_selection` 科室入选（牵头 / 协同）
-   - `path_step`            就医路径步骤
-   - `consensus_item`       共识条 / 分歧条
-   - `patient_advice`       患者建议（就诊前准备、需向医生确认的问题）
+1. **枚举可审核的"医学决策条目"**（审核单位 = 决策条目，不是整份报告）：
+   - `path_step`            需要医生决定的医疗安排；普通路径步骤自动处理
+   - `consensus_item`       MDT 共识抽查 / 未解决分歧必审
+   - 分流科室和患者沟通内容分别由分流确认、报告预览负责，不在此重复审核
 2. **逐条审核**：接受 / 修改 / 驳回 / 暂不确定 / 请求补资料
    —— 修改与驳回**原因必填**、修改必须记录前后内容（`schemas.DoctorDecision` 已强制）；
 3. **发布审核版**：所有条目终态后才可发布 → 病例状态 `doctor_confirmed`、报告版本 +1、角标转绿；
@@ -97,13 +96,6 @@ ACTION_TO_STATE: Dict[str, str] = {
     "supplement_opinion": CONFIRMED,     # 录入线下意见：不改变条目，只登记医生意见
     "request_more_info": UNCERTAIN,      # 请求补资料：条目暂不确定 + 病例退回补资料
 }
-
-# 报告里"患者建议"类条目的来源段落（report_service 一页摘要的段落名）
-ADVICE_SECTIONS = ("建议咨询方向", "需要向医生确认的问题")
-
-# 报告里"（暂无）"类占位不进入审核条目（没有内容无从审核）
-_PLACEHOLDER = re.compile(r"^[（(]\s*(暂无|未提供|暂未给出)")
-
 
 class ReviewError(ValueError):
     """审核操作错误（条目不存在 / 非法动作 / 缺原因）。"""
@@ -261,8 +253,6 @@ class ReviewItem:
             return "冲突或分歧条目必须逐条处理"
         if self.analysis_failed:
             return "分析失败条目必须逐条处理"
-        if self.target_type == "department_selection":
-            return "科室选择必须逐条确认"
         if self.target_type == "path_step":
             return "关键路径步骤必须逐条确认"
         return ""
@@ -321,17 +311,7 @@ def build_items(case: Any) -> List[ReviewItem]:
         seen_contents.add(key)
         return False
 
-    # ---- ① 科室入选 ----
-    triage = payload.get("triage") or {}
-    primary = triage.get("primary") or {}
-    if primary.get("department"):
-        dept = primary["department"]
-        items.append(_dept_item(case_id, dept, primary, role_label="牵头"))
-    for pick in triage.get("secondary") or []:
-        if pick.get("department"):
-            items.append(_dept_item(case_id, pick["department"], pick, role_label=pick.get("role") or "协同"))
-
-    # ---- ② 路径步骤 ----
+    # ---- ① 路径步骤 ----
     for step in (payload.get("path") or {}).get("steps") or []:
         step_id = str(step.get("step_id") or "")
         if not step_id:
@@ -350,7 +330,7 @@ def build_items(case: Any) -> List[ReviewItem]:
                          if step.get("requires_doctor") else AUTO_PROCESSED_REASON),
         ))
 
-    # ---- ③ 共识 / 分歧 ----
+    # ---- ② 共识 / 分歧 ----
     mdt = payload.get("mdt") or {}
     agg = mdt.get("aggregation") or {}
     for idx, entry in enumerate(agg.get("consensus") or [], start=1):
@@ -393,48 +373,6 @@ def build_items(case: Any) -> List[ReviewItem]:
             tier_reason="存在未解决分歧，必须由医生裁决",
             conflict=True,
         ))
-    for idx, question in enumerate(agg.get("open_questions") or [], start=1):
-        text = str(question)
-        if not text or text.startswith("分歧待裁决：") or _dup(text):
-            continue          # 分歧已单独成条，不重复
-        items.append(ReviewItem(
-            item_id=f"patient_advice:Q-{idx:02d}",
-            target_type="patient_advice",
-            target_id=f"Q-{idx:02d}",
-            title="待医生确认问题",
-            ai_content=text,
-            reason_hint="由多学科分析聚合产出",
-            review_tier=SAMPLE,
-            tier_reason="MDT 建议项，建议抽查；出现风险或具体资料缺口时自动升级",
-        ))
-
-    # ---- ④ 患者建议（来自一页摘要的可审核段落）----
-    try:
-        from services import report_service
-        summary = dict(getattr(report_service.build_patient_summary(dict(case or {})), "sections", {}) or {})
-    except Exception:       # 报告不可用时降级：不因此丢掉其他条目
-        summary = {}
-    for section in ADVICE_SECTIONS:
-        if section == "建议咨询方向":
-            # 分诊结果已经单独审核；这里不再生成一条重复的患者建议条目。
-            continue
-        value = summary.get(section)
-        entries = value if isinstance(value, list) else ([value] if value else [])
-        for idx, text in enumerate(entries, start=1):
-            text = str(text or "").strip()
-            if not text or _PLACEHOLDER.match(text) or _dup(text):
-                continue      # 占位（暂无/未提供）不进入审核条目
-            items.append(ReviewItem(
-                item_id=f"patient_advice:{section}-{idx:02d}",
-                target_type="patient_advice",
-                target_id=f"{section}-{idx:02d}",
-                title=f"患者建议：{section}",
-                ai_content=text,
-                reason_hint="来自一页就医摘要",
-                review_tier=SAMPLE,
-                tier_reason="患者摘要中的补充建议，建议抽查，不阻塞发布",
-            ))
-
     _annotate_item_flags(items, payload)
     revisions = payload.get("review_item_revisions") or {}
     for item in items:
@@ -443,24 +381,6 @@ def build_items(case: Any) -> List[ReviewItem]:
         except (TypeError, ValueError):
             item.content_revision = 1
     return items
-
-
-def _dept_item(case_id: str, dept: str, pick: Dict[str, Any], *, role_label: str) -> ReviewItem:
-    signals = [str(s) for s in (pick.get("signals") or [])]
-    return ReviewItem(
-        item_id=f"department_selection:{dept}",
-        target_type="department_selection",
-        target_id=dept,
-        title=f"科室入选：{role_label} {dept}",
-        ai_content=f"{role_label}建议：{dept}",
-        reason_hint=str(pick.get("reason") or "；".join(signals)),
-        evidence_refs=[f"命中信号：{s}" for s in signals],
-        needs_doctor_review=True,
-        review_tier=REQUIRED,
-        tier_reason="科室选择必须由医生逐条确认",
-        high_risk=bool(pick.get("high_risk") or pick.get("risk_level") in ("高", "high")),
-        conflict=bool(pick.get("conflict")),
-    )
 
 
 def _is_failed_state(value: Any) -> bool:
@@ -515,25 +435,20 @@ def _annotate_item_flags(items: Sequence[ReviewItem], payload: Dict[str, Any]) -
         item.high_risk = bool(item.high_risk or high_risk)
         item.conflict = bool(
             item.conflict or
-            (item.target_type == "department_selection" and item.target_id in conflict_departments) or
-            (item.target_type == "patient_advice" and "分歧" in item.ai_content)
+            (item.target_type == "consensus_item" and "分歧" in item.title)
         )
         item.analysis_failed = bool(
             item.analysis_failed or
-            (item.target_type == "department_selection" and item.target_id in failed_departments) or
-            (global_analysis_failed and (
-                not failed_departments or item.target_type != "department_selection"
-            ))
+            (global_analysis_failed and item.target_type in ("path_step", "consensus_item"))
         )
 
         item_text = " ".join((item.title, item.ai_content, item.reason_hint))
         gap_match = False
         for gap in gaps:
             label = re.split(r"[:：]", gap, maxsplit=1)[0].strip()
-            # 带字段名的缺口只影响相关条目；没有字段名的缺口不指向具体决策，
-            # 不能把整条就医路径、MDT 摘要和患者建议一起升级为必审。
-            generic_gap = not re.search(r"[:：]", gap)
-            if (label and label in item_text) or (generic_gap and item.target_type == "department_selection"):
+            # 只有能对应到当前医学条目文本的缺口才升级；无法定位的病例级缺口
+            # 由分流/MDT 页面展示，不把无关审核项批量升级。
+            if label and label in item_text:
                 gap_match = True
                 break
 
@@ -596,8 +511,7 @@ def affected_item_ids(old_items: Sequence[ReviewItem], new_items: Sequence[Revie
                       update_content: str = "") -> List[str]:
     """按稳定条目 id 找出资料更新后需要重新确认的审核项。
 
-    科室入选项按依赖矩阵命中的科室定位；路径、共识和患者建议项按受影响科室
-    或本次资料中的可见主题定位。条目内容本身发生变化、或新出现的条目也会被
+    路径和共识项按本次资料中的可见主题定位。条目内容本身发生变化、或新出现的条目也会被
     纳入，未命中的现有条目保持原决定。
     """
     old_map = {item.item_id: item for item in old_items or []}
@@ -613,13 +527,12 @@ def affected_item_ids(old_items: Sequence[ReviewItem], new_items: Sequence[Revie
     for item_id, item in new_map.items():
         old = old_map.get(item_id)
         text = " ".join((item.title, item.ai_content, item.reason_hint))
-        department_match = item.target_type == "department_selection" and item.target_id in departments
         topic_match = any(token in text for token in tokens)
         content_changed = bool(old and (
             old.ai_content != item.ai_content or old.reason_hint != item.reason_hint
             or old.title != item.title
         ))
-        if item_id not in old_map or department_match or topic_match or content_changed:
+        if item_id not in old_map or topic_match or content_changed:
             out.add(item_id)
 
     return sorted(out)

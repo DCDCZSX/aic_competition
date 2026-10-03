@@ -50,7 +50,8 @@ from services.rule_engine import evaluate as evaluate_rules  # noqa: E402
 from services.s2_analyst import analyze as s2_analyze  # noqa: E402
 from services.store import Store  # noqa: E402
 from services.triage import orchestrate  # noqa: E402
-from schemas import (CASE_STATE_LABELS, CheckItem, Inference, MDT_SCREENING_DECISIONS,
+from schemas import (CASE_STATE_LABELS, CheckItem, Inference, MDT_FORMAL_RECORD_STATUS_LABELS,
+                     MDT_FORMAL_RECORD_STATUSES, MDT_SCREENING_DECISIONS,
                      MDT_SCREENING_LABELS, SpecialistOpinionCard)  # noqa: E402
 
 # 耗时控制：多专科分析最多取前 3 个科室
@@ -1209,6 +1210,73 @@ class CaseFlow:
         return {"case_id": case_id, "status": status, "ready": bool(mdt), "mdt": mdt}
 
     # ------------------------------------------------------------------ 查询
+    def list_patient_cases(self, owner_id: str, *, page: int = 1,
+                           page_size: int = 10) -> Dict[str, Any]:
+        """Build a patient-safe list of their cases without exposing raw payloads."""
+        safe_page = max(1, int(page))
+        safe_size = max(1, min(int(page_size), 50))
+        total = self.store.count_cases_for_owner(owner_id) if self.store else 0
+        cases = self.store.list_cases_for_owner(
+            owner_id, limit=safe_size, offset=(safe_page - 1) * safe_size
+        ) if self.store else []
+        result = []
+        for case in cases:
+            payload = case.get("payload") or {}
+            main_issue = case.get("main_issue") or payload.get("masked_main_issue") or ""
+            triage = payload.get("triage") or {}
+            primary = (triage.get("primary") or {}).get("department") or ""
+            routing = payload.get("routing") or {}
+            requested = (routing.get("requested_department") or {}).get("name") or primary
+            versions = self.store.list_report_versions(
+                case.get("case_id") or "", include_reports=False) if self.store else []
+            result.append({
+                "case_id": case.get("case_id") or "",
+                "created_at": case.get("created_at") or "",
+                "updated_at": case.get("updated_at") or "",
+                "main_issue": main_issue,
+                "case_state": case.get("case_state") or "",
+                "case_state_label": case.get("case_state_label") or case.get("case_state") or "",
+                "primary_department": requested,
+                "routing_status": routing.get("status") or "not_submitted",
+                "report_version": int(case.get("report_version") or 1),
+                "published_versions": len(versions),
+                "has_updates": bool(payload.get("updates")),
+                "next_step": (payload.get("mdt_screening") or {}).get("patient_next_step") or "等待系统整理",
+            })
+        return {"cases": result, "page": safe_page, "page_size": safe_size,
+                "total": total, "has_more": safe_page * safe_size < total}
+
+    def get_patient_record(self, case_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
+        case = self.store.load_case(case_id) if self.store else None
+        if not case or case.get("owner_id") != owner_id or case.get("archived_at"):
+            return None
+        payload = case.get("payload") or {}
+        main_issue = case.get("main_issue") or payload.get("masked_main_issue") or ""
+        updates = []
+        for item in payload.get("updates") or []:
+            updates.append({key: item.get(key) for key in
+                            ("update_id", "kind", "content", "source", "at")
+                            if item.get(key) not in (None, "")})
+        return {
+            "case_id": case_id,
+            "title": f"病例 #{case_id} · {main_issue or '未填写主要问题'}",
+            "main_issue": main_issue,
+            "submitted_material": {
+                "medical_history": payload.get("initial_medical_history") or payload.get("masked_history") or "",
+                "profile": payload.get("profile") or {},
+                "submitted_at": case.get("created_at") or "",
+            },
+            "updates": updates,
+            "report_version": int(case.get("report_version") or 1),
+            "case_state": case.get("case_state") or "",
+        }
+
+    def archive_patient_case(self, case_id: str, owner_id: str) -> bool:
+        return bool(self.store and self.store.archive_case_for_owner(case_id, owner_id))
+
+    def restore_patient_case(self, case_id: str, owner_id: str) -> bool:
+        return bool(self.store and self.store.restore_case_for_owner(case_id, owner_id))
+
     @serialized_case
     def submit_case_for_review(
         self,
@@ -1282,7 +1350,8 @@ class CaseFlow:
         if updated is None:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
         for reviewer_id in reviewers:
-            self.store.grant_case_access(case_id, reviewer_id, granted_by=actor)
+            self.store.grant_case_access(
+                case_id, reviewer_id, granted_by=actor, case_role="primary")
         self.store.add_audit(
             case_id,
             "case_submitted_for_review",
@@ -1332,7 +1401,16 @@ class CaseFlow:
         if decision == "recommend_mdt" and not safe_purpose:
             return {"ok": False, "error": "建议 MDT 时会诊目的不能为空"}
 
-        raw_departments = departments if departments is not None else []
+        confirmation = (self.store.load_case(case_id).get("payload") or {}).get(
+            "triage_doctor_confirmation") or {}
+        departments_source = "mdt_request"
+        if decision == "recommend_mdt" and confirmation.get("status") != "confirmed":
+            return {"ok": False, "error": "请先完成分流确认，再启动正式 MDT"}
+        if decision == "recommend_mdt" and not departments:
+            raw_departments = list(confirmation.get("selected") or [])
+            departments_source = "triage_confirmation"
+        else:
+            raw_departments = departments if departments is not None else []
         if not isinstance(raw_departments, list):
             return {"ok": False, "error": "科室必须是列表"}
         if len(raw_departments) > 6:
@@ -1354,6 +1432,11 @@ class CaseFlow:
             return {"ok": False, "error": "参与科室必须是不同科室"}
         if decision == "recommend_mdt" and len(normalized_departments) < 2:
             return {"ok": False, "error": "建议 MDT 时至少两个不同科室"}
+
+        if decision == "recommend_mdt":
+            confirmed_departments = set(confirmation.get("selected") or [])
+            if not set(normalized_departments).issubset(confirmed_departments):
+                return {"ok": False, "error": "MDT 参与科室必须来自已确认的分流方向"}
 
         normalized_reviewer_map: Dict[str, List[str]] = {}
         if department_reviewer_map is not None:
@@ -1381,6 +1464,7 @@ class CaseFlow:
             "reason": safe_reason,
             "purpose": safe_purpose,
             "departments": normalized_departments,
+            "departments_source": departments_source,
             "reviewer_id": safe_reviewer,
             "decided_at": now,
             "patient_next_step": MDT_SCREENING_NEXT_STEPS[decision],
@@ -1416,7 +1500,8 @@ class CaseFlow:
                 authorized_departments.append(department)
                 authorized_reviewer_count += len(reviewers)
                 for reviewer in reviewers:
-                    self.store.grant_case_access(case_id, reviewer, granted_by=safe_reviewer)
+                    self.store.grant_case_access(
+                        case_id, reviewer, granted_by=safe_reviewer, case_role="collaborator")
             if authorized_departments:
                 self.store.add_audit(
                     case_id,
@@ -1437,6 +1522,128 @@ class CaseFlow:
             "authorized_reviewer_count": authorized_reviewer_count,
             "pending_departments": pending_departments,
         }
+
+    @serialized_case
+    def submit_triage_confirmation(
+        self, case_id: str, *, primary_department: str,
+        secondary_departments: Optional[List[str]] = None, reason: str = "",
+        reviewer_id: str = "",
+    ) -> Dict[str, Any]:
+        """保存医生对牵头/协同科室的确认，作为 MDT 和报告的前置决策。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+        if str(case.get("case_state") or "") == "doctor_confirmed":
+            return {"ok": False, "error": "已发布审核版的病例不能重新确认分流方向"}
+        try:
+            primary = department_domain.resolve(str(primary_department or "")).name
+            safe_reason = update_service.sanitize_optional_content(reason, field_name="分流确认理由")
+            safe_reviewer = update_service.sanitize_optional_content(reviewer_id, field_name="分流确认人")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not primary:
+            return {"ok": False, "error": "主责科室不能为空"}
+        if not safe_reason:
+            return {"ok": False, "error": "分流确认理由不能为空"}
+        raw_secondary = secondary_departments if secondary_departments is not None else []
+        if not isinstance(raw_secondary, list) or len(raw_secondary) > 6:
+            return {"ok": False, "error": "协同科室格式或数量不正确"}
+        secondary: List[str] = []
+        for raw in raw_secondary:
+            name = department_domain.resolve(str(raw or "")).name
+            if not name:
+                return {"ok": False, "error": f"科室不在支持的科室域内：{raw}"}
+            if name == primary or name in secondary:
+                return {"ok": False, "error": "协同科室不能与主责科室重复"}
+            secondary.append(name)
+        if not safe_reviewer:
+            return {"ok": False, "error": "分流确认人不能为空"}
+        confirmation = {
+            "status": "confirmed", "primary_department": primary,
+            "secondary_departments": secondary, "selected": [primary] + secondary,
+            "reason": safe_reason, "reviewer_id": safe_reviewer, "confirmed_at": _now(),
+        }
+        payload = dict(case.get("payload") or {})
+        payload["triage_doctor_confirmation"] = confirmation
+        self.store.save_case(case_id, owner_id=case.get("owner_id") or "",
+                             patient_name=case.get("patient_name") or "",
+                             main_issue=case.get("main_issue") or "",
+                             status=case.get("status") or "running",
+                             case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
+                             report_version=int(case.get("report_version") or 1), payload=payload)
+        self.store.add_audit(case_id, "triage_confirmation_recorded",
+                             f"primary={primary}; secondary={len(secondary)}; reviewer={safe_reviewer}")
+        return {"ok": True, "triage_doctor_confirmation": confirmation}
+
+    @serialized_case
+    def submit_mdt_formal_record(
+        self, case_id: str, *, status: str, participants: Optional[List[str]] = None,
+        conclusion: str = "", unresolved: str = "", next_step: str = "",
+        reviewer_id: str = "",
+    ) -> Dict[str, Any]:
+        """保存真实 MDT 会诊记录，不把 AI 预分析当作医生结论。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": f"病例不存在：{case_id}"}
+        if str(case.get("case_state") or "") == "doctor_confirmed":
+            return {"ok": False, "error": "已发布审核版的病例不能修改正式 MDT 记录"}
+        payload = dict(case.get("payload") or {})
+        screening = payload.get("mdt_screening") or {}
+        if screening.get("decision") != "recommend_mdt":
+            return {"ok": False, "error": "请先启动正式 MDT 后再记录会诊"}
+        status = str(status or "").strip()
+        if status not in MDT_FORMAL_RECORD_STATUSES:
+            return {"ok": False, "error": "正式 MDT 状态非法"}
+        if not isinstance(participants, list):
+            return {"ok": False, "error": "参与人员必须是列表"}
+        if len(participants) > 12:
+            return {"ok": False, "error": "参与人员最多 12 人"}
+        try:
+            safe_reviewer = update_service.sanitize_optional_content(
+                reviewer_id, field_name="正式 MDT 记录人")
+            safe_participants = []
+            for item in participants:
+                value = update_service.sanitize_optional_content(
+                    str(item or ""), field_name="参与人员")
+                if value and value not in safe_participants:
+                    safe_participants.append(value)
+            safe_conclusion = update_service.sanitize_optional_content(
+                conclusion, field_name="正式 MDT 结论")
+            safe_unresolved = update_service.sanitize_optional_content(
+                unresolved, field_name="正式 MDT 未解决事项")
+            safe_next_step = update_service.sanitize_optional_content(
+                next_step, field_name="正式 MDT 后续安排")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not safe_reviewer:
+            return {"ok": False, "error": "正式 MDT 记录人不能为空"}
+        if status == "completed" and not safe_conclusion:
+            return {"ok": False, "error": "已完成的正式 MDT 必须填写结论"}
+
+        record = {
+            "status": status,
+            "status_label": MDT_FORMAL_RECORD_STATUS_LABELS[status],
+            "participants": safe_participants,
+            "conclusion": safe_conclusion,
+            "unresolved": safe_unresolved,
+            "next_step": safe_next_step,
+            "reviewer_id": safe_reviewer,
+            "updated_at": _now(),
+            "source": "doctor_recorded",
+        }
+        payload["mdt_formal_record"] = record
+        self.store.save_case(
+            case_id, owner_id=case.get("owner_id") or "",
+            patient_name=case.get("patient_name") or "",
+            main_issue=case.get("main_issue") or "",
+            status=case.get("status") or "running",
+            case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
+            report_version=int(case.get("report_version") or 1), payload=payload)
+        self.store.add_audit(
+            case_id, "mdt_formal_record_updated",
+            f"status={status}; participants={len(safe_participants)}; reviewer={safe_reviewer}",
+        )
+        return {"ok": True, "mdt_formal_record": record}
 
     def get_case(self, case_id: str) -> Optional[Dict[str, Any]]:
         return self.store.load_case(case_id) if self.store else None
@@ -2078,6 +2285,8 @@ class CaseFlow:
             "case_state": case.get("case_state"),
             "case_state_label": CASE_STATE_LABELS.get(str(case.get("case_state")), case.get("case_state")),
             "mdt_screening": payload.get("mdt_screening") or None,
+            "triage_doctor_confirmation": payload.get("triage_doctor_confirmation") or None,
+            "mdt_formal_record": payload.get("mdt_formal_record") or None,
             "mdt_preparation_packet": report_service.build_mdt_preparation_packet(case),
             "items": [i.to_dict() for i in items],
             "summary": summary,
@@ -2295,6 +2504,14 @@ class CaseFlow:
                     "summary": summary}
 
         payload = dict(case.get("payload") or {})
+        screening = payload.get("mdt_screening") or {}
+        if screening.get("status") == "decided" and (payload.get("triage") or {}).get("primary") \
+                and (payload.get("triage_doctor_confirmation") or {}).get("status") != "confirmed":
+            return {"ok": False, "error": "请先在分流确认中确认主责和协同科室"}
+        formal_record = payload.get("mdt_formal_record") or {}
+        if (screening.get("decision") == "recommend_mdt"
+                and formal_record.get("status") != "completed"):
+            return {"ok": False, "error": "正式 MDT 尚未完成记录，不能发布审核版"}
         disagreements = (((payload.get("mdt") or {}).get("aggregation") or {})
                          .get("disagreements") or [])
         disagreement_records = list(payload.get("disagreement_decisions") or [])
@@ -2477,6 +2694,8 @@ class CaseFlow:
                 "goals": list(result.goals),
                 # 不要使用 masked_preview：它是前端展示窗口，最多 2000 字。
                 "masked_history": result.masked_history or result.masked_preview.get("medical_history", ""),
+                # 后续补充会合并到 masked_history，保留首次提交内容供患者回看。
+                "initial_medical_history": result.masked_history or result.masked_preview.get("medical_history", ""),
                 "masked_main_issue": result.masked_main_issue or result.masked_preview.get("main_issue", ""),
                 "gaps": list(result.gaps),
                 "completeness": result.completeness,
