@@ -238,6 +238,29 @@ class TestProgressiveAnalysis(unittest.TestCase):
         self.assertTrue(final["mdt_ready"], "多学科结果应已就绪")
         self.assertEqual(final["case_state"], "awaiting_doctor", "分析完成后应推进到待医生审核")
 
+    def test_orphaned_running_analysis_becomes_retryable(self):
+        """后台线程丢失后不能让患者永久停在“整理资料”。"""
+        result = self._create()
+        self._wait_settled(result.case_id)
+
+        def orphan(case):
+            payload = dict(case.get("payload") or {})
+            analysis = dict(payload.get("analysis") or {})
+            analysis["state"] = "running"
+            analysis["started_at"] = "2000-01-01T00:00:00"
+            analysis["finished_at"] = ""
+            payload["analysis"] = analysis
+            case["payload"] = payload
+
+        self.flow.store.mutate_case(result.case_id, orphan)
+        data = self.flow.get_analysis(result.case_id)
+        self.assertIn(data["analysis"]["state"], ("failed", "partial_failed"))
+        self.assertIn("可重试", " ".join(data["analysis"].get("warnings") or []))
+        self.assertTrue(all(
+            (entry or {}).get("state") not in ("pending", "running")
+            for entry in (data["analysis"].get("phases") or {}).values()
+        ))
+
     def test_model_results_replace_rules(self):
         result = self._create()
         rules_profile = result.profile

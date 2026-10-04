@@ -21,7 +21,7 @@ const els = new Map();
 function mkEl(id) {
   const classes = new Set();
   return {
-    id, innerHTML: '', textContent: '', className: '', value: '', dataset: {},
+    id, innerHTML: '', textContent: '', className: '', value: '', dataset: {}, scrollTop: 0,
     style: { setProperty() { }, width: '' },
     classList: {
       add(...names) { names.forEach(name => classes.add(name)); },
@@ -42,7 +42,9 @@ const el = id => (els.has(id) ? els.get(id) : (els.set(id, mkEl(id)), els.get(id
 
 let fetchPayload = { status: 200, data: {} };
 globalThis.document = {
-  getElementById: el, querySelector: () => null, querySelectorAll: () => [],
+  getElementById: el,
+  querySelector: selector => selector === '.doctor-case-main' ? el('doctor-case-main') : null,
+  querySelectorAll: () => [],
   addEventListener() { }, title: '', fonts: { ready: Promise.resolve() }, body: mkEl('body'),
 };
 globalThis.window = {
@@ -67,10 +69,10 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 
 /* -------------------------------------------------------------- 患者端断言 */
 {
-  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, syncStagePanels, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner, sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, patientFullReportEntries, patientFullReportValue, patientTimelineValue, patientPathFlowValue, renderTriage, renderPath, renderMdt, doPreview, registerForm: typeof registerForm === "function" ? registerForm : null, loadDepartments: typeof loadDepartments === "function" ? loadDepartments : null, renderReviewSubmission: typeof renderReviewSubmission === "function" ? renderReviewSubmission : null, submitCaseForReview: typeof submitCaseForReview === "function" ? submitCaseForReview : null };');
+  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, syncStagePanels, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner, sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, patientFullReportEntries, patientFullReportValue, patientTimelineValue, patientPathFlowValue, renderTriage, renderPath, renderMdt, doPreview, registerForm: typeof registerForm === "function" ? registerForm : null, loadDepartments: typeof loadDepartments === "function" ? loadDepartments : null, renderReviewSubmission: typeof renderReviewSubmission === "function" ? renderReviewSubmission : null, submitCaseForReview: typeof submitCaseForReview === "function" ? submitCaseForReview : null, autoSubmitCaseForReview: typeof autoSubmitCaseForReview === "function" ? autoSubmitCaseForReview : null };');
   const { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner,
           syncStagePanels, sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, patientFullReportEntries, patientFullReportValue, patientTimelineValue, patientPathFlowValue, renderTriage,
-          renderPath, renderMdt,
+          renderPath, renderMdt, autoSubmitCaseForReview: pAutoSubmitCaseForReview,
           doPreview, registerForm: pRegisterForm, loadDepartments: pLoadDepartments,
           renderReviewSubmission: pRenderReviewSubmission, submitCaseForReview: pSubmitCaseForReview } = globalThis.__P;
 
@@ -84,8 +86,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   S.triage = {primary:{department:'内分泌科'}};
   S.departments = [{code:'endocrinology', name:'内分泌科', group:'internal'}];
   if(typeof pRenderReviewSubmission === 'function') pRenderReviewSubmission();
-  check('提交审核前提示科室可见范围', el('review-routing').innerHTML.includes('仅该科室医生可见'), el('review-routing').innerHTML);
-  check('提交审核前默认使用规则主责科室', el('review-routing').innerHTML.includes('内分泌科'), el('review-routing').innerHTML);
+  check('患者端提供自动提交函数', typeof pAutoSubmitCaseForReview === 'function', 'autoSubmitCaseForReview');
 
   renderSteps('stage1');
   const h1 = el('steps').innerHTML;
@@ -122,10 +123,10 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     !el('steps-note').textContent.includes('尚未开始') && el('steps-note').textContent.includes('附加环节'),
     el('steps-note').textContent);
 
-  // 患者端保留顶栏病例号，不再渲染常驻病例上下文栏
+  // 患者端将病例号和状态放在顶栏下方的上下文行
   S.caseId = 'C1234ABCD';
   renderContext();
-  check('顶栏病例号同步', el('ctx-case').textContent.includes('C1234ABCD'), el('ctx-case').textContent);
+  check('病例上下文行同步', el('patient-ctx-case').textContent.includes('C1234ABCD'), el('patient-ctx-case').textContent);
 
   /* 报告段落渲染器：绝不能把对象拼成 [object Object]（"报告里冒出英文/乱码"缺陷的回归） */
   const nested = {
@@ -218,8 +219,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     && pathFlow.includes('data-flow-stage="2"'), pathFlow);
   check('流程图使用纵向阶段轨道', pathFlow.includes('patient-path-flow-stage-marker')
     && pathFlow.includes('patient-path-flow-stage-content'), pathFlow);
-  check('流程图保留条件和医生确认提示', pathFlow.includes('若医生安排了检查')
-    && pathFlow.includes('需医生确认'), pathFlow);
+  check('流程图保留必要条件但隐藏内部标签', pathFlow.includes('若医生安排了检查')
+    && !pathFlow.includes('需医生确认') && !pathFlow.includes('就医咨询'), pathFlow);
   check('患者完整报告只保留就医相关段落', patientFullReportEntries(S.report.full).map(([key]) => key).join('|') === '病例画像|时间线|分诊结果|就医路径', '');
   const triageForPatient = patientFullReportValue('分诊结果', S.report.full.sections['分诊结果']);
   check('患者就医方向隐藏可靠性和规则校验', !JSON.stringify(triageForPatient).includes('可靠性')
@@ -229,10 +230,11 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   const fullHtml = el('report-body').innerHTML;
   switchReport('summary');
   const summaryHtml = el('report-body').innerHTML;
-  check('摘要默认显示 AI 就诊准备阶段', summaryHtml.includes('AI 就诊准备摘要') && summaryHtml.includes('版本 1'), '');
+  check('摘要默认显示 AI 就诊准备阶段且不重复显示状态横条', summaryHtml.includes('AI 就诊准备摘要')
+    && !summaryHtml.includes('版本 1') && !summaryHtml.includes('尚未经医生审核'), '');
   check('摘要不把 AI 阶段写成医生审核版', !summaryHtml.includes('已发布医生审核版'), '');
   check('打印版准备单保留行动信息', summaryHtml.includes('class="print-report"')
-    && summaryHtml.includes('患者就医准备单') && summaryHtml.includes('就医步骤')
+    && summaryHtml.includes('患者就医报告') && summaryHtml.includes('就医步骤')
     && summaryHtml.includes('当前待办') && summaryHtml.includes('就诊时可问医生')
     && summaryHtml.includes('若医生安排了检查'), '');
   check('患者看到医生初筛的下一步', summaryHtml.includes('医生建议多学科共同评估')
@@ -281,7 +283,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     !tri.includes('可靠性') && !tri.includes('病例类型') && !tri.includes('决策方式'), tri);
   check('分诊页不重复展示全局审核状态提示', !tri.includes('未经医生审核'), tri);
 
-  /* 路径与任务合并：每个路径步骤下直接挂对应任务，不再渲染独立任务栏 */
+  /* 路径与任务合并：以纵向流程图展示步骤和对应行动，不渲染任务控件 */
   S.path = {steps: [
     {step_id: 'S1', title: '先做好资料准备', detail: '整理近期检查报告'},
     {step_id: 'S2', title: '挂内分泌科（牵头方向）', detail: '带上就医摘要'},
@@ -293,10 +295,11 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   ]};
   renderPath();
   const pathHtml = el('path-body').innerHTML;
-  check('路径页面将任务挂在对应步骤下',
-    pathHtml.includes('路径中的任务') && pathHtml.includes('整理近 3 个月血糖记录')
+  check('路径页面展示为纵向流程图并合并行动内容',
+    pathHtml.includes('patient-path-flow') && pathHtml.includes('整理近 3 个月血糖记录')
       && pathHtml.includes('向医生确认是否需要复查'), pathHtml);
-  check('路径页面不再单独渲染任务栏', !pathHtml.includes('我的任务（'), pathHtml);
+  check('路径页面不展示任务标签和操作控件', !pathHtml.includes('路径中的任务')
+    && !pathHtml.includes('开始') && !pathHtml.includes('重要'), pathHtml);
 
   /* 专科参考意见：保留通俗摘要，隐藏置信度、确认问题、不确定性和聚合技术词 */
   S.mdt = {card_count: 1, departments: ['眼科'], analyses: [
@@ -330,8 +333,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('横幅显示三个相位', bannerRun.includes('整理资料') && bannerRun.includes('判断就医方向')
     && bannerRun.includes('整理相关科室建议'), bannerRun.slice(0, 90));
   check('横幅区分完成/进行中', bannerRun.includes('已完成') && bannerRun.includes('进行中'), '');
-  check('横幅显示 MDT 子步骤与第几科', bannerRun.includes('眼科') && bannerRun.includes('第 2 科')
-    && bannerRun.includes('正在整理眼科的参考意见'), '');
+  check('横幅不堆叠相关科室过程小字', !bannerRun.includes('第 2 科')
+    && !bannerRun.includes('正在整理眼科的参考意见'), '');
   check('横幅不泄漏内部阶段术语', !bannerRun.includes('模型发言')
     && !bannerRun.includes('独立意见'), '');
   const single = analysisBanner({ state: 'done',
@@ -360,7 +363,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 /* ----------------------------------------------------- 医生工作台断言 */
 {
   const doctorHtml = fs.readFileSync(path.join(TPL, 'doctor.html'), 'utf8');
-  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScreening, renderDoctorScope, renderQueueFilters, setQueueFilter, goQueuePage, openReviewCategory: (...args) => window.openReviewCategory(...args) };');
+  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScreening, renderQueueFilters, setQueueFilter, goQueuePage, renderCaseContext, openHistoryDecision, openHistoryVersion, openReviewCategory: (...args) => window.openReviewCategory(...args) };');
   const D = globalThis.__D;
   check('病例详情导航只突出主要任务',
     ['overview','triage','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`))
@@ -373,15 +376,16 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     doctorHtml.includes('body.doctor-case-mode')
       && doctorHtml.includes('#doctor-shell.has-case .doctor-case-main')
       && doctorHtml.includes('overflow-y:auto'), '');
+  D.S.caseId = 'C84AA54AE';
+  D.renderCaseContext({ behavior_type: 'C', reliability: { level: '高' } });
+  check('病例上下文拆分为病例号、类型和可靠性',
+    el('case-context-id').textContent.includes('C84AA54AE')
+      && el('case-context-type').textContent === 'C'
+      && el('case-context-reliability').textContent === '高',
+    `${el('case-context-id').textContent} / ${el('case-context-type').textContent} / ${el('case-context-reliability').textContent}`);
 
-  D.S.me = {username:'doctor_endo', label:'内分泌审核医生', role:'doctor', department_name:'内分泌科', department_code:'endocrinology'};
-  D.renderDoctorScope();
-  check('医生端显示当前科室范围', el('doctor-scope-note').textContent.includes('内分泌科')
-    && el('doctor-scope-note').textContent.includes('仅显示已授权病例'), el('doctor-scope-note').textContent);
-  D.S.me = {username:'chief_doctor', label:'总审医生', role:'doctor', access_scope:'all'};
-  D.renderDoctorScope();
-  check('医生端显示全量审核范围', el('doctor-scope-note').textContent.includes('全量审核范围')
-    && el('doctor-scope-note').textContent.includes('所有病例'), el('doctor-scope-note').textContent);
+  check('待审队列不重复显示当前科室提示', !doctorHtml.includes('id="doctor-scope-note"')
+    && !doctorHtml.includes('function renderDoctorScope'), '');
 
   D.S.caseData = { payload: { triage: { selected: ['内分泌科', '眼科'] } } };
   D.S.review = { mdt_screening: null };
@@ -437,6 +441,11 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   el('queue-more-filters').open = false;
   D.renderQueueFilters();
   check('列表计数文案', el('list-note').textContent.includes('第 1 页'), el('list-note').textContent);
+  const queueSummary = el('queue-tier-summary').innerHTML;
+  check('队列审核分类统计拆分为独立数字格',
+    (queueSummary.match(/class="queue-tier-stat"/g)||[]).length === 7
+      && queueSummary.includes('必审') && queueSummary.includes('建议抽查')
+      && queueSummary.includes('自动处理') && queueSummary.includes('分析失败'), queueSummary);
 
   D.S.caseData = { case_id:'CAAA1111', main_issue:'视物模糊', payload: {
     profile: { chief_complaint:'视物模糊3月', symptoms_timeline:[{symptom:'视物模糊', onset:'3个月'}], diseases:[], exams:[{item:'视力', value:'下降'}], medications:[] },
@@ -551,7 +560,9 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   window.openHistoryDecision(0);
   const decisionDetail = el('hist-body').innerHTML;
   check('历史操作详情展示真实修改内容和理由', decisionDetail.includes('AI 原稿') && decisionDetail.includes('医生版本') && decisionDetail.includes('资料充分') && !decisionDetail.includes('系统事件'), '');
+  el('doctor-case-main').scrollTop = 480;
   window.openHistoryVersion(2);
+  check('查看历史版本前将病例主区滚动到顶部', el('doctor-case-main').scrollTop === 0, String(el('doctor-case-main').scrollTop));
   check('缺少历史正文时明确显示空状态', el('hist-body').innerHTML.includes('该版本暂无报告正文'), '');
 }
 

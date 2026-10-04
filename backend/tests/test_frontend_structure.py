@@ -161,6 +161,20 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="s-stage3"', html)
         self.assertIn('id="s-stage4"', html)
 
+    def test_patient_case_context_sits_below_appbar(self):
+        """病例号和 AI 状态放在工作区上下文行，顶栏只保留产品与身份。"""
+        _, html = self.get("/patient")
+        appbar = html[html.index('<header class="appbar">'):html.index('</header>', html.index('<header class="appbar">'))]
+        self.assertNotIn('id="ctx-case"', appbar)
+        self.assertNotIn('id="badge"', appbar)
+        self.assertIn('class="patient-case-context"', html)
+        self.assertIn('id="patient-ctx-case"', html)
+        self.assertIn('id="patient-badge"', html)
+        context_css = html[html.index('.patient-case-context{'):html.index('}', html.index('.patient-case-context{'))]
+        self.assertIn('position:sticky', context_css)
+        self.assertIn('.patient-shell .rail-left{position:sticky', html)
+        self.assertIn('#patient-case-context:not([hidden]) + .patient-shell .rail-left', html)
+
     def test_patient_has_sibling_new_case_entry_and_resets_old_case_state(self):
         _, html = self.get("/patient")
         self.assertIn("我的病历", html)
@@ -211,8 +225,12 @@ class FrontendStructureTest(unittest.TestCase):
         stage1 = html[start:end]
 
         self.assertIn('id="s-intake-group"', stage1)
-        self.assertIn('id="s-goal"', stage1)
+        self.assertNotIn('id="s-goal"', stage1)
         self.assertIn('id="s-intake"', stage1)
+        self.assertIn('id="main-issue"', stage1)
+        self.assertIn('这次最想解决的问题（选填）', stage1)
+        self.assertNotIn('intake-help', stage1)
+        self.assertNotIn('提交前系统还会自动检查并拦截直接身份信息', stage1)
         self.assertEqual(stage1.count('onclick="startCaseFlow()"'), 1)
         self.assertIn('继续 → 核对资料', stage1)
 
@@ -257,6 +275,40 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("preview_token:S.previewToken", html)
         self.assertIn("blocking_hit_count", html)
 
+    def test_patient_stage2_questions_are_text_only_and_single_column(self):
+        """关键追问改为单列自由填写，避免输入框和选项按钮重复表达。"""
+        _, html = self.get("/patient")
+        stage2_start = html.index('id="s-stage2"')
+        stage3_start = html.index('id="s-stage3"')
+        stage2 = html[stage2_start:stage3_start]
+        self.assertIn('补充关键问题（最多 3 个，可留空）', stage2)
+        self.assertIn('id="ask-body"', stage2)
+        self.assertIn('#ask-body{display:grid;gap:var(--sp-16);grid-template-columns:1fr;', html)
+        self.assertNotIn('setAns(', html)
+        self.assertNotIn('class="chips"', stage2)
+        self.assertIn('placeholder="可填写，不清楚可留空"', html)
+
+    def test_patient_profile_hides_stale_goal_selection_warning(self):
+        """移除预设目标后，不应再向患者提示未选择就医目标。"""
+        _, html = self.get("/patient")
+        self.assertIn('const visibleWarnings = (d.warnings||[]).filter', html)
+        self.assertIn('未选择就医目标', html)
+        self.assertNotIn("(d.warnings||[]).map(x=>`<div class=\"tiny\">· ${esc(x)}", html)
+
+    def test_patient_profile_hides_internal_quality_metrics(self):
+        """患者端不展示原文覆盖率、字段完整度等内部质量指标。"""
+        _, html = self.get("/patient")
+        self.assertNotIn('原文直引覆盖率', html)
+        self.assertNotIn('关键字段完整度', html)
+        self.assertNotIn('灰色为 AI 推断或待确认项', html)
+
+    def test_patient_stage_navigation_keeps_reached_steps_available(self):
+        """返回早期步骤后，已经到达过的后续步骤仍可从左侧回看。"""
+        _, html = self.get("/patient")
+        self.assertIn('const maxReached = S.report ? STEPS.length - 1', html)
+        self.assertIn('i<=maxReached', html)
+        self.assertIn('S.questions.length', html)
+
     def test_doctor_detail_shell_contract(self):
         """医生详情页使用病例上下文头部、任务导航和单列主区。"""
         _, html = self.get("/doctor")
@@ -279,6 +331,22 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertNotIn('class="review-help"', html)
         self.assertNotIn("--blue", html)
 
+    def test_doctor_case_context_lives_in_case_header(self):
+        """病例号、类型和可靠性属于病例上下文，不应挤在全局产品顶栏。"""
+        _, html = self.get("/doctor")
+        appbar = html[html.index('<header class="appbar">'):html.index('</header>', html.index('<header class="appbar">'))]
+        header_start = html.index('<div class="doctor-case-header"')
+        header_end = html.index('<div class="doctor-case-layout"', header_start)
+        case_header = html[header_start:header_end]
+        self.assertNotIn('id="ctx"', appbar)
+        self.assertNotIn('id="badge"', appbar)
+        self.assertIn('class="doctor-case-context-strip"', case_header)
+        self.assertIn('id="case-context-id"', case_header)
+        self.assertIn('id="case-context-type"', case_header)
+        self.assertIn('id="case-context-reliability"', case_header)
+        self.assertNotIn('case-context-status', case_header)
+        self.assertNotIn('AI 生成 · 尚未经医生审核', case_header)
+
     def test_doctor_queue_has_server_pagination_controls(self):
         _, html = self.get("/doctor")
         self.assertIn('id="list-pager"', html)
@@ -286,6 +354,19 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="f-page-size"', html)
         self.assertIn("offset", html)
         self.assertIn("has_more", html)
+
+    def test_doctor_queue_summary_separates_controls_from_review_counts(self):
+        """队列筛选操作与审核分类统计应分块展示，统计数字不能挤成一行小字。"""
+        _, html = self.get("/doctor")
+        toolbar_start = html.index('<div class="queue-toolbar">')
+        toolbar_end = html.index('</div>', toolbar_start)
+        toolbar = html[toolbar_start:toolbar_end]
+        self.assertNotIn('id="list-note"', toolbar)
+        self.assertIn('class="queue-summary"', html)
+        self.assertIn('id="queue-tier-summary"', html)
+        for label in ("必审", "建议抽查", "自动处理", "高风险", "冲突", "分析失败", "重开"):
+            self.assertIn(f"['{label}'", html)
+        self.assertIn("queue-tier-stat", html)
 
     def test_doctor_queue_cells_have_mobile_field_labels(self):
         """窄屏隐藏表头后，每个队列字段仍要带可见字段名。"""
@@ -382,32 +463,33 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("/api/register", html)
         self.assertNotIn('"role":"patient"', html)
 
-    def test_patient_can_confirm_department_before_review_submission(self):
-        """患者提交审核前必须看到主责科室并明确可见范围。"""
+    def test_patient_auto_submits_to_ai_routed_department(self):
+        """患者端不展示接收科室表单，报告生成后由系统自动提交审核。"""
         _, html = self.get("/patient")
         for token in (
-            'id="review-routing"', 'id="review-department"',
             'loadDepartments', 'renderReviewSubmission', 'submitCaseForReview',
-            '/api/departments', '/submit-review', '仅该科室医生可见',
+            'autoSubmitCaseForReview', '/api/departments', '/submit-review',
         ):
-            self.assertIn(token, html, f"患者端缺少科室分流入口：{token}")
+            self.assertIn(token, html, f"患者端缺少自动提交链路：{token}")
+        self.assertNotIn('id="review-routing"', html)
+        self.assertNotIn('id="review-department"', html)
         stage3 = html[html.index('id="s-stage3"'):html.index('id="s-stage4"')]
         stage4 = html[html.index('id="s-stage4"'):]
         self.assertNotIn('id="review-routing"', stage3)
-        self.assertIn('id="review-routing"', stage4)
+        self.assertNotIn('id="review-routing"', stage4)
         self.assertNotIn('reviewer_id', html)
 
-    def test_doctor_ui_surfaces_department_scope(self):
-        """医生工作台应显示当前科室范围，避免账号权限边界只存在于后台。"""
+    def test_doctor_queue_does_not_repeat_department_scope(self):
+        """待审队列不再重复显示当前科室提示，避免筛选区上方堆叠说明文字。"""
         _, html = self.get("/doctor")
-        for token in ("department_name", "department_code", "当前科室", "仅显示已授权病例"):
-            self.assertIn(token, html, f"医生端缺少科室范围提示：{token}")
+        self.assertNotIn('id="doctor-scope-note"', html)
+        self.assertNotIn("function renderDoctorScope", html)
 
     def test_interactive_choices_use_native_controls(self):
-        """目标、疾病/问题选项和医生导航不能依赖不可聚焦的 div/span。"""
+        """患者输入、疾病选项和医生导航使用可聚焦的原生控件。"""
         _, patient = self.get("/patient")
-        self.assertIn('<button type="button" class="goal"', patient)
-        self.assertNotRegex(patient, r'<div[^>]+class="goal"[^>]+onclick=')
+        self.assertNotIn('class="goal"', patient)
+        self.assertIn('id="main-issue"', patient)
         self.assertIn('<button type="button" class="chip"', patient)
         self.assertNotRegex(patient, r'<span[^>]+class="chip"[^>]+onclick="setAns')
         self.assertIn('event.preventDefault();go', patient)
@@ -465,6 +547,13 @@ class FrontendStructureTest(unittest.TestCase):
             with self.subTest(path=path):
                 _, html = self.get(path)
                 self.assertIn("不提供诊断", html)
+
+    def test_patient_summary_uses_action_cards_without_repeated_footer_notice(self):
+        """一页摘要按行动信息分卡展示，页面底部不重复堆叠免责提醒。"""
+        _, html = self.get("/patient")
+        self.assertIn('summary-card', html)
+        self.assertIn('summary-hero', html)
+        self.assertNotIn("html += `<div class=\"banner warn\" style=\"margin-top:var(--sp-20);\">${esc(rep.disclaimer", html)
 
     # ------------------------------------------------- 完整报告的逐段折叠
     def test_full_report_is_collapsible(self):
@@ -535,9 +624,25 @@ class FrontendStructureTest(unittest.TestCase):
         _, html = self.get("/patient")
         for label in ("填写情况", "核对资料", "查看建议", "生成就医摘要"):
             self.assertIn(label, html)
+        self.assertIn("['stage4','生成就医摘要']", html)
         self.assertIn("AI 就诊准备摘要", html)
         self.assertIn("医生审核版报告", html)
+        self.assertNotIn("AI 生成，尚未经医生审核", html)
         self.assertNotIn("共 9 步", html)
+
+    def test_patient_report_keeps_fourth_process_step_and_print_has_clinical_layout(self):
+        _, html = self.get("/patient")
+        _, css = self.get("/static/css/dsh.css")
+        self.assertIn("const STEPS = [['stage1','填写情况'],['stage2','核对资料'],['stage3','查看建议'],['stage4','生成就医摘要']];", html)
+        self.assertIn("阶段 4：生成就医摘要", html)
+        for token in ("print-case-id", "print-step-index"):
+            self.assertIn(token, html)
+        self.assertIn("@page{size:A4 portrait", css)
+        packed_css = css.replace(" ", "")
+        self.assertIn("#s-stage4,#s-report,#report-body{display:block!important;}", packed_css)
+        self.assertIn("#s-stage4>.stage-heading,#s-report>h3,#s-report>.row{display:none!important;}", packed_css)
+        self.assertIn("const source = document.querySelector('.print-report')", html)
+        self.assertIn("const printWindow = window.open('', '_blank')", html)
 
     def test_mdt_screening_is_explicit_and_patient_safe(self):
         _, doctor = self.get("/doctor")
@@ -596,26 +701,59 @@ class FrontendStructureTest(unittest.TestCase):
                          "建议向医生确认的问题", "还不确定的部分", "共识", "质询"):
             self.assertNotIn(internal, stage3)
         self.assertIn("AI 多学科参考意见", stage3)
-        self.assertIn("路径中的任务", html)
+        self.assertIn("function patientPathFlowValue", html)
 
-    def test_patient_stage3_supports_collapsible_detail_sections(self):
-        """第三阶段把路径和专科参考意见折叠，首屏优先保留方向与风险提示。"""
+    def test_patient_stage3_uses_separate_detail_views(self):
+        """第三阶段把路径和专科参考意见做成可返回的独立视图。"""
         _, html = self.get("/patient")
         stage3_start = html.index('id="s-stage3"')
         stage4_start = html.index('id="s-stage4"')
         stage3 = html[stage3_start:stage4_start]
-        self.assertIn('data-section="path"', stage3)
-        self.assertIn('data-section="mdt"', stage3)
-        self.assertGreaterEqual(stage3.count("<summary>"), 2)
+        self.assertIn('onclick="openStage3Detail(\'path\')"', stage3)
+        self.assertIn('onclick="openStage3Detail(\'mdt\')"', stage3)
+        self.assertIn('onclick="closeStage3Detail()"', stage3)
+        self.assertIn("function openStage3Detail(view)", html)
+        self.assertIn('stage3-actions', stage3)
+        self.assertIn("onclick=\"openStage3Detail('path')\"", stage3)
+        actions = stage3[stage3.index('id="stage3-actions"'):stage3.index('<!-- P7')]
+        self.assertIn('onclick="goReport()"', actions)
+        self.assertNotIn("onclick=\"go('stage2')\"", actions)
+        self.assertNotIn("onclick=\"openStage3Detail('path')\"", actions)
 
-    def test_patient_stage3_uses_one_shared_safety_notice(self):
-        """第三阶段共用一条审核状态提示，避免分诊和专科卡重复堆 warning。"""
+    def test_patient_stage3_removes_redundant_progress_copy(self):
+        """第三阶段不再堆叠整理进度、审核提示和内部完成百分比说明。"""
         _, html = self.get("/patient")
         stage3_start = html.index('id="s-stage3"')
         stage4_start = html.index('id="s-stage4"')
         stage3 = html[stage3_start:stage4_start]
-        self.assertIn('id="stage3-safety-note"', stage3)
-        self.assertEqual(stage3.count("AI 参考内容尚未经医生审核"), 1)
+        self.assertNotIn('id="stage3-safety-note"', stage3)
+        for copy in ("先查看整理进度", "AI 参考内容尚未经医生审核", "当前约完成", "相关科室参考意见已整理", "下面可展开就医路径"):
+            self.assertNotIn(copy, stage3)
+
+    def test_patient_stage3_progress_and_layout_are_continuously_active(self):
+        """处理中进度条持续显示活动状态，方向标题与入口卡片保持层级和横排。"""
+        _, html = self.get("/patient")
+        self.assertIn('.progress.is-running i::after', html)
+        self.assertIn('.progress.is-running{', html)
+        self.assertIn('class="stage3-section-title"', html)
+        self.assertIn('.stage3-link-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));', html)
+        self.assertIn('.stage3-actions{display:flex;gap:var(--sp-12);justify-content:flex-end;', html)
+        self.assertIn('stage3-secondary', html)
+
+    def test_patient_triage_primary_uses_inline_direction_summary(self):
+        """主责科室用横向结论条表达，避免与入口卡片重复堆叠大方块。"""
+        _, html = self.get("/patient")
+        self.assertIn('class="triage-primary"', html)
+        self.assertIn('class="triage-primary-department"', html)
+        self.assertNotIn('html += `<div class="ai-block">', html)
+
+    def test_patient_path_flow_is_read_only_and_removes_internal_task_controls(self):
+        """就医路径只展示顺序和行动内容，不展示任务状态、优先级或操作按钮。"""
+        _, html = self.get("/patient")
+        self.assertIn("patientPathFlowValue(pathSteps)", html)
+        for token in ("priorityLabel", "stateLabel", "onclick=\"updateTask", "路径中的任务", "其他待办事项"):
+            self.assertNotIn(token, html)
+        self.assertNotIn('class="patient-path-flow-note"', html)
 
     def test_doctor_review_removes_redundant_primary_task_banner(self):
         """审核分类页不再额外显示当前主要任务提示。"""
@@ -820,11 +958,22 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("等待主责医生确认分流", html)
         self.assertIn("你是协同医生", html)
 
-    def test_doctor_case_header_exposes_current_workflow_stage(self):
-        """病例页标题下应告诉医生当前要处理的阶段。"""
+    def test_doctor_case_header_keeps_context_to_the_right_of_title(self):
+        """病例上下文应与标题同排但保持间距，标题区不再额外堆当前阶段。"""
         _, html = self.get("/doctor")
-        self.assertIn('id="case-stage-hint"', html)
-        self.assertIn("updateWorkflowStage", html)
+        title_row_start = html.index('<div class="doctor-case-title-row">')
+        title_row_end = html.index('</div>', title_row_start)
+        title_row = html[title_row_start:title_row_end]
+        self.assertIn('id="case-heading"', title_row)
+        self.assertIn('class="doctor-case-context-strip"', title_row)
+        self.assertNotIn('id="case-stage-hint"', html)
+        self.assertNotIn("updateWorkflowStage", html)
+
+    def test_doctor_case_header_queue_back_action_is_prominent(self):
+        """返回病例队列是标题区的主要退出动作，应使用明显的主按钮样式。"""
+        _, html = self.get("/doctor")
+        self.assertIn('class="primary btn-sm back-to-queue"', html)
+        self.assertIn('← 返回病例队列', html)
 
     def test_doctor_case_header_is_compact_in_case_mode(self):
         """病例详情标题区应压缩留白，避免挤占首屏病例内容。"""
@@ -910,7 +1059,7 @@ class FrontendStructureTest(unittest.TestCase):
         """病例页标题栏应使用紧凑布局，避免首屏被标题区占满。"""
         _, html = self.get("/doctor")
         self.assertIn("doctor-case-header-compact", html)
-        self.assertIn("doctor-case-header-meta", html)
+        self.assertIn("doctor-case-context-strip", html)
 
     def test_doctor_empty_context_hides_right_rail_and_reclaims_grid(self):
         """未选择病例时右栏不应占用宽屏布局，选中病例后再恢复。"""
@@ -941,8 +1090,8 @@ class FrontendStructureTest(unittest.TestCase):
             self.assertIn('id="login-help"', html)
             self.assertIn('aria-describedby="login-help"', html)
             self.assertIn("loginBusy", html)
-        self.assertIn('aria-describedby="intake-help"', patient)
-        self.assertIn('id="intake-help"', patient)
+        self.assertNotIn('aria-describedby="intake-help"', patient)
+        self.assertNotIn('id="intake-help"', patient)
         self.assertIn('previewBusy', patient)
         self.assertIn('modalSubmitting', doctor)
 
@@ -956,6 +1105,8 @@ class FrontendStructureTest(unittest.TestCase):
         _, patient = self.get("/patient")
         _, doctor = self.get("/doctor")
         self.assertIn("const ANALYSIS_POLL_DELAYS = [1000, 2000, 4000, 8000]", patient)
+        self.assertIn("budgetMs || 90000", patient)
+        self.assertIn("分析等待超过 90 秒，可重新分析", patient)
         self.assertIn("analysisPollDelay", patient)
         self.assertIn("document.visibilityState", patient)
         self.assertIn("document.addEventListener('visibilitychange'", patient)

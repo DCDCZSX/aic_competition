@@ -7,12 +7,6 @@
 <link rel="stylesheet" href="/static/css/dsh.css">
 <style>
   /* 患者端专用样式（公共 token 与组件在 dsh.css） */
-  .goal{display:block;width:100%;border:1px solid var(--line);border-radius:var(--br-12);padding:var(--sp-16);
-        cursor:pointer;margin-bottom:var(--sp-12);transition:.15s;background:var(--gray-000);
-        color:var(--ink);font:inherit;text-align:left;}
-  .goal:hover{border-color:var(--clay);box-shadow:var(--shadow-sm);}
-  .goal.sel{border-color:var(--clay);background:rgba(196,104,73,.04);}
-  .goal .t{font-weight:500;}
   .chips{display:flex;gap:var(--sp-8);flex-wrap:wrap;margin-top:var(--sp-8);}
   .chip{cursor:pointer;}
   button.chip{min-height:40px;padding:8px 12px;border:1px solid transparent;}
@@ -35,7 +29,13 @@
   .path-grid{display:grid;gap:var(--sp-16);grid-template-columns:1fr;}
   @media (min-width:1100px){.path-grid{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);}}
   #ask-body{display:grid;gap:var(--sp-16);grid-template-columns:1fr;}
-  @media (min-width:1100px){ #ask-body{grid-template-columns:repeat(2,minmax(0,1fr));}}
+  #ask-body .q{padding:20px 22px;margin:0;}
+  #ask-body .question-title{display:flex;gap:12px;align-items:flex-start;font-size:18px;line-height:1.5;}
+  #ask-body .question-number{flex:0 0 auto;font-family:var(--font-mono);color:var(--accent);font-weight:700;}
+  #ask-body .question-meta{display:grid;gap:4px;margin:12px 0 16px;padding-left:38px;}
+  #ask-body .question-meta .why{margin:0;}
+  #ask-body .question-meta .affects{margin:0;}
+  #ask-body textarea{width:100%;min-height:72px;resize:vertical;}
   #changes-body{display:block;}
   .chg-grid{display:grid;gap:var(--sp-16);grid-template-columns:1fr;}
   @media (min-width:1100px){.chg-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
@@ -55,6 +55,9 @@
   @media (min-width:1100px){.upd-grid{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);}}
   .stage-heading{padding-bottom:var(--sp-8);}
   .stage-panel{padding-top:var(--sp-8);}
+  .intake-focus{padding:14px 16px;border:1px solid var(--line);border-radius:var(--br-12);background:var(--surface-subtle);margin-bottom:var(--sp-20);}
+  .intake-focus label{display:block;}
+  .intake-focus input{margin-top:8px;}
   .stage-panel + .stage-panel{margin-top:var(--sp-20);padding-top:var(--sp-20);border-top:1px solid var(--line);}
   .stage-details{border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);overflow:hidden;}
   .stage-details>summary{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-12);min-height:48px;padding:12px 14px;cursor:pointer;list-style:none;font-weight:600;}
@@ -63,6 +66,32 @@
   .stage-details[open]>summary{border-bottom:1px solid var(--line);}
   .stage-details[open]>summary::before{content:'－';}
   .stage-details>#path-body,.stage-details>#mdt-body{padding:0 14px 14px;}
+  .stage3-section-title{font-size:24px;margin:var(--sp-24) 0 var(--sp-12);}
+  .stage3-link-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-12);margin-top:var(--sp-20);}
+  .stage3-link-card{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-16);width:100%;padding:18px 20px;border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);color:var(--ink);text-align:left;cursor:pointer;transition:border-color .2s,box-shadow .2s,transform .2s;}
+  .stage3-link-card:hover{border-color:var(--accent);box-shadow:var(--shadow-sm);transform:translateY(-1px);}
+  .stage3-link-card strong{font-size:18px;}
+  .stage3-link-card .arrow{font-size:20px;color:var(--accent);}
+  .stage3-detail-back{margin-bottom:var(--sp-16);}
+  .stage3-actions{display:flex;gap:var(--sp-12);justify-content:flex-end;margin-top:var(--sp-20);flex-wrap:wrap;}
+  @media (max-width:720px){.stage3-link-list{grid-template-columns:1fr;}.stage3-actions button{flex:1;min-width:0;}}
+  .progress i{transition:width 1.2s ease;position:relative;overflow:hidden;}
+  .progress.is-running{background:linear-gradient(90deg,var(--surface-subtle),rgba(196,104,73,.18),var(--surface-subtle));background-size:200% 100%;animation:progress-track 1.2s linear infinite;}
+  .progress.is-running i::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);animation:progress-sweep 1.6s linear infinite;}
+  .stage3-secondary{padding:10px 14px!important;margin-top:8px!important;}
+  .stage3-secondary .chips{gap:6px!important;margin-top:6px!important;}
+  .stage3-secondary .chip{font-size:var(--caption);padding:5px 9px;}
+  .patient-path-flow-stage-label{font-size:var(--body-3);color:var(--ink2);font-weight:600;}
+  .patient-path-flow-number{font-size:var(--body-3);color:var(--accent);font-weight:700;}
+  .patient-path-flow-card h4{font-size:var(--body-2);}
+  .patient-path-flow-detail,.patient-path-flow-condition{font-size:var(--body-3);line-height:1.6;}
+  .triage-primary{display:flex;align-items:baseline;gap:18px;padding:16px 18px;border-left:4px solid var(--accent);background:linear-gradient(90deg,rgba(196,104,73,.08),transparent 72%);}
+  .triage-primary-label{font-size:var(--body-2);color:var(--accent);white-space:nowrap;}
+  .triage-primary-department{font-size:24px;font-weight:700;letter-spacing:.01em;}
+  .triage-primary-reason{color:var(--ink2);font-size:var(--body-3);}
+  @media (max-width:720px){.triage-primary{display:grid;gap:6px;}.triage-primary-department{font-size:21px;}}
+  @keyframes progress-track{from{background-position:0 0;}to{background-position:200% 0;}}
+  @keyframes progress-sweep{from{transform:translateX(-100%);}to{transform:translateX(100%);}}
   .patient-record-entry{margin-top:var(--sp-16);padding-top:var(--sp-12);border-top:1px solid var(--line);}
   .patient-record-actions{display:grid;gap:8px;}
   .patient-record-entry button{width:100%;text-align:left;}
@@ -72,6 +101,27 @@
   .patient-record-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;color:var(--ink2);font-size:var(--micro);}
   .patient-record-timeline{display:grid;gap:8px;margin-top:12px;}
   .patient-record-pager{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap;}
+  .review-route-card{margin-top:var(--sp-12);padding:16px 18px;border-left:4px solid var(--accent);background:var(--surface-subtle);}
+  .summary-hero{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-16);padding:20px 22px;border:1px solid var(--line);border-radius:var(--br-12);background:linear-gradient(120deg,rgba(196,104,73,.11),rgba(196,104,73,.03));}
+  .summary-hero-title{font-family:var(--font-display);font-size:22px;}
+  .summary-hero-meta{color:var(--ink2);font-size:var(--body-3);}
+  .summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-16);margin-top:var(--sp-16);}
+  .summary-card{padding:18px 20px;border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
+  .summary-card h3{margin:0 0 12px;font-size:var(--body-2);color:var(--ink2);}
+  .summary-card p{margin:0;line-height:1.7;}
+  .summary-list{display:grid;gap:8px;margin:0;padding:0;list-style:none;}
+  .summary-list li{position:relative;padding-left:18px;line-height:1.65;}
+  .summary-list li::before{content:'·';position:absolute;left:3px;color:var(--accent);font-weight:700;}
+  @media (max-width:720px){.summary-grid{grid-template-columns:1fr;}.summary-hero{display:block;}.summary-hero-meta{margin-top:6px;}}
+  /* 病例上下文单独成行，避免把业务信息挤进产品顶栏 */
+  .patient-case-context{position:sticky;top:var(--nav-h);z-index:55;display:flex;align-items:center;gap:12px;min-height:56px;margin:0;padding:10px var(--page-pad);box-sizing:border-box;border-bottom:1px solid var(--line);background:rgba(250,249,245,.96);backdrop-filter:saturate(180%) blur(12px);color:var(--ink2);box-shadow:0 2px 10px rgba(20,20,19,.05);}
+  .patient-context-label{font-size:var(--caption);color:var(--ink3);}
+  .patient-context-case{font-size:var(--body-3);color:var(--ink);font-weight:650;}
+  .patient-context-divider{width:1px;height:18px;background:var(--line);}
+  /* 左侧流程栏固定在病例上下文栏下方，避免滚动正文时离开视线 */
+  .patient-shell .rail-left{position:sticky;top:calc(var(--nav-h) + var(--sp-16));max-height:calc(100vh - var(--nav-h) - var(--sp-32));}
+  #patient-case-context:not([hidden]) + .patient-shell .rail-left{top:calc(var(--nav-h) + 56px + var(--sp-16));max-height:calc(100vh - var(--nav-h) - 56px - var(--sp-32));}
+  @media (max-width:720px){.patient-case-context{flex-wrap:wrap;gap:8px;}}
 </style>
 </head>
 <body>
@@ -163,9 +213,6 @@
           <span class="name">多学科就医智助系统</span>
         </a>
         <span class="tag">患者端</span>
-        <span class="abr-divider"></span>
-        <span class="abr-case mono" id="ctx-case">尚未建立病例</span>
-        <span class="pill warn" id="badge">AI 辅助分析 · 尚未经医生审核</span>
       </div>
       <div class="ab-right">
         <span class="ident muted" id="ident">—</span>
@@ -173,6 +220,13 @@
       </div>
     </div>
   </header>
+
+  <div id="patient-case-context" class="patient-case-context" hidden aria-live="polite">
+    <span class="patient-context-label">当前病例</span>
+    <span class="patient-context-case mono" id="patient-ctx-case">尚未建立病例</span>
+    <span class="patient-context-divider" aria-hidden="true"></span>
+    <span class="pill warn" id="patient-badge">AI 辅助分析 · 尚未经医生审核</span>
+  </div>
 
   <div class="shell patient-shell">
     <!-- 左轨：就医流程导航（可回跳到已完成步骤） -->
@@ -196,34 +250,17 @@
       <div id="records-msg"></div>
       <div id="records-body"></div>
     </section>
-    <!-- 阶段 1：填写情况（目标与资料在同一栏目完成） -->
+    <!-- 阶段 1：填写情况 -->
   <section id="s-stage1" class="card" data-stage="stage1">
     <div class="stage-heading">
       <h2>① 填写情况</h2>
-      <p class="muted">选择一个就医目标（可选），再填写或粘贴手头的病情资料。</p>
     </div>
   <div id="s-intake-group" class="stage-panel">
-    <div id="s-goal">
-      <h3>就医目标（选填）</h3>
-      <p class="muted">选不准也没关系，可以不选。</p>
-        <button type="button" class="goal" id="goal-primary" onclick="pickGoal('unknown_department', this)" aria-pressed="false">
-          <div class="t">😕 我/家人身体不舒服，不知道先该看哪个科、怎么办</div>
-          <div class="tiny">推荐选择：多数人都是这种情况</div>
-        </button>
-        <details>
-          <summary>我的情况更特殊一点（可不选）</summary>
-          <button type="button" class="goal" onclick="pickGoal('multi_disease', this)" aria-pressed="false">
-            <div class="t">有好几种老毛病，想一起理清楚</div>
-          </button>
-          <button type="button" class="goal" onclick="pickGoal('compare_opinions', this)" aria-pressed="false">
-            <div class="t">几个医生说法不太一样，想对比一下</div>
-          </button>
-          <button type="button" class="goal" onclick="pickGoal('surgery_prep', this)" aria-pressed="false">
-            <div class="t">要做手术/治疗，想提前把想问的问题准备好</div>
-          </button>
-        </details>
-    </div>
-    <div id="s-intake" style="margin-top:var(--sp-24);">
+    <div id="s-intake">
+      <div class="intake-focus">
+        <label class="muted" for="main-issue">这次最想解决的问题（选填）</label>
+        <input id="main-issue" placeholder="例如：我想知道该先看哪个科，或如何准备这次就诊">
+      </div>
       <h3>病情资料</h3>
       <div class="row" style="margin-top:var(--sp-16);margin-bottom:12px;">
         <button id="tab-paste" class="primary" onclick="switchTab('paste')">粘贴病历</button>
@@ -231,7 +268,7 @@
       </div>
 
       <div id="pane-paste">
-        <textarea id="history" placeholder="粘贴门诊病历 / 出院记录 / 检查报告正文…（≤8000 字）" aria-describedby="intake-help"></textarea>
+        <textarea id="history" placeholder="粘贴门诊病历 / 出院记录 / 检查报告正文…（≤8000 字）"></textarea>
       </div>
 
       <div id="pane-form" class="hide">
@@ -254,14 +291,6 @@
         </div>
       </div>
 
-      <div style="margin-top:14px;">
-        <label class="muted">主要问题（选填）</label>
-        <input id="main-issue" placeholder="例如：该先看哪个科？" aria-describedby="intake-help">
-      </div>
-      <p id="intake-help" class="tiny">请删除姓名、身份证号、手机号和住址；主要问题可不填写。</p>
-      <div class="banner warn" style="margin-top:12px;">
-        ⚠️ 提交前系统还会自动检查并拦截直接身份信息。
-      </div>
       <div id="intake-msg"></div>
     </div>
     <div class="actions">
@@ -300,7 +329,7 @@
   </div>
 <!-- P5 智能追问 -->
   <div id="s-ask" class="stage-panel hide">
-    <h3>补充关键问题（最多 3 个，可跳过）</h3>
+    <h3>补充关键问题（最多 3 个，可留空）</h3>
     <div id="ask-body"></div>
     <p class="tiny">跳过会导致结果可靠性降低，但系统不会编造你的情况。</p>
     <div class="actions">
@@ -313,35 +342,34 @@
   <section id="s-stage3" class="card hide" data-stage="stage3">
     <div class="stage-heading">
       <h2>③ 查看建议</h2>
-      <p class="muted">先查看整理进度；分析完成后，这里会展开就医路径、准备任务和专科 AI 参考意见。</p>
-      <div id="stage3-safety-note" class="banner warn" role="status" aria-live="polite">
-        AI 参考内容尚未经医生审核。牵头方向 ≠ 最终诊断科室，最终以线下医生判断为准。
-      </div>
     </div>
   <!-- 分析总进度：统一放在第三阶段顶部，直到整理结束后再展开后续内容 -->
   <div id="stage3-analysis-progress" class="stage-panel"></div>
 <!-- P6 分诊结果 -->
   <div id="s-triage" class="stage-panel">
-    <h2>建议的就医方向</h2>
+    <h2 class="stage3-section-title">建议的就医方向</h2>
     <div id="triage-body"></div>
+  </div>
+  <div id="stage3-link-list" class="stage3-link-list hide">
+    <button type="button" class="stage3-link-card" onclick="openStage3Detail('path')">
+      <span><strong>就医路径与每一步要做的事</strong><br><span class="muted">查看就诊顺序、准备事项和待办任务</span></span><span class="arrow" aria-hidden="true">→</span>
+    </button>
+    <button type="button" class="stage3-link-card" onclick="openStage3Detail('mdt')">
+      <span><strong>AI 多学科参考意见</strong><br><span class="muted">查看相关科室的参考提示</span></span><span class="arrow" aria-hidden="true">→</span>
+    </button>
+  </div>
+  <div id="stage3-actions" class="stage3-actions hide">
+    <button type="button" class="primary" onclick="goReport()">查看就医报告 →</button>
   </div>
 <!-- P7 就医路径 + 任务中心 -->
   <div id="s-path" class="stage-panel hide">
-    <details class="stage-details" data-section="path">
-      <summary><span>就医路径与每一步要做的事</span><span class="tiny">按需展开</span></summary>
-      <div id="path-body"></div>
-    </details>
+    <button type="button" class="ghost stage3-detail-back" onclick="closeStage3Detail()">← 返回查看建议</button>
+    <div id="path-body"></div>
   </div>
 <!-- P8 多学科分析 -->
   <div id="s-mdt" class="stage-panel hide">
-    <details class="stage-details" data-section="mdt">
-      <summary><span>AI 多学科参考意见</span><span class="tiny">按需展开</span></summary>
-      <div id="mdt-body"></div>
-    </details>
-    <div class="actions">
-      <button class="ghost" onclick="go('stage2')">← 返回核对资料</button>
-      <button class="primary" onclick="goReport()">查看就医报告 →</button>
-    </div>
+    <button type="button" class="ghost stage3-detail-back" onclick="closeStage3Detail()">← 返回查看建议</button>
+    <div id="mdt-body"></div>
   </div>
   </section>
 
@@ -353,7 +381,6 @@
 <!-- P9 报告 -->
   <div id="s-report" class="stage-panel">
     <h3>重点摘要与就医详情</h3>
-    <div id="review-routing" class="stage-panel hide" aria-live="polite"></div>
     <div class="row" style="margin-bottom:12px;">
       <button id="tab-summary" class="primary" onclick="switchReport('summary')">一页就医摘要</button>
       <button id="tab-full" onclick="switchReport('full')">就医详情</button>
@@ -444,7 +471,7 @@ const S = { token:null, role:null, label:null, previewToken:null, goals:[], case
             profile:null, mode:'paste', triage:null, path:null, mdt:null, report:null,
             mdtPending:false, mdtStatus:null, reportView:'summary',
             answerSubmitPending:false, answerSubmitStatus:null,
-            departments:[], departmentLoading:false, reviewDepartment:'', routing:null,
+            departments:[], departmentLoading:false, reviewDepartment:'', routing:null, stage3View:'overview',
             reviewSubmitBusy:false, reviewSubmissionError:'' };
 const STEPS = [['stage1','填写情况'],['stage2','核对资料'],['stage3','查看建议'],['stage4','生成就医摘要']];
 const STEP_STAGE = {
@@ -470,17 +497,17 @@ function show(id){ document.querySelectorAll('main > section').forEach(s=>s.clas
                    const target=document.getElementById(id); if(target) target.classList.remove('hide'); }
 function syncStagePanels(step){
   const stage=stageFor(step);
-  const groups={stage1:['s-goal','s-intake'], stage2:['s-profile','s-ask'],
-                stage3:['stage3-analysis-progress','s-triage','s-path','s-mdt'], stage4:['s-report']};
+  const groups={stage1:['s-intake'], stage2:['s-profile','s-ask'],
+                stage3:['stage3-analysis-progress','s-triage','stage3-link-list','s-path','s-mdt'], stage4:['s-report']};
   (groups[stage]||[]).forEach(id=>{ const el=document.getElementById(id); if(el) el.classList.add('hide'); });
-  const visible={stage1:['s-goal','s-intake'], stage2:[], stage3:[], stage4:['s-report']}[stage]||[];
+  const visible={stage1:['s-intake'], stage2:[], stage3:[], stage4:['s-report']}[stage]||[];
   if(stage==='stage2'){
     if(['stage2','profile','ask'].includes(step)) visible.push('s-profile','s-ask');
   }
   if(stage==='stage3'){
     // 第三阶段先展示统一进度和已确定的就医方向；路径与专科意见
     // 由 renderStage3Analysis 按后台终态展开，避免用户看到未完成的旧结果。
-    visible.push('stage3-analysis-progress','s-triage');
+    visible.push('stage3-analysis-progress','s-triage','stage3-link-list');
     if(analysisIsTerminal() && step==='stage3') visible.push('s-path','s-mdt');
     if(analysisIsTerminal() && ['path','mdt'].includes(step)) visible.push('s-path');
     if(analysisIsTerminal() && step==='mdt') visible.push('s-mdt');
@@ -513,10 +540,7 @@ function startNewCase(){
   document.querySelectorAll('#disease-chips .chip').forEach(el=>{
     el.classList.remove('on'); el.setAttribute('aria-pressed','false');
   });
-  document.querySelectorAll('#s-goal .goal').forEach(el=>{
-    el.classList.remove('sel'); el.setAttribute('aria-pressed','false');
-  });
-  pickGoal('unknown_department'); switchTab('paste');
+  switchTab('paste');
   ['intake-msg','flow-msg','records-msg'].forEach(id=>msg(id,''));
   go('stage1');
 }
@@ -575,16 +599,19 @@ async function showPatientCaseHistory(caseId){
 }
 /* 左轨：四个用户阶段；报告生成后允许在四个阶段之间自由回看。
    就诊后资料更新 / 变化摘要不属于首次准备资料的四个阶段。 */
-const EXTRA_STEPS = {records:'我的病历', update:'就诊后资料更新', changes:'变化摘要', done:'收尾'};
+const EXTRA_STEPS = {stage4:'就医报告', records:'我的病历', update:'就诊后资料更新', changes:'变化摘要', done:'收尾'};
 function renderSteps(active){
   const stage = stageFor(active);
   const idx = STEPS.findIndex(([k])=>k===stage);
   const isExtra = idx < 0 && !!EXTRA_STEPS[active];
   const flowCompleted = !!S.report;
+  const maxReached = S.report ? STEPS.length - 1
+    : (S.triage || S.path || S.mdt ? 2
+      : (S.profile || S.questions.length ? 1 : 0));
   document.getElementById('steps').innerHTML = STEPS.map(([k,label],i)=>{
     const st = isExtra ? 'done'
       : (i===idx ? 'active' : ((i<idx || flowCompleted) ? 'done' : ''));
-    const jump = ((isExtra || flowCompleted || i<idx) && i!==idx)
+    const jump = ((isExtra || i<=maxReached) && i!==idx)
       ? ` href="#s-${k}" onclick="event.preventDefault();go('${k}')"` : '';
     return `<a class="step ${st}"${jump}><span class="step-n">${String(i+1).padStart(2,'0')}</span>`+
            `<span class="step-t">${esc(label)}</span></a>`;
@@ -599,11 +626,13 @@ function renderSteps(active){
       : (idx<0 ? `共 ${STEPS.length} 个阶段 · 尚未开始`
                : `第 ${idx+1} / ${STEPS.length} 步 · ${STEPS[idx][1]}`));
 }
-/* 顶栏只保留病例号和审核状态；病例上下文、进度和任务在对应阶段按需出现。 */
+/* 顶栏只保留产品与身份；病例号和审核状态放在工作区上下文行。 */
 function renderContext(){
-  const c = document.getElementById('ctx-case');
+  const panel = document.getElementById('patient-case-context');
+  if(panel) panel.hidden = !S.caseId;
+  const c = document.getElementById('patient-ctx-case');
   if(c) c.textContent = S.caseId ? ('病例 #' + S.caseId) : '尚未建立病例';
-  const badge = document.getElementById('badge');
+  const badge = document.getElementById('patient-badge');
   if(!badge) return;
   const summary = S.report && S.report.summary;
   if(summary && summary.review_status_label){
@@ -710,7 +739,7 @@ function afterLogin(d){
       '<p class="muted">如需查看患者端流程，请退出后选择"进入患者端"。</p>';
     go('done'); return;
   }
-  buildDiseaseChips(); pickGoal('unknown_department'); renderContext(); go('goal');
+  buildDiseaseChips(); renderContext(); go('goal');
 }
 async function logout(){
   await api('/api/logout', {method:'POST', body:JSON.stringify({token:S.token})});
@@ -759,15 +788,6 @@ function toggleDisease(el){
   el.classList.toggle('on', active);
   el.setAttribute('aria-pressed', String(active));
 }
-function pickGoal(id, target){
-  S.goals=[id];
-  document.querySelectorAll('#s-goal .goal').forEach(el=>{
-    el.classList.remove('sel');
-    el.setAttribute('aria-pressed', 'false');
-  });
-  if(target){ target.classList.add('sel'); target.setAttribute('aria-pressed', 'true'); }
-}
-
 /* ===================== P2 录入 ===================== */
 function switchTab(which){
   S.mode=which;
@@ -1044,16 +1064,41 @@ function updateAnalysisStage3Dom(box, analysis){
     const fill = progress.querySelector('i');
     if(fill) fill.style.width = pct + '%';
   }
-  const note = box.querySelector('[data-analysis-progress-note]');
-  if(note) note.textContent = `当前约完成 ${pct}% · 页面会自动更新`;
   const phases = a.phases || {};
   [['profile', PHASE_LABELS.profile], ['triage', PHASE_LABELS.triage], ['mdt', PHASE_LABELS.mdt]]
     .forEach(([key, label])=>{
     const row = box.querySelector(`[data-phase="${key}"]`);
     if(row) row.innerHTML = phaseContent(label, phases[key]);
   });
-  const mdtNote = box.querySelector('[data-analysis-mdt-note]');
-  if(mdtNote) mdtNote.textContent = analysisMdtNote(a.mdt||{});
+}
+function showStage3Overview(){
+  S.stage3View = 'overview';
+  const ready = analysisIsTerminal();
+  ['stage3-analysis-progress','s-triage','stage3-link-list'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.classList.remove('hide');
+  });
+  const links=document.getElementById('stage3-link-list');
+  if(links) links.classList.toggle('hide', !ready);
+  const actions=document.getElementById('stage3-actions');
+  if(actions) actions.classList.toggle('hide', !ready);
+  ['s-path','s-mdt'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.classList.add('hide');
+  });
+}
+function openStage3Detail(view){
+  if(!['path','mdt'].includes(view)) return;
+  S.stage3View = view;
+  ['stage3-analysis-progress','s-triage','stage3-link-list'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.classList.add('hide');
+  });
+  const actions=document.getElementById('stage3-actions');
+  if(actions) actions.classList.add('hide');
+  const detail = document.getElementById(view==='path' ? 's-path' : 's-mdt');
+  if(detail) detail.classList.remove('hide');
+}
+function closeStage3Detail(){
+  showStage3Overview();
+  window.scrollTo({top:0, behavior:'smooth'});
 }
 function renderStage3Analysis(){
   const box = document.getElementById('stage3-analysis-progress');
@@ -1062,7 +1107,7 @@ function renderStage3Analysis(){
     const viewKey = analysisStageViewKey(a);
     if(box.dataset.analysisView !== viewKey){
       box.innerHTML = analysisBanner(a) ||
-        '<div class="banner ok"><strong>就医建议已整理完成</strong><br><span class="tiny">可以查看下面的就医路径和相关科室参考意见。</span></div>';
+        '<div class="banner ok"><strong>就医建议已整理完成</strong></div>';
       box.dataset.analysisView = viewKey;
     }else{
       updateAnalysisStage3Dom(box, a);
@@ -1070,10 +1115,10 @@ function renderStage3Analysis(){
     box.classList.remove('hide');
   }
   const ready = analysisIsTerminal(a);
-  ['s-path','s-mdt'].forEach(id=>{
-    const el = document.getElementById(id);
-    if(el) el.classList.toggle('hide', !ready);
-  });
+  const links = document.getElementById('stage3-link-list');
+  if(links) links.classList.toggle('hide', !ready || S.stage3View!=='overview');
+  if(S.stage3View==='overview') showStage3Overview();
+  else if(ready) openStage3Detail(S.stage3View);
   const reportButton = document.querySelector('#s-mdt .actions .primary');
   if(reportButton){
     reportButton.disabled = !ready;
@@ -1086,10 +1131,9 @@ function analysisBanner(analysis){
   const mdt = a.mdt || {};
   const state = a.state || 'running';
   const failedDepts = mdt.failed || [];
-  const mdtLine = `<div class="tiny" data-analysis-mdt-note>${esc(analysisMdtNote(mdt))}</div>`;
   const pct = analysisProgressPercent(a);
-  const progress = `<div class="progress" data-analysis-progress role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
-      <div class="tiny" data-analysis-progress-note>当前约完成 ${pct}% · 页面会自动更新</div>`;
+  const progress = `<div class="progress${state==='running'?' is-running':''}" data-analysis-progress role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
+      `;
   if(state === 'running'){
     return `<div class="col" style="margin-bottom:var(--sp-12);">
       <div class="rt">正在整理你的就医建议</div>
@@ -1097,8 +1141,6 @@ function analysisBanner(analysis){
       ${phaseRow(PHASE_LABELS.profile, phases.profile, 'profile')}
       ${phaseRow(PHASE_LABELS.triage, phases.triage, 'triage')}
       ${phaseRow(PHASE_LABELS.mdt, phases.mdt, 'mdt')}
-      ${mdtLine}
-      <div class="tiny" style="margin-top:6px;">整理过程中页面会自动更新，完成后会展开就医路径和参考意见。</div>
     </div>`;
   }
   if(state === 'failed' || state === 'partial_failed'){
@@ -1122,8 +1164,6 @@ function analysisBanner(analysis){
       ${phaseRow(PHASE_LABELS.profile, phases.profile, 'profile')}
       ${phaseRow(PHASE_LABELS.triage, phases.triage, 'triage')}
       ${phaseRow(PHASE_LABELS.mdt, phases.mdt, 'mdt')}
-      ${mdtLine}
-      <div class="tiny" style="margin-top:6px;">下面可展开就医路径、准备任务和相关科室参考意见。</div>
     </div>`;
   }
   return '';
@@ -1175,7 +1215,8 @@ async function retryAnalysis(){
 }
 async function pollAnalysis(budgetMs){
   if(!S.caseId) return;
-  const deadline = Date.now() + (budgetMs || 240000);
+  // 患者最多等待 90 秒获得明确反馈，避免网络或后台任务异常时一直显示“整理资料”。
+  const deadline = Date.now() + (budgetMs || 90000);
   analysisPollState.failureCount = 0;
   while(Date.now() < deadline){
     if(document.visibilityState === 'hidden'){
@@ -1229,6 +1270,24 @@ async function pollAnalysis(budgetMs){
     const delay = requestSucceeded ? 2000 : analysisPollDelay(analysisPollState.failureCount-1);
     await new Promise(r=>setTimeout(r, delay));
   }
+  const current = S.analysisStatus || {};
+  if(!analysisIsTerminal(current)){
+    const phases = Object.assign({}, current.phases || {});
+    Object.keys(phases).forEach(key=>{
+      const phase = Object.assign({}, phases[key] || {});
+      if(['pending','running'].includes(phase.state)){
+        phase.state = 'failed';
+        phase.note = '分析等待超时，可重新分析';
+      }
+      phases[key] = phase;
+    });
+    S.analysisStatus = Object.assign({}, current, {
+      state: S.triage ? 'partial_failed' : 'failed',
+      phases,
+      warnings: [...(current.warnings || []), '分析等待超过 90 秒，可重新分析']
+    });
+    renderStage3Analysis();
+  }
 }
 
 document.addEventListener('visibilitychange', ()=>{
@@ -1260,15 +1319,11 @@ function renderProfile(d){
       (p.medications||[]).map(x=>line('', `${x.name} ${x.dose||''}`)).join(''));
   html += '</div>';
 
-  const cov = d.direct_quote_coverage!=null ? d.direct_quote_coverage : 0;
-  const cmp = d.completeness!=null ? d.completeness : 0;
-  html += `<div class="ai-block" style="margin-top:var(--sp-16);"><span class="pill ${d.passes_gate?'ok':'danger'}">原文直引覆盖率 ${cov}</span>
-         <span class="pill">关键字段完整度 ${cmp}</span>
-         <div class="tiny" style="margin-top:6px;">灰色为 AI 推断或待确认项，请核对；出处 chip 可悬停查看原文位置。</div></div>`;
   /* 降级/异常要如实可见（例：模型未生效时只跑规则链路） */
-  if((d.warnings||[]).length){
+  const visibleWarnings = (d.warnings||[]).filter(x=>!String(x).startsWith('未选择就医目标'));
+  if(visibleWarnings.length){
     html += `<div class="banner warn" style="margin-top:var(--sp-12);"><strong>以下情况需要你知道（系统如实说明，不隐瞒降级）：</strong>` +
-      (d.warnings||[]).map(x=>`<div class="tiny">· ${esc(x)}</div>`).join('') + `</div>`;
+      visibleWarnings.map(x=>`<div class="tiny">· ${esc(x)}</div>`).join('') + `</div>`;
   }
   document.getElementById('profile-body').innerHTML = html;
 
@@ -1289,28 +1344,15 @@ function renderQuestions(){
   }
   document.getElementById('ask-body').innerHTML = qs.map((q,i)=>`
     <div class="q">
-      <strong>Q${i+1}　${esc(q.text)}</strong>
-      <div class="why">为什么问：${esc(q.why)}</div>
-      <div class="affects">影响判断：${(q.affects||[]).map(esc).join('、')}
-        ${q.affects_triage?'<span class="pill warn">影响分诊方向</span>':''}</div>
-      <label class="sr" for="ans-${i}">回答问题 ${i+1}</label>
-      <input id="ans-${i}" placeholder="你的回答（留空或填"不清楚"表示跳过）">
-      <div class="chips">
-        ${(q.options||[]).map(o=>`<button type="button" class="chip" aria-pressed="false" onclick="setAns(${i},'${esc(o)}', this)">${esc(o)}</button>`).join('')}
-        <button type="button" class="chip" aria-pressed="false" onclick="setAns(${i},'不清楚 / 跳过', this)">不清楚 / 跳过</button>
+      <div class="question-title"><span class="question-number">Q${i+1}</span><strong>${esc(q.text)}</strong></div>
+      <div class="question-meta">
+        <div class="why">为什么问：${esc(q.why)}</div>
+        <div class="affects">影响判断：${(q.affects||[]).map(esc).join('、')}
+          ${q.affects_triage?'<span class="pill warn">影响分诊方向</span>':''}</div>
       </div>
+      <label class="sr" for="ans-${i}">回答问题 ${i+1}</label>
+      <textarea id="ans-${i}" placeholder="可填写，不清楚可留空"></textarea>
     </div>`).join('');
-}
-function setAns(i,val, target){
-  document.getElementById('ans-'+i).value=val;
-  if(target){
-    target.closest('.chips').querySelectorAll('.chip').forEach(el=>{
-      el.classList.remove('on');
-      el.setAttribute('aria-pressed', 'false');
-    });
-    target.classList.add('on');
-    target.setAttribute('aria-pressed', 'true');
-  }
 }
 
 let answerSubmitBusy = false;
@@ -1509,6 +1551,8 @@ async function goReport(){
     if(r.status!==200){ alert('报告生成失败：'+(r.data.error||r.status)); return; }
     S.report = r.data;
   }
+  // 报告生成后按 AI 分诊结果自动提交给主责科室，患者无需再选择或点击提交。
+  await autoSubmitCaseForReview();
   switchReport(S.reportView || 'summary');
   go('report');
 }
@@ -1569,10 +1613,9 @@ function patientPathFlowValue(steps){
   const nodes = steps.map((step,index)=>{
     const item = step && typeof step === 'object' ? step : {};
     const id = String(item['步骤'] || item['step_id'] || `S${index+1}`).trim();
-    const type = String(item['类型'] || '就医步骤').trim();
-    const title = String(item['内容'] || item['标题'] || '未命名步骤').trim();
-    const detail = String(item['说明'] || '').trim();
-    const condition = String(item['执行条件'] || item['条件'] || '').trim();
+    const title = String(item['内容'] || item['标题'] || item.title || '未命名步骤').trim();
+    const detail = String(item['说明'] || item.detail || '').trim();
+    const condition = String(item['执行条件'] || item['条件'] || item.condition || '').trim();
     const notes = String(item['备注'] || '').trim();
     const dependencies = String(item['依赖步骤'] || item['depends_on'] || '').split(/[、，,\s]+/).filter(Boolean);
     const parallel = item['可并行'] === true || item['parallel'] === true
@@ -1581,7 +1624,7 @@ function patientPathFlowValue(steps){
       || notes.includes('需医生决定') || notes.includes('需医生确认');
     const classes = [parallel?'is-parallel':'', condition?'is-conditional':'', doctor?'is-doctor':'']
       .filter(Boolean).join(' ');
-    return {id,index,type,title,detail,condition,notes,dependencies,parallel,doctor,classes};
+    return {id,index,title,detail,condition,notes,dependencies,parallel,doctor,classes};
   });
   const nodeById = new Map(nodes.map(node=>[node.id,node]));
   // 旧数据只保留“可与前一步并行”时，用前一步作为默认依赖；新数据优先使用显式依赖。
@@ -1612,18 +1655,12 @@ function patientPathFlowValue(steps){
       const parent = nodeById.get(id);
       return parent ? `第 ${parent.index+1} 步` : id;
     }).join('、');
-    const tags = [
-      `<span class="pill">${esc(node.type)}</span>`,
-      node.parallel ? '<span class="pill info">可并行</span>' : '',
-      node.doctor ? '<span class="pill ok">需医生确认</span>' : '',
-    ].filter(Boolean).join('');
     return `<li class="patient-path-flow-step ${node.classes}" data-flow-step="${node.index+1}" data-flow-stage="${node.stage+1}">
       <div class="patient-path-flow-card">
-        <div class="patient-path-flow-meta"><span class="patient-path-flow-number">第 ${node.index+1} 步</span>${tags}</div>
+        <div class="patient-path-flow-meta"><span class="patient-path-flow-number">${node.index+1}</span></div>
         <h4>${esc(node.title)}</h4>
         ${node.detail?`<div class="patient-path-flow-detail">${esc(node.detail)}</div>`:''}
-        ${node.condition?`<div class="patient-path-flow-condition">如果：${esc(node.condition)}</div>`:''}
-        ${dependencies?`<div class="patient-path-flow-dependency">前置：${esc(dependencies)}</div>`:''}
+        ${node.condition?`<div class="patient-path-flow-condition">${esc(node.condition)}</div>`:''}
       </div>
     </li>`;
   };
@@ -1634,7 +1671,6 @@ function patientPathFlowValue(steps){
       ? `<ol class="patient-path-flow-stage-list">${main.map(renderCard).join('')}</ol>` : '';
     const parallelHtml = parallel.length
       ? `<div class="patient-path-flow-parallel-group" aria-label="可并行准备的步骤">
-          <div class="patient-path-flow-parallel-label">可并列准备</div>
           <ol class="patient-path-flow-parallel-list">${parallel.map(renderCard).join('')}</ol>
         </div>` : '';
     return `<li class="patient-path-flow-stage${parallel.length?' has-parallel':''}" data-flow-stage="${stageIndex+1}">
@@ -1648,7 +1684,6 @@ function patientPathFlowValue(steps){
   const stageHtml = stages.map(renderStage).join('');
   return `<div class="patient-path-flow" aria-label="就医路径流程图">
     <ol class="patient-path-flow-list">${stageHtml}</ol>
-    <p class="tiny patient-path-flow-note">阶段之间的箭头表示建议顺序；同一阶段的“可并列准备”表示可以同时准备；“需医生确认”表示不要自行决定。</p>
   </div>`;
 }
 
@@ -1662,11 +1697,6 @@ function switchReport(view){
   let html='';
 
   const stageLabel = rep.stage_label || (rep.doctor_confirmed ? '医生审核版报告' : 'AI 就诊准备摘要');
-  const statusLabel = rep.review_status_label || (rep.doctor_confirmed ? '已发布医生审核版' : 'AI 生成，尚未经医生审核');
-  html += `<div class="banner ${rep.doctor_confirmed?'ok':'warn'}">
-    ${rep.doctor_confirmed ? '✅ ' + esc(stageLabel) : '⚠️ ' + esc(statusLabel)}
-    <span class="tiny">　病例号 ${esc(rep.case_id)}　版本 ${esc(rep.report_version||1)}　生成于 ${esc(rep.generated_at)}</span></div>`;
-
   const screening = (S.report||{}).mdt_screening || {};
   if(screening.decision){
     const screeningLabels = {single_specialty:'单专科处理', recommend_mdt:'医生建议多学科共同评估', need_more_info:'需要补充资料', urgent_care:'急症处理'};
@@ -1688,17 +1718,12 @@ function switchReport(view){
       const v = sections[k];
       if(v===null || v===undefined || v==='' || (Array.isArray(v) && !v.length)) return '';
       const body = Array.isArray(v)
-        ? v.map(x=>`<div class="field"><div style="flex:1;">· ${esc(x)}</div></div>`).join('')
-        : `<div>${esc(v||'（无）')}</div>`;
-      return `<div class="sum-block" style="margin-bottom:var(--sp-20);"><h3 style="margin-top:0;">${esc(k)}</h3>${body}</div>`;
+        ? `<ul class="summary-list">${v.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`
+        : `<p>${esc(v||'（无）')}</p>`;
+      return `<article class="summary-card"><h3>${esc(k)}</h3>${body}</article>`;
     };
-    html += `<div class="ai-block" style="background:var(--gray-050);border-left-color:var(--accent);">
-      <div style="font-family:var(--font-display);font-size:17px;">${esc(stageLabel)}</div>
-      <div class="tiny">适合带到线下就诊时给医生看；需要更多背景时可切换到“就医详情”。</div></div>`;
-    html += `<div class="sum-grid">
-      <div>${left.map(blockOf).join('')}</div>
-      <div>${right.map(blockOf).join('')}</div></div>`;
-    html += `<p class="tiny" style="margin-top:var(--sp-12);">${esc(rep.capability_boundary||'AI 内容仅供线下就医参考，不能作为诊断或用药依据。')}</p>`;
+    html += `<div class="summary-hero"><div class="summary-hero-title">${esc(stageLabel)}</div><div class="summary-hero-meta">带给线下医生快速了解</div></div>`;
+    html += `<div class="summary-grid">${left.map(blockOf).join('')}${right.map(blockOf).join('')}</div>`;
   } else {
     /* 就医详情：只展示会影响患者理解和下一步行动的段落。
        专科推理、证据关联、审核记录等内部材料继续保留在后端和医生工作台。 */
@@ -1720,8 +1745,6 @@ function switchReport(view){
     </div>`;
   }
 
-  html += `<div class="banner warn" style="margin-top:var(--sp-20);">${esc(rep.disclaimer||'')}<br>
-    <span class="tiny">${esc(rep.capability_boundary||'')}</span></div>`;
   document.getElementById('report-body').innerHTML =
     `<div class="report-screen">${html}</div>${buildPrintReportHtml()}`;
   if(view==='full') bindReportSections();
@@ -1736,9 +1759,21 @@ function printPathValue(steps){
   return steps.map((step,i)=>{
     const title = step && (step['内容'] || step['标题']) || '';
     const detail = [step && step['说明'], step && (step['执行条件'] || step['条件']), step && step['备注']].filter(Boolean).join('；');
-    return `<div class="print-step"><div><span class="pill">第 ${i+1} 步</span> <strong>${esc(title)}</strong></div>`+
-      (detail ? `<div class="tiny">${esc(detail)}</div>` : '') + '</div>';
+    return `<div class="print-step"><div class="print-step-index">${String(i+1).padStart(2,'0')}</div><div class="print-step-copy"><strong>${esc(title)}</strong>`+
+      (detail ? `<div class="print-step-detail">${esc(detail)}</div>` : '') + '</div></div>';
   }).join('');
+}
+function stripPrintCaseReference(value, caseId){
+  if(!hasReportValue(value) || !caseId) return value;
+  const id = String(caseId).trim();
+  if(Array.isArray(value)){
+    return value.filter(item=>{
+      const text = typeof item === 'object' ? JSON.stringify(item, null, 0) : String(item||'');
+      return !text.includes(id) && !text.includes('当前病例');
+    });
+  }
+  if(typeof value === 'string' && (value.includes(id) || value.includes('当前病例'))) return '';
+  return value;
 }
 function buildPrintReportHtml(){
   const all = S.report || {};
@@ -1746,8 +1781,7 @@ function buildPrintReportHtml(){
   const full = all.full || {};
   const summarySections = summary.sections || {};
   const fullSections = full.sections || {};
-  const stageLabel = summary.stage_label || (summary.doctor_confirmed ? '医生审核版报告' : 'AI 就诊准备摘要');
-  const statusLabel = summary.review_status_label || (summary.doctor_confirmed ? '已发布医生审核版' : 'AI 生成，尚未经医生审核');
+  const caseId = String(summary.case_id||'').trim();
   const items = [
     ['主要问题', summarySections['主要问题']],
     ['建议先咨询', summarySections['建议咨询方向']],
@@ -1757,17 +1791,17 @@ function buildPrintReportHtml(){
     ['还缺什么资料', summarySections['当前信息缺口']],
     ['关键已知资料', summarySections['关键已知资料']],
   ];
-  const sectionsHtml = items.filter(([,value])=>hasReportValue(value)).map(([label,value])=>{
+  const sectionsHtml = items.map(([label,value])=>[label,stripPrintCaseReference(value, caseId)])
+    .filter(([,value])=>hasReportValue(value)).map(([label,value])=>{
     const body = label==='就医步骤' ? printPathValue(value) : renderSectionValue(value);
     return `<section class="print-section"><h3>${esc(label)}</h3>${body}</section>`;
   }).join('');
-  return `<div class="print-report" aria-label="患者就医准备单">
+  return `<div class="print-report" aria-label="患者就医报告">
     <div class="print-head">
-      <h2>患者就医准备单</h2>
-      <div class="tiny">${esc(stageLabel)} · ${esc(statusLabel)}</div>
-      <div class="tiny">病例号 ${esc(summary.case_id||'')}　生成于 ${esc(summary.generated_at||'')}</div>
+      <div class="print-title-row"><h2>门诊病历</h2></div>
+      <div class="print-case-id">病历编号：<strong>${esc(caseId||'—')}</strong></div>
     </div>
-    <p class="print-intro">这份清单用于帮助你准备就医和与医生沟通，最终以线下医生判断为准。</p>
+    <p class="print-intro">以下内容按门诊病历结构整理，供接诊医生快速了解情况并进一步判断。</p>
     ${sectionsHtml}
     <div class="print-disclaimer">${esc(summary.disclaimer||'')}<br>${esc(summary.capability_boundary||'')}</div>
   </div>`;
@@ -1856,9 +1890,62 @@ function renderSectionValue(v){
 }
 
 function printReport(){
-  document.title = `多学科就医准备单_${S.caseId}`;
-  window.print();
-  document.title = '多学科就医智助系统 · 患者端';
+  const source = document.querySelector('.print-report');
+  if(!source){
+    alert('报告内容尚未生成，请稍后再试。');
+    return;
+  }
+  // 使用独立打印页，避免整页工作区的 hide / flex / sticky 状态影响病历正文。
+  const printWindow = window.open('', '_blank');
+  if(!printWindow){
+    alert('浏览器阻止了打印窗口，请允许弹出窗口后重试。');
+    return;
+  }
+  let printed = false;
+  const startPrint = ()=>{
+    if(printed) return;
+    printed = true;
+    printWindow.focus(); printWindow.print(); printWindow.close();
+  };
+  if(printWindow.addEventListener) printWindow.addEventListener('load', startPrint, {once:true});
+  else printWindow.onload = startPrint;
+  printWindow.document.open();
+  printWindow.document.write(`<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><title>门诊病历_${esc(S.caseId||'')}</title><link rel="stylesheet" href="/static/css/dsh.css"><style>
+    :root{--paper-ink:#20211f;--paper-muted:#62665f;--paper-line:#d9dbd5;--paper-accent:#b85c3f;}
+    @page{size:A4 portrait;margin:15mm 16mm 17mm;}
+    html,body{margin:0;min-height:100%;background:#ecebe7;color:var(--paper-ink);}
+    body{padding:28px 20px;font-family:"Noto Serif SC","Source Han Serif SC","Microsoft YaHei",serif;}
+    .print-report{display:block!important;box-sizing:border-box;width:min(100%,186mm);min-height:257mm;margin:0 auto;padding:20mm 18mm 18mm;background:#fff;box-shadow:0 10px 30px rgba(35,36,32,.12);font-size:11pt;line-height:1.75;}
+    .print-head{padding-bottom:14px!important;margin-bottom:16px!important;border-bottom:2px solid var(--paper-ink)!important;}
+    .print-title-row{display:flex!important;align-items:flex-end;justify-content:space-between;gap:20px;}
+    .print-head h2{font-family:"Noto Serif SC","Source Han Serif SC","SimSun",serif!important;font-size:25pt!important;letter-spacing:.16em!important;font-weight:600!important;}
+    .print-case-id{margin-top:10px!important;text-align:left!important;font-size:10.5pt!important;color:var(--paper-muted)!important;}
+    .print-case-id strong{color:var(--paper-ink)!important;font-family:"Cascadia Mono","Microsoft YaHei",monospace!important;}
+    .print-intro{margin:0 0 20px!important;padding:9px 12px!important;border-left:3px solid var(--paper-accent)!important;background:#faf7f3!important;color:var(--paper-muted)!important;}
+    .print-section{break-inside:avoid;margin:0 0 18px!important;padding:0 0 14px!important;border-bottom:1px solid var(--paper-line)!important;}
+    .print-section h3{margin:0 0 10px!important;padding:0 0 6px!important;border-bottom:1px solid #ecece8!important;font-family:"Noto Serif SC","Source Han Serif SC","SimSun",serif!important;font-size:14pt!important;letter-spacing:.03em;}
+    .print-section h3::before{width:3px!important;height:17px!important;background:var(--paper-accent)!important;}
+    .print-section .field{margin:5px 0!important;}
+    .print-section .def{display:grid;grid-template-columns:8em 1fr;column-gap:12px;margin:6px 0!important;padding:5px 0!important;border-bottom:1px dotted var(--paper-line)!important;}
+    .print-section .def dt{color:var(--paper-muted);font-weight:600;}
+    .print-section .def dd{margin:0;}
+    .print-section .rec{margin:7px 0!important;padding:8px 10px!important;border:1px solid var(--paper-line)!important;border-radius:3px!important;background:#fcfcfa!important;}
+    .print-section ul.bullet{margin:6px 0 6px 20px!important;padding-left:14px;}
+    .print-section li{margin-bottom:5px!important;}
+    .print-step{gap:12px!important;margin:7px 0!important;padding:8px 0!important;border-bottom:1px dotted var(--paper-line)!important;}
+    .print-step-index{flex-basis:26px!important;width:26px;height:26px!important;border:1px solid var(--paper-accent)!important;color:var(--paper-accent)!important;line-height:24px!important;}
+    .print-step-copy strong{font-size:11.5pt!important;}
+    .print-step-detail{color:var(--paper-muted)!important;font-size:10pt!important;}
+    .print-disclaimer{margin-top:22px!important;padding-top:10px!important;border-top:1px solid var(--paper-line)!important;color:#777a73!important;font-size:8.5pt!important;}
+    @media print{
+      html,body{background:#fff!important;}
+      body{padding:0!important;}
+      .print-report{width:auto!important;min-height:0!important;margin:0!important;padding:0!important;box-shadow:none!important;}
+    }
+  </style></head><body>${source.outerHTML}</body></html>`);
+  printWindow.document.close();
+  // 某些浏览器不会为 document.write 打开的窗口派发 load，保留短延时兜底。
+  setTimeout(startPrint, 500);
 }
 
 /* ===================== P10 就诊后资料更新 ===================== */
@@ -1973,49 +2060,7 @@ function primaryDepartmentOption(){
   return {code:code||primary, name:primary};
 }
 function renderReviewSubmission(){
-  const box = document.getElementById('review-routing');
-  if(box && S.reportView === 'full'){
-    box.innerHTML='';
-    box.classList.add('hide');
-    return;
-  }
-  const primary = primaryDepartmentOption();
-  if(!box || !S.caseId || !primary.name){
-    if(box){ box.innerHTML=''; box.classList.add('hide'); }
-    return;
-  }
-  box.classList.remove('hide');
-  const route = S.routing || {};
-  const requested = route.requested_department || {};
-  if(route.status === 'submitted'){
-    const submittedName = requested.name || departmentNameForCode(requested.code) || primary.name;
-    box.innerHTML = `<div class="banner ok"><strong>已提交至${esc(submittedName)}，等待医生审核</strong>
-      <div class="tiny" style="margin-top:4px;">病例只对${esc(submittedName)}医生可见；如需调整，请先联系平台管理员。</div>
-      <div class="actions" style="justify-content:flex-start;margin-top:8px;"><button class="ghost mini" type="button" onclick="goRecords()">查看我的病历记录</button></div></div>`;
-    return;
-  }
-  const options = [];
-  (S.departments||[]).forEach(item=>{
-    if(!item || !item.code || !item.name || options.some(x=>x.code===item.code)) return;
-    options.push({code:String(item.code), name:String(item.name)});
-  });
-  if(primary.name && !options.some(item=>item.name===primary.name)) options.unshift(primary);
-  const selected = S.reviewDepartment || primary.code || (options[0]||{}).code;
-  const error = S.reviewSubmissionError
-    ? `<div class="banner danger" style="margin-top:var(--sp-12);">${esc(S.reviewSubmissionError)}</div>` : '';
-  box.innerHTML = `<div class="ai-block" style="margin-top:var(--sp-12);">
-      <div class="rt">确认接收科室</div>
-      <p style="margin:6px 0;">系统建议先看 <strong>${esc(primary.name)}</strong>。你可以根据实际情况调整主责科室。</p>
-      <div class="field"><label for="review-department">主责科室</label>
-        <select id="review-department" style="flex:1;">${options.map(item=>
-          `<option value="${esc(item.code)}"${item.code===selected?' selected':''}>${esc(item.name)}</option>`).join('')}</select></div>
-      <div class="tiny">提交后<strong>仅该科室医生可见</strong>，其他科室不会自动看到完整病例。</div>
-      <div class="actions" style="justify-content:flex-start;margin-top:var(--sp-12);">
-        <button class="primary" type="button" onclick="submitCaseForReview()"${S.reviewSubmitBusy?' disabled aria-busy="true"':''}>${S.reviewSubmitBusy?'正在提交…':'确认并提交给该科室医生'}</button>
-      </div>${error}
-    </div>`;
-  const select = document.getElementById('review-department');
-  if(select) select.addEventListener('change', ()=>{ S.reviewDepartment = select.value; });
+  // 患者端不展示接收科室或提交控件，报告生成后由系统自动提交。
 }
 async function loadDepartments(){
   if(S.departmentLoading || S.departments.length) return S.departments;
@@ -2035,17 +2080,17 @@ async function loadDepartments(){
 }
 async function submitCaseForReview(){
   if(S.reviewSubmitBusy || !S.caseId) return;
-  const select = document.getElementById('review-department');
-  const departmentCode = (select ? select.value : S.reviewDepartment || primaryDepartmentOption().code || '').trim();
+  let departmentCode = (primaryDepartmentOption().code || '').trim();
+  if(!departmentCode || departmentCode === primaryDepartmentOption().name){
+    await loadDepartments();
+    departmentCode = (primaryDepartmentOption().code || '').trim();
+  }
   if(!departmentCode){
-    S.reviewSubmissionError = '请选择一个主责科室。';
-    renderReviewSubmission();
     return;
   }
   S.reviewDepartment = departmentCode;
   S.reviewSubmissionError = '';
   S.reviewSubmitBusy = true;
-  renderReviewSubmission();
   try{
     const r = await api(`/api/v2/case/${S.caseId}/submit-review`, {
       method:'POST', body:JSON.stringify({department_code:departmentCode})
@@ -2062,8 +2107,11 @@ async function submitCaseForReview(){
     S.reviewSubmissionError = '网络异常，未能提交；请稍后重试。';
   }finally{
     S.reviewSubmitBusy = false;
-    renderReviewSubmission();
   }
+}
+async function autoSubmitCaseForReview(){
+  if(S.routing && S.routing.status === 'submitted') return;
+  await submitCaseForReview();
 }
 
 /* ===================== P6 分诊结果（患者只看就医方向） ===================== */
@@ -2075,20 +2123,17 @@ function renderTriage(){
   if(!p){
     html = '<div class="banner warn">暂时无法确定优先就医方向，请补充资料或直接线下咨询医生。</div>';
   } else {
-    html += `<div class="ai-block">
-      <div class="rt">建议先看</div>
-      <div style="font-weight:600;font-size:18px;margin-top:6px;">🏥 ${esc(p.department)}</div>
-      <div class="tiny" style="margin-top:4px;">${roleLabel(p.role)}：先由这个科室了解你的主要问题。</div>
+    html += `<div class="triage-primary">
+      <span class="triage-primary-label">建议先看</span>
+      <span class="triage-primary-department">🏥 ${esc(p.department)}</span>
+      <span class="triage-primary-reason">${roleLabel(p.role)} · 先由这个科室了解你的主要问题</span>
     </div>`;
     if(sec.length){
-      html += `<div class="col" style="margin-top:var(--sp-12);">
+      html += `<div class="col stage3-secondary">
         <div class="rt">可能还需要一起看的科室</div>
         <div class="chips" style="margin-top:var(--sp-8);">`+
         sec.map(d=>`<span class="chip">${esc(d.department)} · ${roleLabel(d.role)}</span>`).join('')+
         `</div></div>`;
-    }
-    if(t.needs_mdt){
-      html += `<div class="tiny" style="margin-top:var(--sp-12);">这次可能需要多个科室共同评估，后续建议会按就医顺序整理。</div>`;
     }
   }
   document.getElementById('triage-body').innerHTML=html;
@@ -2099,64 +2144,24 @@ function renderTriage(){
 /* ===================== P7 就医路径（每一步直接挂对应任务） ===================== */
 function renderPath(){
   const p=S.path||{};
-  const steps=p.steps||[], tasks=p.tasks||[];
-  const priorityLabel = s => ({high:'重要',medium:'常规',low:'可选'}[s]||'常规');
-  const stateLabel = s => ({todo:'待办',doing:'进行中',done:'已完成',cancelled:'已取消',reopened:'需重做'}[s]||'待办');
-  const taskForStep = (task, step) => {
-    const source = String(task.source||'');
-    if(source === 'path:followup') return step.step_id === 'S4';
-    if(source.includes(':checks')) return step.step_id === 'S2';
-    return source.startsWith('path:') && step.step_id === 'S1';
-  };
-  const taskHtml = task => {
-    const st = task.state||'todo';
-    let button='';
-    if(st==='todo') button=`<button class="ghost" style="padding:2px 10px;font-size:12px;" onclick="updateTask('${task.task_id}','doing')">开始</button>`;
-    else if(st==='doing') button=`<button class="ghost" style="padding:2px 10px;font-size:12px;" onclick="updateTask('${task.task_id}','done')">完成</button>`;
-    else if(st==='done') button=`<button class="ghost" style="padding:2px 10px;font-size:12px;" onclick="updateTask('${task.task_id}','reopened')">重做</button>`;
-    else if(st==='reopened') button=`<button class="ghost" style="padding:2px 10px;font-size:12px;" onclick="updateTask('${task.task_id}','doing')">继续</button>`;
-    return `<div class="q" style="padding:12px 14px;margin-top:8px;">
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <span class="pill ${task.priority==='high'?'warn':''}">${priorityLabel(task.priority)}</span>
-        <span class="pill">${esc(task.type||'待办事项')}</span>
-        <span class="pill ${st==='done'?'ok':''}">${stateLabel(st)}</span>
-      </div>
-      <div style="margin-top:6px;">${esc(task.content||'')}</div>
-      <div style="margin-top:6px;text-align:right;">${button}</div>
-    </div>`;
-  };
-
-  let html='<div class="path-list"><div class="rt">就医路径与每一步要做的事</div>';
-  if(steps.length){
-    const used = new Set();
-    steps.forEach((s, stepIndex)=>{
-      const related = tasks.filter(t=>taskForStep(t,s));
-      related.forEach(t=>used.add(t.task_id));
-      html+=`<div class="field" style="display:block;margin-top:var(--sp-12);">
-        <div style="display:flex;gap:var(--sp-8);align-items:center;">
-          <span class="pill ${s.kind==='visit'?'ok':''}">第 ${stepIndex+1} 步</span>
-          <strong>${esc(s.title)}</strong>
-          ${s.parallel?'<span class="tiny">（可并行）</span>':''}
-        </div>
-        <div class="tiny" style="margin-top:6px;">${esc(s.detail||'')}</div>
-        ${s.condition?`<div class="tiny" style="color:var(--warn);margin-top:4px;">满足条件时：${esc(s.condition)}</div>`:''}
-        ${s.requires_doctor?'<div class="tiny" style="color:var(--info);margin-top:4px;">是否进行由医生决定</div>':''}
-        ${related.length?`<div class="rt" style="margin-top:10px;">路径中的任务</div>${related.map(taskHtml).join('')}`:''}
-      </div>`;
+  const steps = Array.isArray(p.steps) ? p.steps : [];
+  if(!steps.length){
+    document.getElementById('path-body').innerHTML='<div class="banner warn">尚未生成就医路径：先完成就医方向分析。</div>';
+    return;
+  }
+  const tasks = Array.isArray(p.tasks) ? p.tasks : [];
+  const pathSteps = steps.map(step=>{
+    const related = tasks.filter(task=>{
+      const source=String(task.source||'');
+      if(source==='path:followup') return step.step_id==='S4';
+      if(source.includes(':checks')) return step.step_id==='S2';
+      return source.startsWith('path:') && step.step_id==='S1';
     });
-    const leftovers = tasks.filter(t=>!used.has(t.task_id));
-    if(leftovers.length){
-      html+=`<div class="field" style="display:block;margin-top:var(--sp-12);"><div class="rt">其他待办事项</div>${leftovers.map(taskHtml).join('')}</div>`;
-    }
-  } else {
-    html+='<div class="banner warn">尚未生成就医路径：先完成就医方向分析。</div>';
-  }
-  if(!tasks.length && steps.length) html+='<div class="tiny" style="margin-top:var(--sp-12);">当前没有额外待办事项。</div>';
-  if((p.notes||[]).length){
-    html+=`<div class="banner warn" style="margin-top:12px;">${p.notes.map(esc).join('<br>')}</div>`;
-  }
-  html+='</div>';
-  document.getElementById('path-body').innerHTML=html;
+    const taskText = related.map(task=>String(task.content||'').trim()).filter(Boolean).join('；');
+    const detail = [step.detail, taskText].map(value=>String(value||'').trim()).filter(Boolean).join('；');
+    return Object.assign({}, step, {detail});
+  });
+  document.getElementById('path-body').innerHTML = patientPathFlowValue(pathSteps);
 }
 
 function finishFlow(){
@@ -2198,8 +2203,6 @@ function renderMdt(){
     if(m.notes) html+=m.notes.map(n=>`<div class="tiny">· ${esc(n)}</div>`).join('');
     document.getElementById('mdt-body').innerHTML=html; return;
   }
-
-  html+=`<p class="muted">相关科室根据你提供的资料整理了下面的参考提示，帮助你准备线下就医。</p>`;
 
   const unavailable=(m.analyses||[]).filter(a=>a.status!=='ok');
   analyses.forEach(a=>{

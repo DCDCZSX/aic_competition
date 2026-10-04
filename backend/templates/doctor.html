@@ -89,7 +89,15 @@
   @media (max-width:960px){ #review-category-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.publish-summary-grid{grid-template-columns:repeat(3,minmax(0,1fr));}}
   @media (max-width:720px){.publish-opinion-form{grid-template-columns:1fr;}.publish-opinion-form .opinion-submit{width:100%;}}
   @media (max-width:560px){ #review-category-grid{grid-template-columns:1fr;}.review-level-summary,.publish-summary-grid{grid-template-columns:1fr;}}
-  .queue-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;}
+  .queue-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:0;}
+  .queue-summary{display:grid;gap:10px;margin:14px 0 18px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--surface-subtle);}
+  .queue-page-note{font-size:var(--body-3);line-height:1.5;color:var(--ink2);}
+  .queue-tier-summary{display:grid;grid-template-columns:repeat(7,minmax(86px,1fr));gap:8px;}
+  .queue-tier-stat{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0;padding:8px 10px;border:1px solid var(--line);border-radius:var(--br-6);background:var(--gray-000);}
+  .queue-tier-stat span{font-size:var(--body-3);color:var(--ink2);white-space:nowrap;}
+  .queue-tier-stat strong{font-size:var(--body-1);line-height:1;color:var(--ink);}
+  @media (max-width:960px){.queue-tier-summary{grid-template-columns:repeat(4,minmax(110px,1fr));}}
+  @media (max-width:560px){.queue-tier-summary{grid-template-columns:repeat(2,minmax(0,1fr));}}
   .doctor-card-accent{margin:0 0 var(--sp-16);border-left:3px solid var(--accent);}
   .doctor-card-info{margin:0 0 var(--sp-16);border-left:3px solid var(--info);}
   .inline-between{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;}
@@ -99,8 +107,20 @@
   .mdt-packet-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px;}
   .opinion-fields{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
   .doctor-case-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:var(--sp-8);padding:4px 0 8px;}
+  .back-to-queue{min-width:136px;padding:8px 16px;font-size:var(--body-3);font-weight:650;box-shadow:0 2px 8px rgba(177,82,57,.16);}
+  .doctor-case-header-copy{min-width:0;}
+  .doctor-case-title-row{display:flex;align-items:center;gap:clamp(24px,6vw,72px);width:100%;flex-wrap:wrap;}
   .doctor-case-header[data-compact="doctor-case-header-compact"] #case-heading{margin:0;font-size:var(--headline-3);line-height:1.15;}
-  .doctor-case-header-meta{margin-top:4px;line-height:1.35;}
+  .doctor-case-context-strip{display:inline-flex;align-items:center;gap:12px;max-width:100%;margin-left:auto;padding:8px 12px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--surface-subtle);color:var(--ink2);font-size:var(--body-3);line-height:1.35;}
+  .doctor-case-context-id{font-weight:650;color:var(--ink);}
+  .doctor-case-context-fact{display:inline-flex;align-items:baseline;gap:5px;white-space:nowrap;}
+  .doctor-case-context-label{color:var(--ink3);font-size:var(--micro);}
+  .doctor-case-context-divider{width:1px;height:18px;background:var(--line);}
+  @media (max-width:560px){
+    .doctor-case-title-row{gap:10px;}
+    .doctor-case-context-strip{display:flex;width:100%;box-sizing:border-box;flex-wrap:wrap;margin-left:0;}
+    .doctor-case-context-divider{display:none;}
+  }
   .doctor-case-header .lede{max-width:var(--text-width-body);}
   .doctor-case-layout{display:grid;grid-template-columns:180px minmax(0,1fr);gap:var(--sp-24);align-items:start;}
   .doctor-case-nav{display:flex;flex-direction:column;gap:3px;position:sticky;top:var(--sp-16);min-width:0;padding-right:var(--sp-12);border-right:1px solid var(--line);}
@@ -110,7 +130,6 @@
   body.doctor-case-mode #doctor-shell.has-case{padding-top:12px;}
   body.doctor-case-mode .doctor-case-header{margin-bottom:0;padding:0;min-height:0;}
   body.doctor-case-mode .doctor-case-header[data-compact="doctor-case-header-compact"] #case-heading{font-size:clamp(24px,20px + .55vw,30px);line-height:1.1;}
-  body.doctor-case-mode .doctor-case-header-meta{margin-top:1px;line-height:1.2;}
   @media (min-width:961px){
     body.doctor-case-mode{overflow:hidden;}
     #doctor-shell.has-case{height:calc(100vh - var(--nav-h));min-height:0;overflow:hidden;padding-bottom:var(--sp-24);}
@@ -378,9 +397,6 @@
           <span class="name">多学科就医智助系统</span>
         </a>
         <span class="tag">医生工作台</span>
-        <span class="abr-divider"></span>
-        <span class="abr-case mono" id="ctx">未选择病例</span>
-        <span class="pill gray" id="badge">AI 生成 · 尚未经医生审核</span>
       </div>
       <div class="ab-right">
         <span class="ident muted" id="ident">—</span>
@@ -402,11 +418,19 @@
 
     <main class="work">
       <div class="doctor-case-header" data-compact="doctor-case-header-compact">
-        <div>
-          <h1 id="case-heading">病例审阅</h1>
-          <div id="case-stage-hint" class="tiny doctor-case-header-meta" role="status" aria-live="polite"></div>
+        <div class="doctor-case-header-copy">
+          <div class="doctor-case-title-row">
+            <h1 id="case-heading">病例审阅</h1>
+            <div class="doctor-case-context-strip" role="status" aria-live="polite">
+              <strong id="case-context-id" class="doctor-case-context-id mono">未选择病例</strong>
+              <span class="doctor-case-context-divider" aria-hidden="true"></span>
+              <span class="doctor-case-context-fact"><span class="doctor-case-context-label">类型</span><strong id="case-context-type">—</strong></span>
+              <span class="doctor-case-context-divider" aria-hidden="true"></span>
+              <span class="doctor-case-context-fact"><span class="doctor-case-context-label">可靠性</span><strong id="case-context-reliability">—</strong></span>
+            </div>
+          </div>
         </div>
-        <button type="button" class="ghost btn-sm" onclick="go('list')">返回病例队列</button>
+        <button type="button" class="primary btn-sm back-to-queue" onclick="go('list')">← 返回病例队列</button>
       </div>
       <div class="doctor-case-layout">
       <nav class="doctor-case-nav view-nav" id="nav" aria-label="病例处理阶段">
@@ -420,7 +444,6 @@
       <div class="doctor-case-main">
       <section id="s-list" class="card">
         <h2>待审队列（风险优先）</h2>
-        <p id="doctor-scope-note" class="tiny" role="status" aria-live="polite"></p>
         <div class="queue-toolbar">
           <select id="f-state" style="width:auto;" onchange="setQueueState(this.value)">
             <option value="">全部状态</option>
@@ -440,7 +463,10 @@
           </select>
           <button class="ghost mini" onclick="loadList({keepPage:true})">刷新</button>
           <button class="ghost mini" onclick="analyzePending()">批量补齐分析</button>
-          <span class="tiny" id="list-note"></span>
+        </div>
+        <div class="queue-summary" aria-live="polite">
+          <div id="list-note" class="queue-page-note"></div>
+          <div id="queue-tier-summary" class="queue-tier-summary" aria-label="审核分类数量"></div>
         </div>
         <div id="list-body"><div class="skeleton">加载中…</div></div>
         <div id="list-pager" class="queue-pager"></div>
@@ -559,17 +585,6 @@ function showLoginError(text){
   const user = $('login-user');
   if(user) user.focus();
 }
-function renderDoctorScope(){
-  const note = $('doctor-scope-note');
-  if(!note) return;
-  const me = S.me || {};
-  if(me.access_scope === 'all'){
-    note.textContent = '全量审核范围：可查看所有病例';
-    return;
-  }
-  const department = me.department_name || me.department_code || '未配置科室';
-  note.textContent = `当前科室：${department} · 仅显示已授权病例`;
-}
 async function logout(){
   clearInterval(S.mdtTimer); S.mdtTimer=null; S.mdtPlayback=null;
   await api('/api/logout', {method:'POST', body:JSON.stringify({token:S.token})});
@@ -577,7 +592,10 @@ async function logout(){
   S.token=''; S.me=null; $('app').classList.add('hide'); $('login').classList.remove('hide');
   document.body.classList.remove('doctor-queue-mode');
   document.body.classList.remove('doctor-case-mode');
-  $('ctx').textContent='未选择病例'; enableCaseNav(false); S.caseId='';
+  $('case-context-id').textContent='未选择病例';
+  $('case-context-type').textContent='—';
+  $('case-context-reliability').textContent='—';
+  enableCaseNav(false); S.caseId='';
   $('doctor-shell').classList.remove('has-case');
   document.body.classList.remove('doctor-case-mode');
   const rf=$('rail-filters'); if(rf) rf.innerHTML='';
@@ -594,7 +612,6 @@ function enterApp(){
   const department = S.me.department_name || S.me.department_code;
   $('ident').textContent = (S.me.label||'模拟审核员') + ' · ' + S.me.username +
     (department ? ' · ' + department : '');
-  renderDoctorScope();
   loadList({resetPage:true});
 }
 /* 跨页会话恢复：已有医生会话可复用；非医生会话忽略 */
@@ -617,7 +634,6 @@ function go(screen){
     document.body.classList.remove('doctor-case-mode');
   }
   S.screen = screen;
-  updateWorkflowStage();
   document.body.classList.toggle('doctor-queue-mode', screen==='list');
   document.body.classList.toggle('doctor-case-mode', screen!=='list' && !!S.caseId);
   ['list','overview','triage','mdt','review','history'].forEach(s=>{
@@ -713,12 +729,17 @@ async function loadList(options){
   if($('f-sort')) $('f-sort').value=sort;
   if($('f-page-size')) $('f-page-size').value=String(pageSize);
   const queueSummary=S.queueMeta.reviewSummary||{};
-  const tierNote = S.queue.total
-    ? `必审 ${Number(queueSummary.required||0)} · 建议抽查 ${Number(queueSummary.sample||0)} · 自动处理 ${Number(queueSummary.automatic||0)} · 高风险 ${Number(queueSummary.high_risk||0)} · 冲突 ${Number(queueSummary.conflict||0)} · 分析失败 ${Number(queueSummary.analysis_failed||0)} · 重开 ${Number(queueSummary.reopened_items||0)}`
-    : '';
   $('list-note').textContent = S.queue.total
-    ? `第 ${S.queue.page} 页 · 风险优先展示高风险和待医生处理项 · ${tierNote}`
+    ? `第 ${S.queue.page} 页 · 风险优先展示高风险和待医生处理项`
     : '暂无匹配病例';
+  const tierStats = [
+    ['必审', 'required'], ['建议抽查', 'sample'], ['自动处理', 'automatic'],
+    ['高风险', 'high_risk'], ['冲突', 'conflict'], ['分析失败', 'analysis_failed'],
+    ['重开', 'reopened_items'],
+  ];
+  $('queue-tier-summary').innerHTML = S.queue.total
+    ? tierStats.map(([label, key]) => `<div class="queue-tier-stat"><span>${label}</span><strong>${Number(queueSummary[key]||0)}</strong></div>`).join('')
+    : '';
   renderQueueFilters();
   if(!S.cases.length){
     $('list-body').innerHTML = '<div class="banner warn">暂无匹配病例。可切换筛选条件，或先在患者端提交一份就诊资料。</div>';
@@ -788,18 +809,16 @@ async function openCase(caseId){
   $('doctor-shell').classList.add('has-case');
   document.body.classList.add('doctor-case-mode');
   const p = (S.caseData.payload||{}), t = p.triage||{};
-  $('ctx').textContent = `病例 #${caseId}　${t.behavior_type?('类型 '+t.behavior_type):''}　可靠性 ${(t.reliability||{}).level||'—'}　${S.review.published?'已审核':'未审核'}`;
-  updateBadge();
+  renderCaseContext(t);
   enableCaseNav(true);
   renderReview();          // 右轨审核面板随病例刷新（含进度条）
   go('overview');
 }
-function updateBadge(){
-  const published = S.review && S.review.published;
-  $('badge').className = 'pill ' + (published?'ok':'gray');
-  $('badge').textContent = published
-    ? ('已由 ' + (S.review.review.published_by||'医生') + ' 审核确认 · v' + S.review.review.version)
-    : 'AI 生成 · 尚未经医生审核';
+function renderCaseContext(triage){
+  const t = triage || {};
+  $('case-context-id').textContent = S.caseId ? `病例 #${S.caseId}` : '未选择病例';
+  $('case-context-type').textContent = t.behavior_type || '—';
+  $('case-context-reliability').textContent = (t.reliability||{}).level || '—';
 }
 
 /* ===================== MDT 启动判断 ===================== */
@@ -1098,20 +1117,6 @@ function renderOverview(){
       </div>
     </section>`;
 }
-function updateWorkflowStage(){
-  const hint = $('case-stage-hint');
-  if(!hint || !S.caseId){ return; }
-  const p = (S.caseData&&S.caseData.payload)||{}, triage = p.triage||{};
-  const screening = (S.review&&S.review.mdt_screening)||{};
-  const summary = (S.review&&S.review.summary)||{};
-  let stage = '当前阶段：分流确认';
-  if(triage.primary&&triage.primary.department && screening.status!=='decided') stage = '当前阶段：MDT 协作初筛';
-  else if(triage.primary&&triage.primary.department && Number(summary.pending||0)>0) stage = '当前阶段：报告审核';
-  else if(S.review&&S.review.published) stage = '当前阶段：已发布，可查看历史记录';
-  else if(triage.primary&&triage.primary.department) stage = '当前阶段：报告审核';
-  hint.textContent = stage;
-}
-
 /* ===================== 屏 C：分诊依据 ===================== */
 function renderTriage(){
   const p = S.caseData.payload||{}, t = p.triage||{};
@@ -1609,9 +1614,9 @@ async function submitOpinion(pfx){
 }
 async function refreshHeader(){
   const rev = await api('/api/v2/case/'+S.caseId+'/review');
-  if(rev.status===200){ S.review = rev.data; updateBadge();
+  if(rev.status===200){ S.review = rev.data;
     const p=(S.caseData.payload||{}), t=p.triage||{};
-    $('ctx').textContent = `病例 #${S.caseId}　${t.behavior_type?('类型 '+t.behavior_type):''}　可靠性 ${(t.reliability||{}).level||'—'}　${(S.review.published?'已审核':'未审核')}`;
+    renderCaseContext(t);
   }
 }
 
@@ -1632,7 +1637,16 @@ document.getElementById('modal').addEventListener('keydown', function(e){
 });
 
 /* ===================== 屏 G：审核记录与版本 ===================== */
+function resetHistoryScroll(){
+  // 桌面端病例内容在 .doctor-case-main 内滚动；移动端则由窗口滚动。
+  // 历史详情会替换 hist-body，必须把两种滚动容器都带回详情顶部，
+  // 否则“返回历史记录”按钮可能留在当前视口上方而无法点击。
+  const host = document.querySelector('.doctor-case-main');
+  if(host) host.scrollTop = 0;
+  if(window.scrollTo) window.scrollTo(0, 0);
+}
 function renderHistory(){
+  resetHistoryScroll();
   const h = S.audit || {};
   const decisions = h.decisions||[];
   const timeline = h.timeline||[];
@@ -1668,11 +1682,13 @@ function renderHistory(){
 function openHistoryDecision(index){
   const d=(S.audit&&S.audit.decisions||[])[index]; if(!d) return;
   $('hist-body').innerHTML=`<div class="history-detail"><button class="primary review-detail-back" onclick="renderHistory()">← 返回历史记录</button><h3>${esc(d.action_label||'审核操作')} · ${esc(d.target_label||d.target_type||'条目')}</h3><div class="history-decision-meta">${esc(d.reviewer||'医生')} · ${esc(d.created_at||'')}</div>${d.before?`<h4>AI 原稿</h4><div class="history-detail-copy">${esc(d.before)}</div>`:''}${d.after?`<h4>医生版本</h4><div class="history-detail-copy">${esc(d.after)}</div>`:''}${d.reason?`<h4>处理理由</h4><div class="history-detail-copy">${esc(d.reason)}</div>`:''}</div>`;
+  resetHistoryScroll();
 }
 function openHistoryVersion(version){
   const v=(S.audit&&S.audit.versions||[]).find(item=>Number(item.version)===Number(version)); if(!v) return;
   const report=v.summary||v.full||v.report_json;
   $('hist-body').innerHTML=`<div class="history-detail"><button class="primary review-detail-back" onclick="renderHistory()">← 返回历史记录</button><h3>报告版本 v${esc(v.version)}</h3><div class="history-decision-meta">${esc(v.published_by||'医生')} · ${esc(v.published_at||'—')}</div>${report?`<div class="history-detail-copy">${esc(typeof report==='string'?report:JSON.stringify(report,null,2))}</div>`:'<div class="doctor-empty-state">该版本暂无报告正文。</div>'}</div>`;
+  resetHistoryScroll();
 }
 window.openHistoryDecision=openHistoryDecision;
 window.openHistoryVersion=openHistoryVersion;
