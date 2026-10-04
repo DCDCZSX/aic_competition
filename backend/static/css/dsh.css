@@ -423,37 +423,35 @@ ul.bullet li{font-size:var(--caption);color:var(--ink2);margin-bottom:4px;}
             width:100%;max-width:560px;box-shadow:var(--shadow-lg);}
 .skeleton{color:var(--ink3);font-size:var(--caption);}
 
-/* 4.13 登录页（两端共用，全屏分栏：左=进入方式，右=产品说明） */
+/* 4.13 登录页（两端共用，单列聚焦） */
 .auth{
-  display:grid;min-height:100vh;background:var(--base);
-  grid-template-columns:1fr;grid-template-rows:1fr auto;
+  display:flex;min-height:100vh;background:var(--base);flex-direction:column;
 }
-@media (min-width:1000px){
-  .auth{grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);}
-}
-.auth-main{display:flex;align-items:center;justify-content:center;padding:var(--sp-48) var(--page-pad);}
-.auth-panel{width:100%;max-width:460px;}
-.auth-brand{display:inline-flex;align-items:center;gap:10px;color:var(--ink);margin-bottom:var(--sp-32);}
-.auth-brand:hover{text-decoration:none;}
-.auth-brand .name{font-family:var(--font-display);font-size:18px;font-weight:500;}
+.auth-topbar{width:100%;min-height:64px;box-sizing:border-box;padding:0 var(--page-pad);display:flex;align-items:center;justify-content:space-between;gap:var(--sp-16);border-bottom:1px solid var(--line);background:rgba(250,249,245,.96);}
+.auth-topbar-brand{display:inline-flex;align-items:center;gap:10px;color:var(--ink);font-family:var(--font-display);font-size:17px;font-weight:500;white-space:nowrap;}
+.auth-topbar-brand:hover{text-decoration:none;}
+.auth-topbar-brand svg{display:block;flex:0 0 auto;}
+.auth-home-link{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 var(--sp-16);border:1px solid var(--line);border-radius:var(--br-8);color:var(--ink);font-size:var(--caption);font-weight:600;white-space:nowrap;}
+.auth-home-link:hover{border-color:var(--accent);background:var(--gray-050);text-decoration:none;}
+.auth-main{width:100%;flex:1;display:flex;align-items:center;justify-content:center;padding:var(--sp-32) var(--page-pad);box-sizing:border-box;}
+.auth-panel{width:100%;max-width:420px;background:var(--gray-000);border:1px solid var(--line);border-radius:var(--br-16);padding:clamp(var(--sp-24),5vw,var(--sp-48));box-shadow:var(--shadow-sm);}
 .auth-panel h1{font-size:var(--headline-3);margin-bottom:var(--sp-8);}
 .auth-panel > .muted{font-size:var(--body-3);margin-bottom:var(--sp-24);}
-.auth-side{
-  background:var(--gray-100);border-top:1px solid var(--line);
-  padding:var(--sp-48) var(--page-pad);display:flex;flex-direction:column;justify-content:center;
+.auth-form{display:grid;gap:var(--sp-12);margin-top:var(--sp-24);}
+.auth-form input{width:100%;}
+.auth-form button{width:100%;margin-top:var(--sp-4);}
+.auth-secondary{display:block;margin:var(--sp-16) auto 0;padding:0;border:0;background:transparent;color:var(--accent);font-size:var(--caption);cursor:pointer;}
+.auth-secondary:hover{text-decoration:underline;text-underline-offset:3px;}
+.auth-switch{display:flex;align-items:center;justify-content:center;width:100%;min-height:44px;margin-top:var(--sp-24);border:1px solid var(--line);border-radius:var(--br-8);color:var(--ink);font-size:var(--caption);font-weight:600;}
+.auth-switch:hover{border-color:var(--accent);background:var(--gray-050);text-decoration:none;}
+.auth-panel .banner{margin-top:var(--sp-16);}
+@media (max-width:520px){
+  .auth-topbar{min-height:56px;padding:0 var(--sp-16);}
+  .auth-topbar-brand{font-size:15px;gap:8px;}
+  .auth-topbar-brand svg{width:24px;height:24px;}
+  .auth-home-link{min-height:38px;padding:0 var(--sp-12);}
+  .auth-main{padding:var(--sp-24) var(--sp-16);}
 }
-@media (min-width:1000px){.auth-side{border-top:0;border-left:1px solid var(--line);}}
-.auth-side-inner{width:100%;max-width:560px;margin:0 auto;}
-.auth-side h2{font-size:var(--headline-5);margin-bottom:var(--sp-16);}
-.auth-points{display:grid;gap:var(--sp-12);}
-.auth-points li{display:flex;gap:10px;font-size:var(--caption);color:var(--ink2);}
-.auth-points .n{font-family:var(--font-mono);font-size:var(--micro);color:var(--accent);flex:0 0 22px;}
-.auth-foot{
-  grid-column:1/-1;border-top:1px solid var(--line);background:var(--gray-050);
-  padding:var(--sp-16) var(--page-pad);display:flex;gap:var(--sp-16);
-  justify-content:space-between;align-items:center;flex-wrap:wrap;
-}
-.auth-foot p{font-size:var(--micro);color:var(--ink3);max-width:110ch;}
 .brand{text-align:center;margin-bottom:var(--sp-24);}
 .brand .logo{font-size:30px;line-height:1;}
 .brand h1{font-size:var(--headline-3);margin:var(--sp-8) 0 4px;}
@@ -469,14 +467,6 @@ ul.bullet li{font-size:var(--caption);color:var(--ink2);margin-bottom:4px;}
 .role-card .d{font-size:var(--micro);color:var(--ink2);line-height:1.55;margin-top:2px;}
 .role-card .go{margin-left:auto;color:var(--ink3);font-size:18px;}
 details summary{cursor:pointer;color:var(--accent);font-size:var(--caption);margin:6px 0;}
-.auth-preview{
-  background:var(--gray-000);border:1px solid var(--line);border-radius:var(--br-16);
-  padding:var(--sp-16);margin-top:var(--sp-24);box-shadow:var(--shadow-sm);
-}
-.auth-preview .ct{font-size:var(--micro);color:var(--ink3);margin-bottom:8px;}
-.auth-preview .pv-row{display:flex;justify-content:space-between;gap:8px;padding:5px 0;
-  border-bottom:1px dashed var(--line);font-size:var(--micro);}
-.auth-preview .pv-row:last-child{border-bottom:0;}
 
 /* 医生端队列模式：病例列表需要完整横向空间，详情模式再恢复审核侧栏。 */
 .doctor-queue-mode .rail-right{display:none;}

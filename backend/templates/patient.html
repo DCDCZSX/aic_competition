@@ -126,77 +126,48 @@
 </head>
 <body>
 
-<!-- ===================== 登录页（屏 0）：全屏分栏，左=进入方式，右=产品说明 ===================== -->
+<!-- ===================== 登录页（屏 0） ===================== -->
 <div id="login" class="auth">
+  <header class="auth-topbar">
+    <a class="auth-topbar-brand" href="/" aria-label="返回多学科就医智助系统首页">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+        <rect x="1" y="1" width="26" height="26" rx="8" fill="#141413"/>
+        <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.2" stroke-linecap="round"/>
+        <circle cx="14" cy="14" r="3.2" fill="#faf9f5"/>
+      </svg>
+      <span>多学科就医智助系统</span>
+    </a>
+    <a class="auth-home-link" href="/">返回主页</a>
+  </header>
   <div class="auth-main">
     <div class="auth-panel">
-      <a class="auth-brand" href="/">
-        <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
-          <rect x="1" y="1" width="26" height="26" rx="8" fill="#141413"/>
-          <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.2" stroke-linecap="round"/>
-          <circle cx="14" cy="14" r="3.2" fill="#faf9f5"/>
-        </svg>
-        <span class="name">多学科就医智助系统</span>
-      </a>
+      <h1>进入患者端</h1>
+      <p class="muted">整理资料，准备就医。</p>
 
-      <h1>先看清方向，再去看医生</h1>
-      <p class="muted">把你手上的病历整理成医生看得懂的一页摘要，推演该看哪些科、还缺什么信息。</p>
-
-      <form id="patient-login-form" class="row" style="display:flex;gap:10px;margin-top:var(--sp-24);flex-wrap:wrap;">
+      <form id="patient-login-form" class="auth-form">
         <label class="sr" for="login-user">账号</label>
-        <input id="login-user" placeholder="账号" autocomplete="username" aria-describedby="login-help" style="flex:1;min-width:160px;">
+        <input id="login-user" placeholder="账号" autocomplete="username">
         <label class="sr" for="login-pass">密码</label>
-        <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password" aria-describedby="login-help" style="flex:1;min-width:160px;">
+        <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password">
         <button class="primary" type="submit">登录</button>
       </form>
-      <p id="login-help" class="tiny">账号和密码由部署者提供；系统只在本机保存病例与审核记录。</p>
 
-      <button type="button" class="ghost btn-sm" id="show-register" onclick="toggleAuthMode('register')">首次使用？注册患者账号</button>
+      <button type="button" class="auth-secondary" id="show-register" onclick="toggleAuthMode('register')">首次使用？注册患者账号</button>
       <form id="patient-register-form" class="hide" style="margin-top:var(--sp-16);">
-        <div class="field"><label for="register-user">新账号</label><input id="register-user" autocomplete="username" placeholder="至少 3 个字符" aria-describedby="register-help"></div>
-        <div class="field"><label for="register-pass">密码</label><input id="register-pass" type="password" autocomplete="new-password" placeholder="8–128 个字符" aria-describedby="register-help"></div>
-        <div class="field"><label for="register-pass-confirm">确认密码</label><input id="register-pass-confirm" type="password" autocomplete="new-password" placeholder="再次输入密码" aria-describedby="register-help"></div>
+        <div class="field"><label for="register-user">新账号</label><input id="register-user" autocomplete="username" placeholder="至少 3 个字符"></div>
+        <div class="field"><label for="register-pass">密码</label><input id="register-pass" type="password" autocomplete="new-password" placeholder="8–128 个字符"></div>
+        <div class="field"><label for="register-pass-confirm">确认密码</label><input id="register-pass-confirm" type="password" autocomplete="new-password" placeholder="再次输入密码"></div>
         <div class="field"><label for="register-label">称呼（选填）</label><input id="register-label" maxlength="32" placeholder="例如：王女士"></div>
-        <p id="register-help" class="tiny">患者账号用于保存你的病例；系统不会把患者注册开放为医生账号。</p>
         <div class="actions" style="justify-content:flex-start;">
           <button class="primary" type="submit">注册并进入患者端</button>
-          <button class="ghost" type="button" onclick="toggleAuthMode('login')">返回登录</button>
+          <button class="auth-secondary" type="button" onclick="toggleAuthMode('login')">返回登录</button>
         </div>
       </form>
 
       <div id="login-msg" class="banner danger hide" role="alert" aria-live="assertive"></div>
+      <a class="auth-switch" href="/doctor">进入医生工作台</a>
     </div>
   </div>
-
-  <aside class="auth-side">
-    <div class="auth-side-inner">
-      <h2>你会得到什么</h2>
-      <ul class="auth-points">
-        <li><span class="n">01</span><span><strong>就医方向建议</strong>：牵头方向 + 可协同科室，每个方向都能展开看命中的信号依据。</span></li>
-        <li><span class="n">02</span><span><strong>结构化画像与缺口清单</strong>：每条信息带原文出处；缺什么如实列出，最多追问 3 个关键问题。</span></li>
-        <li><span class="n">03</span><span><strong>就医路径与任务</strong>：就诊前准备、就医咨询、就诊后更新三类任务可勾选跟进。</span></li>
-        <li><span class="n">04</span><span><strong>一页摘要与就医详情</strong>：可打印带到线下；医生审核后角标转为"已审核"。</span></li>
-      </ul>
-
-      <div class="auth-preview">
-        <div class="ct">流程示意（脱敏示例数据）</div>
-        <div class="pv-row"><span>主诉</span><span class="chip">视物模糊 3 月</span></div>
-        <div class="pv-row"><span>既往</span><span class="chip">2 型糖尿病 5 年</span></div>
-        <div class="pv-row"><span>就医方向</span><span class="chip ok">内分泌科（牵头）+ 肾内科、眼科</span></div>
-        <div class="pv-row"><span>信息缺口</span><span class="chip warn">眼底检查</span></div>
-        <div class="pv-row"><span>医生审核</span><span class="chip info">AI 生成 · 尚未经医生审核</span></div>
-      </div>
-
-      <p class="tiny" style="margin-top:var(--sp-16);">
-        本机账号：<span class="mono">patient</span>。密码由部署者在 <span class="mono">.env</span> 中配置。
-      </p>
-    </div>
-  </aside>
-
-  <footer class="auth-foot">
-    <p>⚠️ 本系统提供就医信息整理与决策辅助，<strong>不提供诊断或处方，也不替代医生判断</strong>；出现胸痛、呼吸困难、意识障碍、大出血等急症表现请立即就医。</p>
-    <p>病例与审核记录保存在本机数据库；未配置模型密钥时不调用外部模型，配置外部模型后发送的是已脱敏文本，不含姓名、电话等直接身份信息。　<span style="white-space:nowrap;">医务人员请前往 <a href="/doctor">医生工作台 →</a></span></p>
-  </footer>
 </div>
 
 <!-- ===================== 主流程（左流程导航 / 中工作区） ===================== -->

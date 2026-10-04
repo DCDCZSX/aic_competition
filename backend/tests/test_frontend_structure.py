@@ -404,25 +404,27 @@ class FrontendStructureTest(unittest.TestCase):
             self.assertIn(token, patient, f"患者端变化摘要缺少增量更新字段：{token}")
 
     # ------------------------------------------------------------------ 4. 合规
-    def test_login_pages_are_full_bleed_two_column(self):
-        """登录页必须铺满视口并分两栏（左进入方式 / 右产品说明）。
-
-        回归背景：改公共样式时把 `#login` 的 flex 居中与 100vh 去掉，登录卡片掉到左上角，
-        整屏几乎全空 —— 业务测试发现不了，只有结构断言能拦住。
-        """
-        for path, side_marker in (("/patient", "你会得到什么"), ("/doctor", "你在这个工作台里做什么")):
+    def test_login_pages_are_focused_single_column(self):
+        """登录页保持单列聚焦，只保留表单和跨角色入口。"""
+        for path, other in (("/patient", "doctor"), ("/doctor", "patient")):
             with self.subTest(path=path):
                 _, html = self.get(path)
                 m = re.search(r'<div id="login"([^>]*)>', html)
                 self.assertIsNotNone(m, f"{path} 缺少登录容器")
-                self.assertIn("auth", m.group(1), f"{path} 登录容器缺 .auth（不再铺满分栏）")
+                self.assertIn("auth", m.group(1), f"{path} 登录容器缺 .auth")
                 self.assertIn('class="auth-main"', html)
-                self.assertIn('class="auth-side"', html)
-                self.assertIn('class="auth-foot"', html)
-                self.assertIn(side_marker, html, f"{path} 右侧说明栏缺内容")
+                self.assertIn('class="auth-panel"', html)
+                self.assertIn('class="auth-topbar"', html)
+                self.assertIn('class="auth-topbar-brand"', html)
+                self.assertIn('class="auth-home-link"', html)
+                self.assertIn('>返回主页</a>', html)
+                self.assertIn(f'href="/{other}"', html)
+                self.assertNotIn('class="auth-side"', html)
+                self.assertNotIn('class="auth-foot"', html)
+                self.assertNotIn('class="auth-preview"', html)
+                self.assertNotIn('class="auth-brand"', html)
                 self.assertIn('id="login-pass"', html)
-                # 旧的内联 padding 规则会把整块撑变形，必须已移除
-                self.assertNotIn("#login{padding:24px;}", html)
+                self.assertIn('class="auth-switch"', html)
 
     def test_login_pages_use_direct_role_password_login(self):
         """角色页直接显示本角色密码登录，不再要求重复点击角色入口卡。"""
@@ -542,11 +544,9 @@ class FrontendStructureTest(unittest.TestCase):
                 self.assertNotRegex(html, r"DEMO_")
 
     def test_medical_disclaimer_present(self):
-        """三页都必须带"不提供诊断或处方"的免责表述。"""
-        for path in ("/", "/patient", "/doctor"):
-            with self.subTest(path=path):
-                _, html = self.get(path)
-                self.assertIn("不提供诊断", html)
+        """产品首页保留完整免责声明；工作台登录页保持简洁。"""
+        _, html = self.get("/")
+        self.assertIn("不提供诊断", html)
 
     def test_patient_summary_uses_action_cards_without_repeated_footer_notice(self):
         """一页摘要按行动信息分卡展示，页面底部不重复堆叠免责提醒。"""
@@ -1087,8 +1087,6 @@ class FrontendStructureTest(unittest.TestCase):
         _, patient = self.get("/patient")
         _, doctor = self.get("/doctor")
         for html in (patient, doctor):
-            self.assertIn('id="login-help"', html)
-            self.assertIn('aria-describedby="login-help"', html)
             self.assertIn("loginBusy", html)
         self.assertNotIn('aria-describedby="intake-help"', patient)
         self.assertNotIn('id="intake-help"', patient)
