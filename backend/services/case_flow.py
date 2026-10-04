@@ -989,6 +989,10 @@ class CaseFlow:
             return None
         payload = case.get("payload") or {}
         status = dict(payload.get("analysis") or {})
+        # 服务重启或后台线程异常退出后，数据库可能遗留 running 状态。
+        # 不能把这种失联任务继续暴露给患者，否则页面会永久停在“整理资料”。
+        if status.get("state") == "running" and self._analysis_job_stale(case_id, status):
+            status = self._mark_stale_analysis(case_id, status, payload)
         if not status:
             # 老病例（同步分析，没有后台任务）：没有失败科室才按完成处理。
             failed = self._failed_departments(payload)
@@ -1003,10 +1007,12 @@ class CaseFlow:
             }
         else:
             # 兼容“相位 done 但 MDT 内含 unavailable”的修复前记录。
-            effective_state = self._effective_analysis_state(payload)
+            effective_payload = dict(payload)
+            effective_payload["analysis"] = status
+            effective_state = self._effective_analysis_state(effective_payload)
             if effective_state != status.get("state"):
                 status["state"] = effective_state
-            failed = self._failed_departments(payload)
+            failed = self._failed_departments(effective_payload)
             if failed:
                 mdt_status = dict(status.get("mdt") or {})
                 mdt_status["failed"] = list(dict.fromkeys(
@@ -1027,6 +1033,55 @@ class CaseFlow:
             "mdt": mdt,
             "warnings": list(status.get("warnings") or []),
         }
+
+    def _analysis_job_stale(self, case_id: str, status: Dict[str, Any]) -> bool:
+        """判断 running 任务是否仍有对应的后台线程；重启后的线程表为空。"""
+        # 即使线程仍在进程里，只要超过宽限期也视为失去进展，避免模型调用卡死。
+        if self._is_stale_running(status):
+            return True
+        with self._jobs_lock:
+            active = self._active_jobs.get(case_id)
+            if active is not None and active.is_alive():
+                return False
+        # 有时间戳时给正常任务一个宽限期；没有时间戳的旧记录只能依赖线程表判断。
+        return not status.get("started_at")
+
+    def _mark_stale_analysis(self, case_id: str, status: Dict[str, Any],
+                             payload: Dict[str, Any]) -> Dict[str, Any]:
+        """把失联的 running 状态落成可见、可重试的失败状态。"""
+        updated = dict(status)
+        phases = dict(updated.get("phases") or {})
+        for phase, entry in list(phases.items()):
+            entry = dict(entry or {})
+            if entry.get("state") in ("pending", "running"):
+                entry["state"] = "failed"
+                entry["note"] = "后台任务已失联，可重新分析"
+            phases[phase] = entry
+        updated["phases"] = phases
+        mdt = dict(updated.get("mdt") or {})
+        if mdt.get("state") in ("pending", "running"):
+            mdt["state"] = "failed"
+            mdt["step"] = "后台任务已失联，可重新分析"
+        updated["mdt"] = mdt
+        updated["state"] = "partial_failed" if payload.get("triage") else "failed"
+        updated["finished_at"] = _now()
+        warnings = list(updated.get("warnings") or [])
+        message = "后台分析任务未完成（任务已失联，可重试）"
+        if message not in warnings:
+            warnings.append(message)
+        updated["warnings"] = warnings
+
+        def mutate(case_row: Dict[str, Any]) -> None:
+            row_payload = dict(case_row.get("payload") or {})
+            current = dict(row_payload.get("analysis") or {})
+            # 只覆盖仍然 running 的记录，避免覆盖刚刚完成的后台结果。
+            if current.get("state") == "running":
+                row_payload["analysis"] = updated
+                case_row["payload"] = row_payload
+
+        if self.store:
+            self.store.mutate_case(case_id, mutate)
+        return updated
 
     @staticmethod
     def _failed_departments(payload: Dict[str, Any]) -> List[str]:
@@ -1070,8 +1125,8 @@ class CaseFlow:
         return "done" if payload.get("mdt") else "none"
 
     @staticmethod
-    def _is_stale_running(status: Dict[str, Any], minutes: int = 10) -> bool:
-        """后台任务"很久没动静"（例如服务重启把线程丢了）→ 允许重跑，别永远卡住。"""
+    def _is_stale_running(status: Dict[str, Any], seconds: int = 90) -> bool:
+        """后台任务超过 90 秒没有完成（例如服务重启或模型卡住）→ 允许重跑。"""
         if (status or {}).get("state") != "running":
             return False
         started = str((status or {}).get("started_at") or "")
@@ -1081,7 +1136,7 @@ class CaseFlow:
             began = datetime.fromisoformat(started)
         except ValueError:
             return False
-        return (datetime.now() - began).total_seconds() > minutes * 60
+        return (datetime.now() - began).total_seconds() > seconds
 
     def retry_analysis(self, case_id: str, phases: Optional[List[str]] = None) -> Dict[str, Any]:
         """重试失败/未完成的分析相位（默认只重跑没成功的那些）。"""
