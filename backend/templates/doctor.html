@@ -324,63 +324,36 @@
 </head>
 <body>
 
-<!-- ===================== 屏 0：登录（全屏分栏，左=进入方式，右=工作台说明）===================== -->
+<!-- ===================== 屏 0：登录 ===================== -->
 <div id="login" class="auth">
+  <header class="auth-topbar">
+    <a class="auth-topbar-brand" href="/" aria-label="返回多学科就医智助系统首页">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+        <rect x="1" y="1" width="26" height="26" rx="8" fill="#141413"/>
+        <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.2" stroke-linecap="round"/>
+        <circle cx="14" cy="14" r="3.2" fill="#faf9f5"/>
+      </svg>
+      <span>多学科就医智助系统</span>
+    </a>
+    <a class="auth-home-link" href="/">返回主页</a>
+  </header>
   <div class="auth-main">
     <div class="auth-panel">
-      <a class="auth-brand" href="/">
-        <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
-          <rect x="1" y="1" width="26" height="26" rx="8" fill="#141413"/>
-          <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.2" stroke-linecap="round"/>
-          <circle cx="14" cy="14" r="3.2" fill="#faf9f5"/>
-        </svg>
-        <span class="name">多学科就医智助系统</span>
-      </a>
-
       <h1>进入医生工作台</h1>
-      <p class="muted">先从风险优先队列开始，只处理需要医生决定的条目；接受、修改、驳回、暂不确定，全部留痕可回溯。</p>
+      <p class="muted">从风险优先队列开始审核。</p>
 
-      <form id="doctor-login-form" class="row" style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
+      <form id="doctor-login-form" class="auth-form">
         <label class="sr" for="login-user">账号</label>
-        <input id="login-user" placeholder="账号" autocomplete="username" aria-describedby="login-help" style="flex:1;min-width:160px;">
+        <input id="login-user" placeholder="账号" autocomplete="username">
         <label class="sr" for="login-pass">密码</label>
-        <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password" aria-describedby="login-help" style="flex:1;min-width:160px;">
+        <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password">
         <button class="primary" type="submit">登录</button>
       </form>
-      <p id="login-help" class="tiny">账号和密码由部署者提供；审核操作会保留操作人和时间。</p>
 
-      <div id="login-msg" class="banner danger hide" role="alert" aria-live="assertive" style="margin-top:var(--sp-12);"></div>
+      <div id="login-msg" class="banner danger hide" role="alert" aria-live="assertive"></div>
+      <a class="auth-switch" href="/patient">进入患者端</a>
     </div>
   </div>
-
-  <aside class="auth-side">
-    <div class="auth-side-inner">
-      <h2>你在这个工作台里做什么</h2>
-      <ul class="auth-points">
-        <li><span class="n">01</span><span><strong>看依据，不看黑箱</strong>：分诊依据按"规则命中 → 模型受限发言 → 编排校验"三段展开，每个入选科室都有信号来源。</span></li>
-        <li><span class="n">02</span><span><strong>审多学科过程</strong>：各科先独立研判，共识与分歧分列；有争议的进"待医生确认"，不替医生裁决。</span></li>
-        <li><span class="n">03</span><span><strong>按责任分层</strong>：高风险、冲突和关键证据缺口进入医生必审；规则判定免审的条目单独标记，医生可随时接管，修改与驳回必须填原因。</span></li>
-        <li><span class="n">04</span><span><strong>发布审核版并闭环</strong>：全部条目终态后发布，报告角标转为"已审核"；就诊后录入线下实际意见，生成「AI 建议 vs 医生意见」对照。</span></li>
-      </ul>
-
-      <div class="auth-preview">
-        <div class="ct">审核留痕示意（脱敏示例数据）</div>
-        <div class="pv-row"><span>14:00　接受</span><span class="chip ok">路径步骤 · 先查眼底</span></div>
-        <div class="pv-row"><span>14:02　修改</span><span class="chip ok">医疗安排 · 补充眼科评估</span></div>
-        <div class="pv-row"><span>14:05　处理</span><span class="chip danger">MDT 分歧 · 需要补充资料</span></div>
-        <div class="pv-row"><span>14:10　发布</span><span class="chip info">审核版 v2 · 已审核</span></div>
-      </div>
-
-      <p class="tiny" style="margin-top:var(--sp-16);">
-        审核记录全程留痕、可回溯，可按机构要求对接电子签名；AI 生成的内容未经审核时始终带"尚未经医生审核"角标。
-      </p>
-    </div>
-  </aside>
-
-  <footer class="auth-foot">
-    <p>⚠️ 本系统提供就医信息整理与决策辅助，<strong>不提供诊断或处方，也不替代医生判断</strong>；出现胸痛、呼吸困难、意识障碍、大出血等急症表现请立即就医。</p>
-    <p>本机账号：<span class="mono">doctor</span>，密码由部署者在 <span class="mono">.env</span> 中配置；病例数据仅保存在本机。　<span style="white-space:nowrap;">就诊者请前往 <a href="/patient">患者端 →</a></span></p>
-  </footer>
 </div>
 
 <!-- ===================== 医生工作台主体 ===================== -->

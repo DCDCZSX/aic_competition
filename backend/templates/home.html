@@ -87,6 +87,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 .brand svg{display:block;}
 .brand .name{font-family:var(--font-display);font-weight:500;font-size:17px;letter-spacing:.01em;white-space:nowrap;}
 .nav-right{display:flex;align-items:center;gap:var(--sp-24);}
+.home-entry{display:flex;align-items:center;gap:var(--sp-8);}
 .nav-links{display:none;align-items:center;gap:var(--sp-24);}
 @media (min-width:1000px){.nav-links{display:flex;}}
 .nav-link{font-size:var(--body-3);color:var(--text-2);padding:6px 0;background:none;border:0;}
@@ -177,6 +178,8 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
   border-radius:var(--br-12);font-family:inherit;font-size:var(--body-3);
   background:var(--gray-000);color:var(--text);margin-bottom:8px;
 }
+.hero-form{display:grid;gap:var(--sp-12);}
+.hero-boundary{margin-top:var(--sp-16);font-size:var(--caption);color:var(--text-3);}
 .legal{font-size:var(--micro);color:var(--text-3);margin-top:var(--sp-12);line-height:1.6;}
 .msg{font-size:var(--caption);margin-top:var(--sp-8);display:none;}
 .msg.show{display:block;}
@@ -208,6 +211,18 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 .badge-ai{display:inline-flex;align-items:center;gap:6px;margin-top:var(--sp-12);
           padding:5px 12px;border-radius:999px;background:var(--gray-150);
           color:var(--text-2);font-size:var(--micro);}
+.workflow-preview{background:var(--gray-000);border:1px solid var(--border-strong);border-radius:var(--br-32);padding:clamp(var(--sp-24),4vw,var(--sp-40));box-shadow:var(--whisper);}
+.workflow-heading{display:flex;align-items:baseline;justify-content:space-between;gap:var(--sp-16);padding-bottom:var(--sp-20);border-bottom:1px solid var(--border);}
+.workflow-heading h2{font-size:var(--headline-3);}
+.workflow-kicker{font-family:var(--font-mono);font-size:var(--micro);letter-spacing:.1em;color:var(--text-3);}
+.workflow-track{display:grid;justify-items:stretch;padding-top:var(--sp-20);}
+.workflow-node{display:flex;align-items:flex-start;gap:var(--sp-16);padding:var(--sp-16);border:1px solid var(--border);border-radius:var(--br-12);background:var(--surface-2);}
+.workflow-node.active{border-color:var(--clay);background:rgba(217,119,87,.08);box-shadow:0 0 0 1px var(--clay);}
+.workflow-index{font-family:var(--font-mono);font-size:var(--caption);color:var(--clay-dark);padding-top:2px;}
+.workflow-node strong{font-size:var(--body-2);font-weight:600;}
+.workflow-node p{margin-top:4px;color:var(--text-2);font-size:var(--caption);}
+.workflow-arrow{display:block;text-align:center;color:var(--clay);font-size:20px;line-height:1.2;padding:4px 0;}
+.workflow-note{margin-top:var(--sp-20);padding-top:var(--sp-16);border-top:1px solid var(--border);color:var(--text-2);font-size:var(--caption);}
 /* 信任条 */
 .trustbar{margin-top:var(--sp-40);display:flex;flex-wrap:wrap;gap:var(--sp-12);}
 .trustbar span{display:inline-flex;align-items:center;gap:6px;font-size:var(--caption);
@@ -244,15 +259,22 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 .flow-step .n{font-family:var(--font-mono);font-size:var(--micro);color:var(--clay-dark);}
 .flow-step .t{font-size:var(--body-3);font-weight:500;margin:6px 0 4px;}
 .flow-step .d{font-size:var(--caption);color:var(--text-3);}
+.compact-section{padding-block:var(--sp-64);}
+.compact-card{padding:var(--sp-20);box-shadow:none;}
+.compact-card h3{margin-bottom:var(--sp-8);}
+.flow-line-compact{grid-template-columns:1fr;}
+@media (min-width:768px){.flow-line-compact{grid-template-columns:repeat(4,1fr);}}
+.trust-compact{display:grid;gap:var(--sp-32);align-items:start;}
+@media (min-width:900px){.trust-compact{grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:var(--sp-64);}}
+.trust-points{display:grid;gap:var(--sp-16);}
+.trust-points p{display:grid;gap:4px;padding-bottom:var(--sp-16);border-bottom:1px solid var(--gray-750);}
+.trust-points p:last-child{padding-bottom:0;border-bottom:0;}
+.trust-points strong{font-size:var(--body-2);color:var(--gray-050);}
+.trust-points span{font-size:var(--caption);color:var(--gray-400);}
 
 /* ============================ 标签页 + 卡片（对应套餐区） ============================ */
 .tabs-wrap{display:flex;justify-content:center;margin-bottom:var(--sp-32);}
 .tablist{position:relative;display:inline-flex;background:var(--gray-150);border-radius:999px;padding:4px;}
-.tablist .indicator{
-  position:absolute;top:4px;bottom:4px;left:0;width:0;border-radius:999px;background:var(--gray-000);
-  box-shadow:var(--shadow-sm);transition:transform .28s var(--ease-out-power2),width .28s var(--ease-out-power2);
-  transform:translateX(var(--indicator-x,0));
-}
 .tablist button{position:relative;z-index:1;border:0;background:transparent;color:var(--text-2);
                 padding:9px 20px;border-radius:999px;font-size:var(--body-3);}
 .tablist button[aria-selected="true"]{color:var(--text);font-weight:500;}
@@ -273,8 +295,6 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 .metric .v{font-family:var(--font-display);font-size:var(--headline-1);line-height:1.1;}
 .metric .k{font-size:var(--body-3);margin-top:8px;}
 .metric .s{font-size:var(--caption);color:var(--text-3);margin-top:6px;}
-.honest{margin-top:var(--sp-24);border-left:3px solid var(--warn);background:rgba(183,121,31,.06);
-        padding:var(--sp-16);border-radius:0 var(--br-8) var(--br-8) 0;font-size:var(--caption);color:var(--text-2);}
 
 /* ============================ FAQ ============================ */
 .faq{max-width:var(--container);margin:0 auto;border-top:1px solid var(--border);}
@@ -310,6 +330,18 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
                 display:flex;flex-wrap:wrap;gap:var(--sp-16);justify-content:space-between;align-items:center;}
 .footer .bottom p{font-size:var(--micro);color:var(--gray-500);max-width:70ch;}
 .footer .legal-line{margin-top:var(--sp-12);font-size:var(--micro);color:var(--gray-500);}
+.footer-compact{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-32);}
+.footer-compact .tagline{margin-top:var(--sp-8);}
+.footer-bottom{margin-top:var(--sp-32);padding-top:var(--sp-20);border-top:1px solid var(--gray-750);}
+.footer-bottom p{font-size:var(--micro);color:var(--gray-500);}
+@media (max-width:720px){
+  .nav-right{gap:var(--sp-8);}
+  .nav-right>.nav-link{display:none;}
+  .home-entry .btn{min-height:40px;padding:7px 10px;font-size:var(--caption);}
+  .home-entry .btn-sand{display:none;}
+  .footer-compact{display:grid;gap:var(--sp-20);}
+  .footer-compact .enter{margin-top:0;}
+}
 </style>
 </head>
 <body>
@@ -327,512 +359,95 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
       </svg>
       <span class="name">多学科就医智助系统</span>
     </a>
-
     <nav class="nav-right" aria-label="主导航">
-      <div class="nav-links">
-        <div class="dd" data-dd>
-          <button class="nav-link dd-trigger" aria-expanded="false" aria-haspopup="menu">
-            了解系统
-            <svg class="caret" width="10" height="6" viewBox="0 0 10 6" aria-hidden="true">
-              <path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            </svg>
-          </button>
-          <div class="dd-panel" role="menu">
-            <div class="grp-title">能力与流程</div>
-            <div class="cols">
-              <a href="#capabilities" role="menuitem">它解决什么问题<span>挂号方向、资料整理、多科意见</span></a>
-              <a href="#capabilities" role="menuitem">决策链 S1→S2→S3<span>规则优先、模型受限发言、确定性编排</span></a>
-              <a href="#flow" role="menuitem">一次完整流程<span>录入 → 追问 → 分诊 → 报告 → 就诊后</span></a>
-            </div>
-            <div class="dd-sep"></div>
-            <div class="grp-title">证据与合规</div>
-            <div class="cols">
-              <a href="#trust" role="menuitem">安全护栏与红线<span>不出诊断、不出处方、不输出概率数字</span></a>
-              <a href="#evidence" role="menuitem">评测与可信度<span>分诊评测 v1、单元测试、端到端验证</span></a>
-            </div>
-          </div>
-        </div>
-
-        <a class="nav-link" href="#scenes">使用场景</a>
-        <a class="nav-link" href="#faq">常见问题</a>
-
-        <div class="dd" data-dd>
-          <button class="nav-link dd-trigger" aria-expanded="false" aria-haspopup="menu">
-            进入工作台
-            <svg class="caret" width="10" height="6" viewBox="0 0 10 6" aria-hidden="true">
-              <path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            </svg>
-          </button>
-          <div class="dd-panel" role="menu">
-            <div class="cols">
-              <a href="#" role="menuitem" onclick="enterAs('patient');return false;">患者端工作台<span>资料整理 · 就医路径 · 就诊后更新</span></a>
-              <a href="#" role="menuitem" onclick="enterAs('doctor');return false;">医生审核台<span>病例审核 · 证据审阅 · 报告确认</span></a>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <button class="btn btn-clay nav-cta" onclick="enterAs('patient')">开始整理资料</button>
-      <button class="burger" id="burger" aria-expanded="false" aria-controls="mobilePanel" aria-label="打开导航菜单">
-        <i></i><i></i><i></i>
-      </button>
-    </nav>
-  </div>
-
-  <!-- 移动端导航面板 -->
-  <div class="mobile-panel" id="mobilePanel">
-    <div class="container">
-      <a href="#capabilities">它解决什么问题</a>
-      <a href="#flow">一次完整流程</a>
-      <a href="#scenes">使用场景</a>
-      <a href="#trust">安全护栏与红线</a>
-      <a href="#evidence">评测与可信度</a>
-      <a href="#faq">常见问题</a>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;">
+      <a class="nav-link" href="#flow">了解流程</a>
+      <div class="home-entry">
         <button class="btn btn-clay" onclick="enterAs('patient')">进入患者端</button>
         <button class="btn btn-sand" onclick="enterAs('doctor')">进入医生工作台</button>
       </div>
-      <p class="legal">本机账号：patient / doctor（密码由部署者配置）。本系统提供就医信息整理与决策辅助，不提供诊断或处方；急症请立即就医。</p>
-    </div>
+    </nav>
   </div>
 </header>
 
 <main id="main">
-
-  <!-- ===================== Hero ===================== -->
   <section class="section" id="homeHero">
     <div class="container hero reveal">
       <div>
         <p class="eyebrow">就医信息整理 · 多学科决策协作</p>
-        <h1>整理资料，<br>找对科室</h1>
-        <p class="sub">
-          把散乱的病历整理成<strong>医生看得懂的一页摘要</strong>，推演该看哪些科、还缺什么信息，
-          再由医生逐条审核把关。
-        </p>
-
+        <h1>把复杂资料，<br>变成清楚的下一步</h1>
+        <p class="sub">系统帮助患者整理就医资料、推演咨询方向，再由医生审核确认。每一步都有依据，分歧和缺口都会被保留下来。</p>
         <div class="hero-form">
-          <button class="btn btn-clay btn-block" onclick="enterAs('patient')">
-            <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v13M1.5 8h13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-            进入患者端
-          </button>
-          <div class="or">或</div>
-          <button class="btn btn-sand btn-block" onclick="enterAs('doctor')">
-            <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 13V6.5l3-2 3 2V13M8 13V9l3-2 3 2v4M1 13h14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-            进入医生工作台
-          </button>
-          <p class="legal">
-            病例与审核记录保存在本机部署的数据库中；未配置模型密钥时不调用外部模型，启用外部模型时发送到模型服务的是已脱敏的病例文本，不含姓名、电话等直接身份信息。使用前请知悉：
-            本系统提供就医信息整理与决策辅助，<strong>不提供诊断或处方，也不替代医生判断</strong>；急症请立即就医。
-          </p>
+          <button class="btn btn-clay btn-block" onclick="enterAs('patient')">进入患者端</button>
+          <button class="btn btn-sand btn-block" onclick="enterAs('doctor')">进入医生工作台</button>
         </div>
-
-        <div class="trustbar">
-          <span><b>不出诊断</b> · 只整理资料与方向</span>
-          <span><b>不出处方</b> · 不涉及用药剂量</span>
-          <span><b>不输出概率数字</b> · 不用模型自报置信度</span>
-          <span><b>AI 不覆盖医生</b> · 逐条留痕可回溯</span>
-        </div>
+        <p class="hero-boundary">不提供诊断或处方，不替代医生判断；急症请立即就医。</p>
       </div>
 
-      <!-- 产品界面预览（自绘示意，结构对齐真实页面：画像 → 分诊 → 摘要） -->
-      <div class="preview" role="img"
-           aria-label="产品界面预览示意：病例画像卡、分诊结果卡与一页就医摘要">
-        <div class="chrome">
-          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-          <span class="t mono">patient / 病例 C7F2A9C4 · 行为类型 B</span>
+      <div class="workflow-preview" role="img" aria-label="系统协作流程：患者提交资料，AI 整理与分流，医生审核确认">
+        <div class="workflow-heading">
+          <span class="workflow-kicker">SYSTEM FLOW</span>
+          <h2>系统如何协作</h2>
         </div>
-        <div class="stage">
-          <div class="pv-card">
-            <div class="ct">① 病例画像（每条带原文出处）</div>
-            <div class="pv-row"><span>主诉</span><span class="chip">视物模糊 3 月</span></div>
-            <div class="pv-row"><span>既往</span><span class="chip">2 型糖尿病 5 年</span></div>
-            <div class="pv-row"><span>检查</span><span class="chip warn">尿蛋白 ++</span></div>
-            <div class="pv-row"><span>缺口</span><span class="chip">眼底检查</span></div>
-            <div class="ct" style="margin:10px 0 0;">直引覆盖率 0.62 · 过 G4 门禁</div>
+        <div class="workflow-track">
+          <div class="workflow-node">
+            <span class="workflow-index">01</span>
+            <div><strong>患者提交资料</strong><p>把症状、检查和既往情况集中起来</p></div>
           </div>
-          <div class="pv-card">
-            <div class="ct">② 就医方向（每个方向都有依据）</div>
-            <div class="pv-row"><span><b>内分泌科</b> 牵头</span><span class="chip ok">规则命中</span></div>
-            <div class="pv-row"><span>肾内科 协同</span><span class="chip">尿蛋白 ++</span></div>
-            <div class="pv-row"><span>眼科 协同</span><span class="chip">视物模糊</span></div>
-            <div class="pv-row"><span>决策路径</span><span class="chip info">rule-dominant</span></div>
-            <div class="pv-row"><span>可靠性</span><span class="chip warn">中 · 仍有 6 项缺口</span></div>
-            <div class="ct" style="margin:10px 0 0;">入选 3 / 上限 6 · 模型新增需过阈值</div>
+          <span class="workflow-arrow" aria-hidden="true">↓</span>
+          <div class="workflow-node active">
+            <span class="workflow-index">02</span>
+            <div><strong>AI 整理与分流</strong><p>结构化资料，标出缺口和咨询方向</p></div>
+          </div>
+          <span class="workflow-arrow" aria-hidden="true">↓</span>
+          <div class="workflow-node">
+            <span class="workflow-index">03</span>
+            <div><strong>医生审核确认</strong><p>接受、修改或保留待确认内容</p></div>
           </div>
         </div>
-        <div class="pv-card" style="margin-top:12px;">
-          <div class="ct">③ 一页就医摘要（打印带去线下）</div>
-          <div class="pv-row"><span>建议咨询方向</span><span>内分泌科（牵头）+ 肾内科、眼科</span></div>
-          <div class="pv-row"><span>需要向医生确认</span><span>建议向医生确认是否需要完善眼底检查</span></div>
-          <div class="pv-row"><span>医生审核</span><span class="chip ok">已发布审核版 v2</span></div>
-        </div>
-        <span class="badge-ai">
-          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.4v3.2M6 8.4v.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-          AI 生成 · 尚未经医生审核的内容不能作为诊断或用药依据
-        </span>
+        <div class="workflow-note">AI 负责整理与提示，最终判断权留给医生。</div>
       </div>
     </div>
   </section>
 
-  <!-- ===================== 能力（问题 → 做法）+ 流程 ===================== -->
-  <section class="section" id="capabilities" style="background:var(--gray-100);">
+  <section class="section compact-section" id="capabilities" style="background:var(--gray-100);">
     <div class="container">
       <div class="section-head reveal">
         <p class="eyebrow">它解决什么问题</p>
-        <h2 class="h2">就医前的三件难事，一件一件说清楚</h2>
-        <p class="lede">系统只做三件事：把资料整理清楚、把方向推演出来、把依据和缺口如实暴露出来。判断权始终在医生手里。</p>
+        <h2 class="h2">三件事，让就医准备更清楚</h2>
       </div>
-
       <div class="grid grid-3 reveal">
-        <div class="card">
-          <div class="kicker">问题 01</div>
-          <h3>不知道该挂哪个科</h3>
-          <p>主诉模糊、症状跨系统，挂号靠猜，反复退号转科。</p>
-          <ul class="list">
-            <li>S1 规则引擎先跑：56 条规则 + 37 个科室门类 + 别名与最近邻兜底</li>
-            <li>S2 模型只能"受限发言"，新增科室必须过阈值，不能覆盖规则命中的强项</li>
-            <li>S3 确定性编排：冲突留痕、数量上限 6、辅助科不做牵头</li>
-          </ul>
-        </div>
-        <div class="card">
-          <div class="kicker">问题 02</div>
-          <h3>资料散乱，说不清病史</h3>
-          <p>报告一大堆，医生三分钟问诊里说不完重点。</p>
-          <ul class="list">
-            <li>画像抽取带 source_refs，每条信息可回溯到原文；直引覆盖率不足会拦在门禁外</li>
-            <li>信息缺口按依赖矩阵排序，智能追问不超过 3 个问题</li>
-            <li>一页摘要 + 完整报告（13 段结构），可打印带去线下</li>
-          </ul>
-        </div>
-        <div class="card">
-          <div class="kicker">问题 03</div>
-          <h3>多科意见不一致</h3>
-          <p>各科各说各话，患者不知道听谁的。</p>
-          <ul class="list">
-            <li>各专科<strong>先独立研判</strong>（互相不可见），再聚合共识、单列分歧</li>
-            <li>分歧可被"质询"：结论只允许 维持 / 修正 / 需补充证据 / 需医生裁决</li>
-            <li>有争议的一律进"待医生确认"清单，不替医生下结论</li>
-          </ul>
-        </div>
+        <div class="card compact-card"><h3>整理资料</h3><p>把散乱的描述整理成有出处的病例摘要，缺少什么也会明确列出。</p></div>
+        <div class="card compact-card"><h3>辅助分流</h3><p>结合规则和受限模型，给出牵头方向与协同科室，并说明依据。</p></div>
+        <div class="card compact-card"><h3>医生把关</h3><p>医生逐条审核关键内容，修改、驳回和分歧都会留下记录。</p></div>
       </div>
+    </div>
+  </section>
 
-      <div class="grid grid-4 reveal" style="margin-top:48px;">
-        <div class="card">
-          <div class="kicker">可解释</div>
-          <h3>决策链看得见</h3>
-          <p>每个入选科室都能展开看命中的信号、模型是否反驳、S3 为何保留或剔除。</p>
-        </div>
-        <div class="card">
-          <div class="kicker">证据优先</div>
-          <h3>判断 ↔ 证据关联</h3>
-          <p>支持 / 缺失 / 反向证据分列，证据状态标为 direct、indirect、missing、conflict。</p>
-        </div>
-        <div class="card">
-          <div class="kicker">人把关</div>
-          <h3>医生逐条审核</h3>
-          <p>接受 / 修改 / 驳回 / 暂不确定，修改与驳回必须填原因，全程留痕可回溯。</p>
-        </div>
-        <div class="card">
-          <div class="kicker">可闭环</div>
-          <h3>就诊后如实对照</h3>
-          <p>患者补充新资料触发局部重算；医生录入线下意见后生成「AI 建议 vs 医生意见」对照。</p>
-        </div>
-      </div>
-
-      <div class="flow reveal" id="flow">
+  <section class="section compact-section" id="flow">
+    <div class="container">
+      <div class="section-head reveal">
         <p class="eyebrow">一次完整流程</p>
-        <div class="flow-line">
-          <div class="flow-step"><div class="n">01</div><div class="t">录入资料</div><div class="d">粘贴病历或表单填写，空主诉与 PII 会被拦下或打码</div></div>
-          <div class="flow-step"><div class="n">02</div><div class="t">脱敏确认</div><div class="d">先看打码结果再提交，后续分析只用脱敏文本</div></div>
-          <div class="flow-step"><div class="n">03</div><div class="t">画像 + 追问</div><div class="d">结构化病历、标出缺口，最多追问 3 个关键问题</div></div>
-          <div class="flow-step"><div class="n">04</div><div class="t">就医方向</div><div class="d">规则 → 模型 → 编排三层决策，给出牵头与协同科室</div></div>
-          <div class="flow-step"><div class="n">05</div><div class="t">路径与任务</div><div class="d">就诊前准备、就医咨询、就诊后更新三类任务可勾选</div></div>
-          <div class="flow-step"><div class="n">06</div><div class="t">报告 + 医生审核</div><div class="d">一页摘要与完整报告；医生端逐条审核后发布审核版</div></div>
-          <div class="flow-step"><div class="n">07</div><div class="t">就诊后更新</div><div class="d">新资料填补缺口、局部重算，并给出变化摘要</div></div>
-        </div>
+        <h2 class="h2">从资料到复核，四步完成</h2>
+      </div>
+      <div class="flow-line flow-line-compact reveal">
+        <div class="flow-step"><div class="n">01</div><div class="t">录入资料</div><div class="d">脱敏后提交病例信息</div></div>
+        <div class="flow-step"><div class="n">02</div><div class="t">结构化分析</div><div class="d">整理画像、缺口与方向</div></div>
+        <div class="flow-step"><div class="n">03</div><div class="t">医生审核</div><div class="d">确认关键内容并发布报告</div></div>
+        <div class="flow-step"><div class="n">04</div><div class="t">就诊后更新</div><div class="d">只复核受影响的部分</div></div>
       </div>
     </div>
   </section>
 
-  <!-- ===================== 使用场景（标签页 + 卡片） ===================== -->
-  <section class="section" id="scenes">
-    <div class="container">
-      <div class="section-head reveal" style="text-align:center;">
-        <p class="eyebrow">使用场景</p>
-        <h2 class="h2">按就医目标或按使用者，选一条使用路径</h2>
-        <p class="lede" style="margin-left:auto;margin-right:auto;">
-          两种切法都能直接进入工作台：患者端走完整链路，医生端审阅 MDT 过程并逐条把关。
-        </p>
-      </div>
-
-      <div class="tabs-wrap reveal">
-        <div class="tablist" role="tablist" aria-label="场景分类">
-          <span class="indicator" aria-hidden="true"></span>
-          <button role="tab" id="tab-goal" aria-controls="panel-goal" aria-selected="true">按就医目标</button>
-          <button role="tab" id="tab-user" aria-controls="panel-user" aria-selected="false">按使用者</button>
-        </div>
-      </div>
-
-      <div class="tabpanel active reveal" role="tabpanel" id="panel-goal" aria-labelledby="tab-goal">
-        <div class="grid grid-3">
-          <div class="card scene-card">
-            <div class="who">目标 · 不知道看哪个科</div>
-            <h3>先确定方向</h3>
-            <p class="pitch">主诉模糊、症状跨系统，需要先判断该从哪个科开始。</p>
-            <ul class="list">
-              <li>规则命中 + 模型受限发言 → S3 编排，给出牵头方向与协同科室</li>
-              <li>每个方向展示命中信号，超过 6 个或依据不足一律不入选</li>
-              <li>医疗行为只写成「建议向医生确认是否需要…」</li>
-            </ul>
-            <div class="cta"><button class="btn btn-sand btn-block" onclick="enterAs('patient')">用这个场景开始</button></div>
-          </div>
-          <div class="card scene-card featured">
-            <span class="flag">常用场景</span>
-            <div class="who">目标 · 多病共存反复就诊</div>
-            <h3>把多科意见摆平</h3>
-            <p class="pitch">糖尿病、高血压、肾病共病，多科各说各话，需要一份医生看得懂的摘要。</p>
-            <ul class="list">
-              <li>多专科独立研判 + 共识聚合 + 分歧单列待裁决</li>
-              <li>证据板呈现时间线与判断↔证据关联，缺口不编造</li>
-              <li>医生端三栏审阅台可"播放过程"：独立研判 → 分歧 → 质询 → 补答</li>
-            </ul>
-            <div class="cta"><button class="btn btn-clay btn-block" onclick="enterAs('patient')">用这个场景开始</button></div>
-          </div>
-          <div class="card scene-card">
-            <div class="who">目标 · 术前 / 围术期准备</div>
-            <h3>辅助科不被漏掉</h3>
-            <p class="pitch">确定要手术前，麻醉、影像、检验的准备项容易漏。</p>
-            <ul class="list">
-              <li>D 型病例的手术科室与辅助科标记为必选，不受数量上限裁剪</li>
-              <li>路径含条件分支（如"若肾功能异常"）与并行步骤</li>
-              <li>准备清单逐条落到任务中心，可标记完成 / 重做</li>
-            </ul>
-            <div class="cta"><button class="btn btn-sand btn-block" onclick="enterAs('patient')">用这个场景开始</button></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="tabpanel" role="tabpanel" id="panel-user" aria-labelledby="tab-user">
-        <div class="grid grid-3">
-          <div class="card scene-card">
-            <div class="who">使用者 · 患者 / 家属</div>
-            <h3>患者端工作台</h3>
-            <p class="pitch">从录入资料到就诊后随访，一条线走完，不用来回切系统。</p>
-            <ul class="list check">
-              <li>录入与脱敏预览、画像确认、智能追问</li>
-              <li>就医方向、路径与任务中心（可勾选状态）</li>
-              <li>多学科分析摘要、一页摘要与完整报告（可打印）</li>
-              <li>就诊后资料更新 + 变化摘要</li>
-            </ul>
-            <div class="cta"><button class="btn btn-clay btn-block" onclick="enterAs('patient')">进入患者端</button></div>
-          </div>
-          <div class="card scene-card featured">
-            <span class="flag">核心屏</span>
-            <div class="who">使用者 · 医生 / 审核人</div>
-            <h3>医生工作台</h3>
-            <p class="pitch">先看分诊依据与证据，再逐条把 AI 的结论过一遍。</p>
-            <ul class="list check">
-              <li>病例列表（待审优先）与病例总览（出处可查）</li>
-              <li>分诊依据三线流水线（规则 → 模型 → 编排）与证据板</li>
-              <li>多学科审阅台：独立研判 → 分歧 → 质询 → 补答，可一键播放过程</li>
-              <li>逐条审核与审核版发布、审核记录与版本回溯</li>
-            </ul>
-            <div class="cta"><button class="btn btn-clay btn-block" onclick="enterAs('doctor')">进入医生审核台</button></div>
-          </div>
-          <div class="card scene-card">
-            <div class="who">使用者 · 机构 / 质量与合规</div>
-            <h3>质量与可复核</h3>
-            <p class="pitch">判断依据、审核痕迹与质量指标全程可查、可复核。</p>
-            <ul class="list check">
-              <li>分诊评测：规则链 / 模型链 / 完整链路三方法对比可复现</li>
-              <li>报告结构完整性 13 / 13，无空段、无占位</li>
-              <li>端到端回归覆盖患者端与医生端全流程</li>
-              <li>审计时间线可回溯每一次判断与审核操作</li>
-            </ul>
-            <div class="cta"><a class="btn btn-sand btn-block" href="#evidence">查看质量指标</a></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ===================== 安全护栏与红线（深色段） ===================== -->
-  <section class="section theme-dark" id="trust">
-    <div class="container">
+  <section class="section theme-dark compact-section" id="trust">
+    <div class="container trust-compact">
       <div class="section-head reveal">
-        <p class="eyebrow">安全护栏</p>
-        <h2 class="h2">先把"不能做什么"写死，再谈能做什么</h2>
-        <p class="lede">医疗场景里，模型的自由度必须被结构限制。以下护栏都是代码里的确定性判断，不依赖模型自觉。</p>
+        <p class="eyebrow">安全边界</p>
+        <h2 class="h2">把判断权留给医生</h2>
       </div>
-
-      <div class="grid grid-3 reveal">
-        <div class="card">
-          <h3>G1 · 危象拦截</h3>
-          <p>48 条危象规则 + 组合规则先于一切分析执行，命中即停止流程并给出急救提示（红条 + 明确文字，不靠颜色单独表达）。</p>
-        </div>
-        <div class="card">
-          <h3>G2 / G3 · 录入与隐私</h3>
-          <p>双空主诉直接阻断；姓名、电话、身份证等 PII 在进入分析前打码，后续链路只使用脱敏文本。</p>
-        </div>
-        <div class="card">
-          <h3>G4 / G6 · 门禁与范围</h3>
-          <p>画像直引覆盖率不足 0.60 不放行，回画像补录；非医学内容不进入分诊链路。</p>
-        </div>
-      </div>
-
-      <div class="grid grid-4 reveal" style="margin-top:32px;">
-        <div class="card">
-          <div class="kicker" style="color:var(--clay);">红线 01</div>
-          <h3>不出诊断</h3>
-          <p>只输出资料整理、方向建议与需要确认的问题。</p>
-        </div>
-        <div class="card">
-          <div class="kicker" style="color:var(--clay);">红线 02</div>
-          <h3>不出处方</h3>
-          <p>不涉及药物、剂量与治疗方案推荐。</p>
-        </div>
-        <div class="card">
-          <div class="kicker" style="color:var(--clay);">红线 03</div>
-          <h3>不输出概率数字</h3>
-          <p>界面与报告不展示模型自报的置信度或概率。</p>
-        </div>
-        <div class="card">
-          <div class="kicker" style="color:var(--clay);">红线 04</div>
-          <h3>AI 不覆盖医生</h3>
-          <p>医生意见与 AI 建议如实并列；患者转述的"医生说…"标为待确认，不当作医生意见。</p>
-        </div>
-      </div>
-
-      <div class="grid grid-4 reveal" style="margin-top:32px;">
-        <div class="card">
-          <div class="kicker" style="color:var(--gray-500);">架构</div>
-          <h3>零构建技术栈</h3>
-          <p>Flask + 原生 HTML/CSS/JS + SQLite；无前端构建、无外链资源，现场无网也能跑。</p>
-        </div>
-        <div class="card">
-          <div class="kicker" style="color:var(--gray-500);">架构</div>
-          <h3>规则与模型分离</h3>
-          <p>S1 规则引擎确定性可审计；S2 模型受限发言失败时自动降级为纯规则分诊。</p>
-        </div>
-        <div class="card">
-          <div class="kicker" style="color:var(--gray-500);">架构</div>
-          <h3>三层状态可回溯</h3>
-          <p>病例 7 种状态、任务 5 种状态、审核决策逐条留痕，审计时间线可回放。</p>
-        </div>
-        <div class="card">
-          <div class="kicker" style="color:var(--gray-500);">架构</div>
-          <h3>本地保存，脱敏外发可控</h3>
-          <p>病例与审核记录落在本地 SQLite；未配置模型密钥时不调用外部模型，启用外部模型时只发送脱敏文本。</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ===================== 评测与可信度 ===================== -->
-  <section class="section" id="evidence">
-    <div class="container">
-      <div class="section-head reveal">
-        <p class="eyebrow">评测与可信度</p>
-        <h2 class="h2">用可复现的数字说明能力边界</h2>
-        <p class="lede">下面的数字都来自本系统的评测与自动化测试，可当场复跑，口径与内部质量记录一致。</p>
-      </div>
-
-      <div class="grid grid-4 reveal">
-        <div class="metric">
-          <div class="v">0.900</div>
-          <div class="k">完整链路分诊 Macro 召回</div>
-          <div class="s">评测 v1（n=9，自建小样本）；纯规则 0.872；v0 基线 0.447–0.513</div>
-        </div>
-        <div class="metric">
-          <div class="v">396</div>
-          <div class="k">单元测试全通过</div>
-          <div class="s">覆盖护栏、脱敏、画像、规则引擎、编排、证据、报告、任务、审核</div>
-        </div>
-        <div class="metric">
-          <div class="v">72 / 37</div>
-          <div class="k">端到端 HTTP 断言（医生端 / 患者端）</div>
-          <div class="s">含鉴权、缺原因被拒、发布前置条件、状态与版本回填</div>
-        </div>
-        <div class="metric">
-          <div class="v">13 / 13</div>
-          <div class="k">完整报告结构完整性</div>
-          <div class="s">必填段落全部生成、无空段；每份报告带未审核角标与免责声明</div>
-        </div>
-      </div>
-
-      <div class="honest">
-        <strong>能力边界与数据说明：</strong>分诊评测目前是<strong>自建的小样本评测集（n=9）</strong>，混合了公开脱敏病例与按临床场景构造的验收集，
-        <strong>不代表临床准确率</strong>，也不能外推到真实门急诊人群；它只用于对比"规则链 vs 模型链 vs 完整链路"的相对表现。
-        报告中的所有判断都标注"未经医生审核"，系统定位是就医信息整理与决策辅助，不是诊断工具。
-      </div>
-    </div>
-  </section>
-
-  <!-- ===================== FAQ ===================== -->
-  <section class="section" id="faq" style="background:var(--gray-100);">
-    <div class="container">
-      <div class="section-head reveal">
-        <p class="eyebrow">常见问题</p>
-        <h2 class="h2">用户和医生最常问的六个问题</h2>
-      </div>
-
-      <div class="faq reveal">
-        <div class="faq-item">
-          <button class="faq-trigger" aria-expanded="false">
-            <h3>这算不算给患者做诊断？</h3><span class="plus" aria-hidden="true"></span>
-          </button>
-          <div class="faq-content" hidden>
-            <p>不算，也不能。系统输出的是<strong>资料整理结果、就医方向建议与需要向医生确认的问题</strong>：它不会给出疾病名称结论、不会推荐药物或剂量，
-              界面上也不会出现概率或置信度数字。所有报告都带"AI 生成 · 尚未经医生审核"角标与免责声明。</p>
-          </div>
-        </div>
-        <div class="faq-item">
-          <button class="faq-trigger" aria-expanded="false">
-            <h3>能替代医生吗？AI 和医生意见冲突时听谁的？</h3><span class="plus" aria-hidden="true"></span>
-          </button>
-          <div class="faq-content" hidden>
-            <p>不能替代。系统在流程上把医生放在最后一道：每条 AI 结论都要医生<strong>接受 / 修改 / 驳回 / 暂不确定</strong>，修改与驳回必须填写原因。
-              就诊后录入线下真实医生意见时，系统会生成「AI 建议 vs 医生意见」对照，一致与差异都如实并列——AI 绝不覆盖医生判断。</p>
-          </div>
-        </div>
-        <div class="faq-item">
-          <button class="faq-trigger" aria-expanded="false">
-            <h3>病历数据会上传到云端吗？</h3><span class="plus" aria-hidden="true"></span>
-          </button>
-          <div class="faq-content" hidden>
-            <p>病例、审核记录、状态流转都保存在<strong>本地 SQLite</strong>；进入分析前的文本先做脱敏（姓名、电话、证件号等打码），
-              发送给模型的内容是脱敏后的文本，不含身份信息。服务默认只监听本机（127.0.0.1）。</p>
-          </div>
-        </div>
-        <div class="faq-item">
-          <button class="faq-trigger" aria-expanded="false">
-            <h3>如果患者自己写"医生说没问题"，系统会当成医生意见吗？</h3><span class="plus" aria-hidden="true"></span>
-          </button>
-          <div class="faq-content" hidden>
-            <p>不会。患者转述的内容会被单独列为<strong>"患者转述（尚未经医生端确认）"</strong>，不会被采信为医生确认意见，也不会进入"AI 与医生一致"的对照列表；
-              只有医生端以"医生上传"来源录入的意见才算医生意见。这是我们在产品里写死的红线之一。</p>
-          </div>
-        </div>
-        <div class="faq-item">
-          <button class="faq-trigger" aria-expanded="false">
-            <h3>患者手里没有检查结果，还能用吗？</h3><span class="plus" aria-hidden="true"></span>
-          </button>
-          <div class="faq-content" hidden>
-            <p>能用，只是结论会更保守。系统会把缺失项作为<strong>信息缺口</strong>如实列出（而不是编造），并据此降低结果可靠性等级、说明降级原因；
-              多次追问不超过 3 个最关键的问题。缺什么、为什么结论不够确定，患者和医生都能一眼看到。</p>
-          </div>
-        </div>
-        <div class="faq-item">
-          <button class="faq-trigger" aria-expanded="false">
-            <h3>覆盖哪些科室？没有网络还能用吗？</h3><span class="plus" aria-hidden="true"></span>
-          </button>
-          <div class="faq-content" hidden>
-            <p>科室域覆盖 <strong>37 个门类</strong>（内科 13 / 外科 8 / 临床专科 10 / 辅助 6），并带 61 条别名与 14 条最近邻映射，
-              写"心内科""内分泌"这类简称也能识别；超出范围的表述会被标为未识别而不会硬猜。</p>
-            <p>支持离线运行：技术栈是 Flask + 原生前端 + SQLite，零外链资源、零构建步骤。未配置模型密钥时，S2 模型层自动降级，
-              系统仍可用纯规则引擎完成分诊与报告链路（界面会如实提示模型未生效）。</p>
-          </div>
-        </div>
+      <div class="trust-points reveal">
+        <p><strong>不出诊断，不出处方</strong><span>只整理资料、提示方向和待确认问题。</span></p>
+        <p><strong>AI 不覆盖医生</strong><span>医生意见与 AI 建议并列展示，分歧不会被强行合并。</span></p>
+        <p><strong>隐私先脱敏</strong><span>病例默认保存在本机，发送模型前先处理直接身份信息。</span></p>
       </div>
     </div>
   </section>
@@ -840,72 +455,25 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 
 <!-- ===================== 页脚 ===================== -->
 <footer class="footer">
-  <div class="container">
-    <div class="top">
-      <div>
-        <div class="brand">
-          <svg width="26" height="26" viewBox="0 0 28 28" aria-hidden="true">
-            <rect x="1" y="1" width="26" height="26" rx="8" fill="#30302e"/>
-            <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.2" stroke-linecap="round"/>
-            <circle cx="14" cy="14" r="3.2" fill="#faf9f5"/>
-          </svg>
-          <span class="name">多学科就医智助系统</span>
-        </div>
-        <p class="tagline">AI 辅助就医信息整理与多学科决策协作平台。整理资料、推演方向、如实暴露不确定性，把判断权留给医生。</p>
-        <div class="enter">
-          <button class="btn btn-clay" onclick="enterAs('patient')">进入患者端</button>
-          <button class="btn btn-dark" onclick="enterAs('doctor')">进入医生工作台</button>
-        </div>
+  <div class="container footer-compact">
+    <div>
+      <div class="brand">
+        <svg width="26" height="26" viewBox="0 0 28 28" aria-hidden="true">
+          <rect x="1" y="1" width="26" height="26" rx="8" fill="#30302e"/>
+          <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.2" stroke-linecap="round"/>
+          <circle cx="14" cy="14" r="3.2" fill="#faf9f5"/>
+        </svg>
+        <span class="name">多学科就医智助系统</span>
       </div>
-      <div class="cols">
-        <div>
-          <h4>产品</h4>
-          <ul>
-            <li><a href="#" onclick="enterAs('patient');return false;">患者端工作台</a></li>
-            <li><a href="#" onclick="enterAs('doctor');return false;">医生审核台</a></li>
-            <li><a href="#scenes">使用场景</a></li>
-            <li><a href="#flow">完整流程</a></li>
-          </ul>
-        </div>
-        <div>
-          <h4>能力</h4>
-          <ul>
-            <li><a href="#capabilities">可解释决策链</a></li>
-            <li><a href="#capabilities">多专科独立研判</a></li>
-            <li><a href="#capabilities">证据板与缺口</a></li>
-            <li><a href="#capabilities">报告与任务中心</a></li>
-          </ul>
-        </div>
-        <div>
-          <h4>评测与安全</h4>
-          <ul>
-            <li><a href="#evidence">分诊评测 v1</a></li>
-            <li><a href="#evidence">单元测试与端到端验证</a></li>
-            <li><a href="#trust">安全护栏 G1-G6</a></li>
-            <li><a href="#trust">四条产品红线</a></li>
-          </ul>
-        </div>
-        <div>
-          <h4>支持与合规</h4>
-          <ul>
-            <li><a href="#trust">安全护栏与红线</a></li>
-            <li><a href="#evidence">能力边界说明</a></li>
-            <li><a href="#faq">数据与隐私说明</a></li>
-            <li><a href="#faq">常见问题</a></li>
-          </ul>
-        </div>
-      </div>
+      <p class="tagline">整理资料，推演方向，如实呈现不确定性。</p>
     </div>
-
-    <p class="legal-line">
-      免责声明：本系统提供就医信息整理与决策辅助，不提供诊断或处方，不能替代医生面诊与专业判断；若出现胸痛、呼吸困难、意识障碍、大出血等急症表现，请立即拨打急救电话或前往急诊。
-      病例与审核记录保存在本机；未配置模型密钥时不调用外部模型，配置外部模型后发送的是已脱敏病例文本。
-    </p>
-
-    <div class="bottom">
-      <p>多学科就医智助系统　·　2026 第八届全球校园人工智能算法精英大赛 算法创新赛参赛作品</p>
-      <p class="mono">本地部署版 · v1.0</p>
+    <div class="enter">
+      <button class="btn btn-clay" onclick="enterAs('patient')">进入患者端</button>
+      <button class="btn btn-dark" onclick="enterAs('doctor')">进入医生工作台</button>
     </div>
+  </div>
+  <div class="container footer-bottom">
+    <p>本系统提供就医信息整理与决策辅助，不提供诊断或处方，不能替代医生面诊与专业判断；出现急症请立即就医。</p>
   </div>
 </footer>
 
