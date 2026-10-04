@@ -480,8 +480,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 <script>
 /* ============================================================
    交互 shim（零依赖原生 JS）
-   1) 滚动揭示  2) 顶栏下拉  3) FAQ 手风琴  4) 场景标签页
-   5) 移动端菜单 6) 一键登录（跨页保持会话）
+   1) 滚动揭示  2) 顶栏滚动态  3) 一键进入工作台
    ============================================================ */
 (function () {
   'use strict';
@@ -512,99 +511,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
     revealEls.forEach(reveal);
   }
 
-  /* ---------- 2. 顶栏下拉（hover + click + Esc + 点击外部关闭） ---------- */
-  var dds = [].slice.call(document.querySelectorAll('[data-dd]'));
-  function setDd(dd, open) {
-    var trigger = dd.querySelector('.dd-trigger');
-    if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
-    dd.classList.toggle('open', open);
-  }
-  function closeAllDd(except) { dds.forEach(function (dd) { if (dd !== except) setDd(dd, false); }); }
-  dds.forEach(function (dd) {
-    var trigger = dd.querySelector('.dd-trigger');
-    if (!trigger) return;
-    var timer = null;
-    dd.addEventListener('mouseenter', function () { clearTimeout(timer); closeAllDd(dd); setDd(dd, true); });
-    dd.addEventListener('mouseleave', function () {
-      clearTimeout(timer); timer = setTimeout(function () { setDd(dd, false); }, 120);
-    });
-    trigger.addEventListener('click', function (ev) {
-      ev.preventDefault();
-      var open = trigger.getAttribute('aria-expanded') === 'true';
-      closeAllDd(dd); setDd(dd, !open);
-    });
-  });
-  document.addEventListener('click', function (ev) {
-    if (!ev.target.closest('[data-dd]')) closeAllDd(null);
-  });
-  document.addEventListener('keydown', function (ev) {
-    if (ev.key === 'Escape') { closeAllDd(null); closeMobile(); }
-  });
-
-  /* ---------- 3. FAQ 手风琴 ---------- */
-  [].slice.call(document.querySelectorAll('.faq-item')).forEach(function (item) {
-    var trigger = item.querySelector('.faq-trigger');
-    var panel = item.querySelector('.faq-content');
-    if (!trigger || !panel) return;
-    trigger.addEventListener('click', function () {
-      var open = trigger.getAttribute('aria-expanded') === 'true';
-      trigger.setAttribute('aria-expanded', open ? 'false' : 'true');
-      item.classList.toggle('open', !open);
-      if (open) panel.setAttribute('hidden', ''); else panel.removeAttribute('hidden');
-    });
-  });
-
-  /* ---------- 4. 场景标签页（滑块指示器） ---------- */
-  function positionIndicator(tablist) {
-    var indicator = tablist.querySelector('.indicator');
-    var active = tablist.querySelector('[role="tab"][aria-selected="true"]');
-    if (!indicator || !active) return;
-    indicator.style.setProperty('--indicator-x', active.offsetLeft + 'px');
-    indicator.style.width = active.offsetWidth + 'px';
-  }
-  [].slice.call(document.querySelectorAll('[role="tablist"]')).forEach(function (tablist) {
-    var tabs = [].slice.call(tablist.querySelectorAll('[role="tab"]'));
-    function select(tab) {
-      tabs.forEach(function (t) {
-        var on = t === tab;
-        t.setAttribute('aria-selected', on ? 'true' : 'false');
-        var panel = document.getElementById(t.getAttribute('aria-controls'));
-        if (panel) panel.classList.toggle('active', on);
-      });
-      positionIndicator(tablist);
-    }
-    tabs.forEach(function (tab) {
-      tab.addEventListener('click', function () { select(tab); });
-      tab.addEventListener('keydown', function (ev) {
-        if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
-        ev.preventDefault();
-        var i = tabs.indexOf(tab);
-        var next = tabs[(i + (ev.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
-        next.focus(); select(next);
-      });
-    });
-    positionIndicator(tablist);
-    window.addEventListener('resize', function () { positionIndicator(tablist); });
-  });
-
-  /* ---------- 5. 移动端菜单 + 顶栏滚动态 ---------- */
-  var burger = document.getElementById('burger');
-  var panel = document.getElementById('mobilePanel');
-  function closeMobile() {
-    if (!burger || !panel) return;
-    burger.setAttribute('aria-expanded', 'false');
-    panel.classList.remove('open');
-  }
-  if (burger && panel) {
-    burger.addEventListener('click', function () {
-      var open = burger.getAttribute('aria-expanded') !== 'true';
-      burger.setAttribute('aria-expanded', open ? 'true' : 'false');
-      panel.classList.toggle('open', open);
-    });
-    [].slice.call(panel.querySelectorAll('a')).forEach(function (a) {
-      a.addEventListener('click', closeMobile);
-    });
-  }
+  /* ---------- 2. 顶栏滚动态 ---------- */
   var nav = document.getElementById('nav');
   function onScroll() { if (nav) nav.classList.toggle('scrolled', window.scrollY > 8); }
   window.addEventListener('scroll', onScroll, { passive: true });
