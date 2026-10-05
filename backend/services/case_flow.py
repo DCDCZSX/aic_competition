@@ -781,6 +781,9 @@ class CaseFlow:
             "mdt": {"state": "pending", "done": 0, "total": mdt_total, "current": "", "step": "",
                     "failed": []},
             "warnings": [],
+            "failed_phases": [],
+            "failures": {},
+            "recovery": {"action": "retry_analysis", "label": "重新分析"},
             "started_at": _now(),
             "finished_at": "",
         }
@@ -827,6 +830,31 @@ class CaseFlow:
                 warnings.append(text)
         self._update_analysis(case_id, mutate)
 
+    def _record_analysis_failure(self, case_id: str, phase: str, error: Exception,
+                                 *, report_version: int) -> None:
+        """Persist a retryable failure without exposing a fake ready state."""
+        detail = str(error or "分析阶段执行失败").strip() or "分析阶段执行失败"
+        detail = detail[:300]
+
+        def mutate(status: Dict[str, Any]) -> None:
+            failed = list(status.get("failed_phases") or [])
+            if phase not in failed:
+                failed.append(phase)
+            status["failed_phases"] = failed
+            failures = dict(status.get("failures") or {})
+            failures[phase] = {
+                "phase": phase,
+                "label": self.PHASE_LABELS.get(phase, phase),
+                "reason": detail,
+                "retryable": True,
+                "report_version": int(report_version or 1),
+                "at": _now(),
+            }
+            status["failures"] = failures
+            status["recovery"] = {"action": "retry_analysis", "label": "重新分析"}
+
+        self._update_analysis(case_id, mutate)
+
     @serialized_case
     def start_analysis_job(self, case_id: str, *, phases: Optional[List[str]] = None) -> bool:
         """启动（或重试）后台分析任务。`phases` 指定只重跑哪些相位，默认全部。"""
@@ -844,6 +872,10 @@ class CaseFlow:
             case = self.store.load_case(case_id)
             if not case:
                 return False
+            if str(case.get("case_state") or "") == "doctor_confirmed":
+                # A confirmed report can only be re-analysed after new material
+                # has opened an explicit awaiting_recheck round.
+                return False
             payload = case.get("payload") or {}
             # 重置状态（重试时保留已完成的相位结果，只把待跑的相位置为 pending）
             status = dict(payload.get("analysis") or self._new_analysis_status())
@@ -852,6 +884,13 @@ class CaseFlow:
             phases_map = dict(status.get("phases") or {})
             for phase in todo:
                 phases_map[phase] = {"state": "pending", "label": self.PHASE_LABELS[phase]}
+            failures = dict(status.get("failures") or {})
+            for phase in todo:
+                failures.pop(phase, None)
+            status["failures"] = failures
+            status["failed_phases"] = [
+                phase for phase in (status.get("failed_phases") or []) if phase not in todo
+            ]
             status["phases"] = phases_map
 
             hints = tuple(hint for phase in todo
@@ -912,6 +951,10 @@ class CaseFlow:
                 failed.append(phase)
                 self._set_phase(case_id, phase, "failed",
                                 note=f"{self.PHASE_LABELS.get(phase, phase)}阶段执行失败（可重试）")
+                self._record_analysis_failure(
+                    case_id, phase, exc,
+                    report_version=int(case.get("report_version") or 1),
+                )
                 self._append_analysis_warning(
                     case_id, f"{self.PHASE_LABELS.get(phase, phase)}未完成（已保留其它已就绪结果）")
 
@@ -1043,6 +1086,11 @@ class CaseFlow:
             self._append_analysis_warning(
                 case_id, f"多学科分析有 {len(mdt_failed)} 个科室未完成（{'、'.join(mdt_failed)}），"
                          f"其余科室结果可用，可点「重新分析」重跑")
+            self._record_analysis_failure(
+                case_id, "mdt",
+                RuntimeError(f"未完成科室：{'、'.join(mdt_failed)}"),
+                report_version=int(case.get("report_version") or 1),
+            )
 
         # ---- 收尾：状态汇总 + 病例状态推进 ----
         if len(failed) == len(phases):
@@ -1059,7 +1107,9 @@ class CaseFlow:
 
         refreshed = self.store.load_case(case_id)
         payload_now = dict((refreshed or {}).get("payload") or {})
-        if payload_now.get("triage"):
+        # Failed/partial phases remain visible as retryable analysis work.  Only
+        # a fully successful run may enter the doctor's normal review queue.
+        if state == "done" and payload_now.get("triage"):
             self.store.transition_case(
                 case_id, STATE_AWAITING_DOCTOR, actor="system",
                 reason="后台分析完成",
@@ -1150,6 +1200,28 @@ class CaseFlow:
         updated["mdt"] = mdt
         updated["state"] = "partial_failed" if payload.get("triage") else "failed"
         updated["finished_at"] = _now()
+        failed_phases = [
+            phase for phase, entry in phases.items()
+            if (entry or {}).get("state") == "failed"
+        ]
+        updated["failed_phases"] = failed_phases
+        failures = dict(updated.get("failures") or {})
+        report_version = 1
+        if self.store:
+            stale_case = self.store.load_case(case_id) or {}
+            report_version = int(stale_case.get("report_version") or 1)
+        for phase in failed_phases:
+            entry = phases.get(phase) or {}
+            failures[phase] = {
+                "phase": phase,
+                "label": self.PHASE_LABELS.get(phase, phase),
+                "reason": entry.get("note") or "后台任务已失联",
+                "retryable": True,
+                "report_version": report_version,
+                "at": _now(),
+            }
+        updated["failures"] = failures
+        updated["recovery"] = {"action": "retry_analysis", "label": "重新分析"}
         warnings = list(updated.get("warnings") or [])
         message = "后台分析任务未完成（任务已失联，可重试）"
         if message not in warnings:
@@ -1230,6 +1302,13 @@ class CaseFlow:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
         payload = case.get("payload") or {}
         status = payload.get("analysis") or {}
+        current_state = str(case.get("case_state") or "")
+        if current_state == "doctor_confirmed":
+            return {
+                "ok": False,
+                "error": "已确认病例不能直接重新分析，请先提交新资料进入重新审核。",
+                "recovery": {"action": "submit_new_materials", "label": "补充新资料"},
+            }
         if phases is not None:
             if not isinstance(phases, list) or any(
                     not isinstance(phase, str) or phase not in self.ANALYSIS_PHASES
@@ -1250,10 +1329,12 @@ class CaseFlow:
                 phases.sort(key=self.ANALYSIS_PHASES.index)
         if not phases:
             return {"ok": False, "error": "所有分析相位都已完成，无需重试"}
-        current_state = str(case.get("case_state") or "")
-        if current_state == "doctor_confirmed" or bool((payload.get("review") or {}).get("published")):
-            self._begin_recheck(
-                case, payload, actor="system", reason="分析重试需要重新审核")
+        if bool((payload.get("review") or {}).get("published")) and current_state != "awaiting_recheck":
+            return {
+                "ok": False,
+                "error": "当前审核版仍已发布，请先提交新资料进入重新审核。",
+                "recovery": {"action": "submit_new_materials", "label": "补充新资料"},
+            }
         started = self.start_analysis_job(case_id, phases=phases)
         return {"ok": started, "retried": phases if started else [],
                 "error": "" if started else "无法启动后台任务"}
@@ -1788,7 +1869,7 @@ class CaseFlow:
     def submit_mdt_formal_record(
         self, case_id: str, *, status: str, participants: Optional[List[str]] = None,
         conclusion: str = "", unresolved: str = "", next_step: str = "",
-        reviewer_id: str = "",
+        reviewer_id: str = "", reopen_reason: str = "",
     ) -> Dict[str, Any]:
         """保存真实 MDT 会诊记录，不把 AI 预分析当作医生结论。"""
         case = self.store.load_case(case_id) if self.store else None
@@ -1827,6 +1908,26 @@ class CaseFlow:
         if status == "completed" and not safe_conclusion:
             return {"ok": False, "error": "已完成的正式 MDT 必须填写结论"}
 
+        previous_record = payload.get("mdt_formal_record") or {}
+        previous_status = str(previous_record.get("status") or "")
+        reopen_reason = str(reopen_reason or "").strip()
+        if previous_status == "completed":
+            if status == "completed":
+                pass
+            elif status in ("planned", "in_progress"):
+                if not reopen_reason:
+                    return {"ok": False, "error": "已完成的正式 MDT 只能在填写重新打开原因后重开"}
+            else:
+                return {"ok": False, "error": "正式 MDT 状态不能回退"}
+        elif previous_status == "planned":
+            if status not in ("planned", "in_progress"):
+                return {"ok": False, "error": "正式 MDT 状态必须按待开始→进行中→已完成推进"}
+        elif previous_status == "in_progress":
+            if status not in ("in_progress", "completed"):
+                return {"ok": False, "error": "正式 MDT 状态不能回退"}
+        elif status not in ("planned", "in_progress", "completed"):
+            return {"ok": False, "error": "正式 MDT 状态非法"}
+
         record = {
             "status": status,
             "status_label": MDT_FORMAL_RECORD_STATUS_LABELS[status],
@@ -1838,7 +1939,8 @@ class CaseFlow:
             "updated_at": _now(),
             "source": "doctor_recorded",
         }
-        previous_record = payload.get("mdt_formal_record") or {}
+        if reopen_reason:
+            record["reopen_reason"] = reopen_reason
         record_changed = {
             "status": previous_record.get("status"),
             "participants": list(previous_record.get("participants") or []),
@@ -1902,6 +2004,11 @@ class CaseFlow:
             case_id, "mdt_formal_record_updated",
             f"status={status}; participants={len(safe_participants)}; reviewer={safe_reviewer}",
         )
+        if previous_status == "completed" and status in ("planned", "in_progress"):
+            self.store.add_audit(
+                case_id, "mdt_formal_reopened",
+                f"status={status}; reviewer={safe_reviewer}; reason={reopen_reason}",
+            )
         return {"ok": True, "mdt_formal_record": record}
 
     def get_case(self, case_id: str) -> Optional[Dict[str, Any]]:

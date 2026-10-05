@@ -977,12 +977,13 @@ def submit_mdt_formal_record(case_id):
         conclusion = string_field(data, 'conclusion', default='', max_length=6000)
         unresolved = string_field(data, 'unresolved', default='', max_length=3000)
         next_step = string_field(data, 'next_step', default='', max_length=3000)
+        reopen_reason = string_field(data, 'reopen_reason', default='', max_length=1000)
     except InputValidationError as exc:
         return _invalid_input(exc)
     result = case_flow.submit_mdt_formal_record(
         case_id, status=status, participants=participants,
         conclusion=conclusion, unresolved=unresolved, next_step=next_step,
-        reviewer_id=session.username,
+        reviewer_id=session.username, reopen_reason=reopen_reason,
     )
     return jsonify(result), (200 if result.get('ok') else 400)
 

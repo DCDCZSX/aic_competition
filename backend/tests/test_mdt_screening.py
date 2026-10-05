@@ -217,6 +217,35 @@ class MdtScreeningFlowTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("结论", result["error"])
 
+    def test_formal_mdt_status_cannot_go_backwards_without_explicit_reopen_reason(self):
+        screening = self.submit(
+            decision="recommend_mdt", reason="需要多科共同判断", purpose="明确共同处理重点",
+            departments=["内分泌科", "眼科"])
+        self.assertTrue(screening["ok"], screening)
+        self.assertTrue(self.flow.submit_mdt_formal_record(
+            self.case_id, status="planned", participants=[], unresolved="待开会",
+            reviewer_id="doctor")["ok"])
+        self.assertTrue(self.flow.submit_mdt_formal_record(
+            self.case_id, status="in_progress", participants=[], unresolved="讨论中",
+            reviewer_id="doctor")["ok"])
+        self.assertTrue(self.flow.submit_mdt_formal_record(
+            self.case_id, status="completed", participants=["医生"],
+            conclusion="共同确认后续检查", reviewer_id="doctor")["ok"])
+
+        backwards = self.flow.submit_mdt_formal_record(
+            self.case_id, status="planned", participants=[], unresolved="需要重新组织会诊",
+            reviewer_id="doctor")
+        self.assertFalse(backwards["ok"])
+        self.assertIn("重新打开", backwards["error"])
+
+        reopened = self.flow.submit_mdt_formal_record(
+            self.case_id, status="planned", participants=[], unresolved="需要重新组织会诊",
+            reviewer_id="doctor", reopen_reason="新增检查结果需要重新讨论")
+        self.assertTrue(reopened["ok"], reopened)
+        self.assertEqual(reopened["mdt_formal_record"]["status"], "planned")
+        events = self.store.list_audit(self.case_id)
+        self.assertTrue(any(item["event"] == "mdt_formal_reopened" for item in events))
+
     def test_triage_confirmation_persists_before_mdt(self):
         result = self.flow.submit_triage_confirmation(
             self.case_id, primary_department="内分泌科",
