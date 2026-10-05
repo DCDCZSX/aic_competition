@@ -355,6 +355,9 @@ class ResponsiveLayoutTest(unittest.TestCase):
             int(declarations_at(rules, ".home-entry .btn", 390).get("min-height", "0").replace("px", "")),
             44,
         )
+        self.assertEqual(declarations_at(rules, ".nav-link", 390).get("white-space"), "nowrap")
+        self.assertEqual(declarations_at(rules, ".home-entry .btn", 390).get("white-space"), "nowrap")
+        self.assertEqual(declarations_at(rules, ".nav-right", 390).get("min-width"), "0")
         self.assertIn('href="#flow"', html)
         self.assertIn("minmax(0,5fr)", declarations_at(rules, ".hero", 1440).get("grid-template-columns", ""))
 

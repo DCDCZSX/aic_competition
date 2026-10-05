@@ -82,16 +82,16 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 @keyframes navIn{from{opacity:0;transform:translateY(-20px);}to{opacity:1;transform:none;}}
 .nav.scrolled{border-bottom-color:var(--border);box-shadow:var(--shadow-sm);}
 @media (prefers-reduced-motion:reduce){.nav{animation:none;}}
-.nav-inner{display:flex;align-items:center;justify-content:space-between;height:var(--nav-h);gap:var(--sp-24);}
+.nav-inner{display:flex;align-items:center;justify-content:space-between;height:var(--nav-h);gap:var(--sp-24);min-width:0;}
 @media (min-width:1200px){:root{--nav-h:84px;}}
 .brand{display:flex;align-items:center;gap:10px;flex:0 0 auto;}
 .brand svg{display:block;}
 .brand .name{font-family:var(--font-display);font-weight:500;font-size:17px;letter-spacing:.01em;white-space:nowrap;}
-.nav-right{display:flex;align-items:center;gap:var(--sp-24);}
+.nav-right{display:flex;align-items:center;gap:var(--sp-24);flex:0 0 auto;min-width:0;}
 .home-entry{display:flex;align-items:center;gap:var(--sp-8);}
 .nav-links{display:none;align-items:center;gap:var(--sp-24);}
 @media (min-width:1000px){.nav-links{display:flex;}}
-.nav-link{font-size:var(--body-3);color:var(--text-2);padding:6px 0;background:none;border:0;}
+.nav-link{font-size:var(--body-3);color:var(--text-2);padding:6px 0;background:none;border:0;white-space:nowrap;flex:0 0 auto;}
 .nav-link:hover{color:var(--text);}
 .dd{position:relative;}
 .dd-trigger{display:inline-flex;align-items:center;gap:6px;}
@@ -317,8 +317,9 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 .footer-bottom{margin-top:var(--sp-32);padding-top:var(--sp-20);border-top:1px solid var(--gray-750);}
 .footer-bottom p{font-size:var(--micro);color:var(--gray-500);}
 @media (max-width:720px){
+  .nav-inner{gap:var(--sp-12);}
   .nav-right{gap:var(--sp-8);}
-  .home-entry .btn{min-height:44px;padding:7px 10px;font-size:var(--caption);}
+  .home-entry .btn{min-height:44px;padding:7px 10px;font-size:var(--caption);white-space:nowrap;flex:0 0 auto;}
   .home-entry .btn-sand{display:none;}
   .footer-compact{display:grid;gap:var(--sp-20);}
   .footer-compact .enter{margin-top:0;}
