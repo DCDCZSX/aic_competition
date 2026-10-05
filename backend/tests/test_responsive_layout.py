@@ -341,6 +341,17 @@ class ResponsiveLayoutTest(unittest.TestCase):
                 self.assertGreaterEqual(int(decls.get("min-height", "0").replace("px", "")), 44)
                 self.assertGreaterEqual(int(decls.get("min-width", "0").replace("px", "")), 44)
 
+    def test_home_value_canvas_and_role_entries_are_responsive(self):
+        """首页的价值画布和角色入口在桌面、平板、手机宽度都保留可见触达。"""
+        _html, rules = self.page("/")
+        self.assertEqual(declarations_at(rules, ".evidence-canvas", 390).get("overflow"), "hidden")
+        self.assertEqual(declarations_at(rules, ".evidence-cards", 390).get("display"), "grid")
+        self.assertGreaterEqual(
+            int(declarations_at(rules, ".role-entry", 390).get("min-height", "0").replace("px", "")),
+            44,
+        )
+        self.assertIn("minmax(0,5fr)", declarations_at(rules, ".hero", 1440).get("grid-template-columns", ""))
+
     # ---------------------------------------------------- 打印
     def test_print_hides_shell_and_expands_report(self):
         """打印：外壳/操作条不印在纸上；折叠的报告段必须还原成完整文档。"""
