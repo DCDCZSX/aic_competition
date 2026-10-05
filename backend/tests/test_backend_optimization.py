@@ -64,10 +64,12 @@ class BackendOptimizationTest(unittest.TestCase):
         self.assertEqual(report["分诊结果"]["牵头方向"], "眼科")
 
     def test_new_material_invalidates_published_review_without_reusing_decisions(self):
-        published = self.flow.publish_review(
-            self.case_id, reviewer_name="审核医生", reviewer_id="doctor-1",
-            accept_all=True,
-        )
+        for item in self.flow.get_review(self.case_id)["items"]:
+            if item["review_tier"] == "required" and item["state"] == "awaiting":
+                decision = self.flow.submit_decision(
+                    self.case_id, item["item_id"], "accept", reviewer_name="审核医生")
+                self.assertTrue(decision["ok"], decision.get("error"))
+        published = self.flow.publish_review(self.case_id, reviewer_name="审核医生")
         self.assertTrue(published["ok"], published)
         old_count = len(self.store.list_decisions(self.case_id))
 
@@ -79,7 +81,12 @@ class BackendOptimizationTest(unittest.TestCase):
         self.assertEqual(case["case_state"], "awaiting_recheck")
         self.assertFalse(case["payload"]["review"]["published"])
         self.assertEqual(case["payload"]["review_round"], 2)
-        self.assertEqual(self.flow.get_review(self.case_id)["decisions"], [])
+        review = self.flow.get_review(self.case_id)
+        self.assertTrue(review["stale_decisions"])
+        self.assertTrue(
+            any(item["state"] == "awaiting" for item in review["items"]),
+            "受影响的条目应回到待审状态",
+        )
         self.assertEqual(len(self.store.list_decisions(self.case_id)), old_count)
 
     def test_followup_crisis_is_blocked_before_case_mutation(self):

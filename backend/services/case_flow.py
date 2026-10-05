@@ -532,6 +532,73 @@ class CaseFlow:
         _progress("save")
         return result
 
+    def _begin_recheck(self, case: Dict[str, Any], payload: Dict[str, Any], *,
+                       actor: str, reason: str,
+                       affected_item_ids: Sequence[str] = ()) -> Dict[str, Any]:
+        """Invalidate the published review round before saving new case content.
+
+        Report snapshots live in ``report_versions`` and are immutable.  The
+        mutable ``payload.review`` record is only the current round marker, so
+        new content clears its published flag while retaining the metadata of
+        the round that was superseded.  Decisions remain in the decisions
+        table; content revisions make only affected decisions stale.
+        """
+        next_payload = dict(payload or {})
+        current_state = str(case.get("case_state") or STATE_AWAITING_DOCTOR)
+        review = dict(next_payload.get("review") or {})
+        published = bool(review.get("published")) or current_state == "doctor_confirmed"
+        try:
+            current_round = max(1, int(next_payload.get("review_round") or 1))
+        except (TypeError, ValueError):
+            current_round = 1
+
+        affected = list(dict.fromkeys(
+            str(item_id).strip() for item_id in (affected_item_ids or [])
+            if str(item_id).strip()
+        ))
+        revisions = dict(next_payload.get("review_item_revisions") or {})
+        revisions.update(review_service.bump_content_revisions(revisions, affected))
+        next_payload["review_item_revisions"] = revisions
+
+        opened_new_round = published and current_state != "awaiting_recheck"
+        if opened_new_round:
+            previous = {
+                key: review[key] for key in
+                ("published", "published_by", "published_at", "version", "counts")
+                if key in review
+            }
+            if previous:
+                review["previous_published"] = previous
+            review["invalidated_at"] = _now()
+            review["invalidated_by"] = str(actor or "system")
+            review["invalidated_reason"] = str(reason or "新资料进入")
+            review["published"] = False
+            next_payload["review_round"] = current_round + 1
+        elif current_state == "awaiting_recheck" or review.get("published"):
+            # A second update in the same open round must not create another
+            # report round, but a stale published flag must never survive.
+            review["published"] = False
+            next_payload["review_round"] = current_round
+        else:
+            next_payload["review_round"] = current_round
+        next_payload["review"] = review
+
+        if self.store and case.get("case_id"):
+            case_id = str(case["case_id"])
+            target_state = "awaiting_recheck" if current_state == "doctor_confirmed" else current_state
+            self.store.transition_case(
+                case_id, target_state, actor=str(actor or "system"),
+                reason=str(reason or "新资料进入审核轮次"),
+                payload=next_payload,
+            )
+            event = "review_round_started" if opened_new_round else "review_round_updated"
+            self.store.add_audit(
+                case_id, event,
+                f"轮次={next_payload['review_round']}；受影响条目={','.join(affected) or '无'}；"
+                f"原因={reason or '新资料进入'}",
+            )
+        return next_payload
+
     # ------------------------------------------------------------------ 追问回答
     @serialized_case
     def submit_answers(self, case_id: str, answers: Dict[str, str],
@@ -567,6 +634,7 @@ class CaseFlow:
             return {"ok": False, "error": str(exc)}
 
         payload = dict(case.get("payload") or {})
+        old_review_items = review_service.build_items(case)
         gaps = list(payload.get("gaps", []))
         outcome_answers = apply_answers(gaps, safe_answers)
 
@@ -633,13 +701,30 @@ class CaseFlow:
                             "total": len(outcome.selected[:MAX_MDT_DEPARTMENTS]),
                             "current": "", "started_at": _now()} if deferred_mdt else payload.get("mdt_status")),
         })
+        candidate_case = dict(case)
+        candidate_case["payload"] = payload
+        new_review_items = review_service.build_items(candidate_case)
+        affected_item_ids = review_service.affected_item_ids(
+            old_review_items, new_review_items,
+            sorted(set(old_selected) | set(new_selected)), supplement,
+        )
+        current_state = str(case.get("case_state") or STATE_AWAITING_DOCTOR)
+        review_state = payload.get("review") or {}
+        needs_recheck = current_state in ("doctor_confirmed", "awaiting_recheck") \
+            or bool(review_state.get("published"))
+        if needs_recheck:
+            payload = self._begin_recheck(
+                case, payload, actor="patient", reason="追问回答更新",
+                affected_item_ids=affected_item_ids,
+            )
         if self.store:
             self.store.save_case(
                 case_id,
                 patient_name=case.get("patient_name") or "",
                 main_issue=case.get("main_issue") or "",
                 status=case.get("status") or "running",
-                case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
+                case_state=("awaiting_recheck" if current_state == "doctor_confirmed"
+                            else current_state),
                 report_version=int(case.get("report_version") or 1),
                 payload=payload,
             )
@@ -1165,6 +1250,10 @@ class CaseFlow:
                 phases.sort(key=self.ANALYSIS_PHASES.index)
         if not phases:
             return {"ok": False, "error": "所有分析相位都已完成，无需重试"}
+        current_state = str(case.get("case_state") or "")
+        if current_state == "doctor_confirmed" or bool((payload.get("review") or {}).get("published")):
+            self._begin_recheck(
+                case, payload, actor="system", reason="分析重试需要重新审核")
         started = self.start_analysis_job(case_id, phases=phases)
         return {"ok": started, "retried": phases if started else [],
                 "error": "" if started else "无法启动后台任务"}
@@ -1435,9 +1524,6 @@ class CaseFlow:
         case = self.store.load_case(case_id) if self.store else None
         if not case:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
-        if str(case.get("case_state") or "") == "doctor_confirmed":
-            return {"ok": False, "error": "已发布审核版的病例不能重新进行初筛"}
-
         decision = str(decision or "").strip()
         if decision not in MDT_SCREENING_DECISIONS:
             return {"ok": False, "error": "初筛决定非法"}
@@ -1526,14 +1612,41 @@ class CaseFlow:
             "mdt_queue_eligible": decision == "recommend_mdt",
         }
         payload = dict(case.get("payload") or {})
+        previous_screening = payload.get("mdt_screening") or {}
+        screening_changed = {
+            "status": previous_screening.get("status"),
+            "decision": previous_screening.get("decision"),
+            "reason": previous_screening.get("reason") or "",
+            "purpose": previous_screening.get("purpose") or "",
+            "departments": list(previous_screening.get("departments") or []),
+        } != {
+            "status": screening["status"],
+            "decision": screening["decision"],
+            "reason": screening["reason"],
+            "purpose": screening["purpose"],
+            "departments": list(screening["departments"]),
+        }
         payload["mdt_screening"] = screening
+        old_items = review_service.build_items(case)
+        current_state = str(case.get("case_state") or "")
+        if screening_changed and (
+                current_state == "doctor_confirmed"
+                or bool((payload.get("review") or {}).get("published"))):
+            payload = self._begin_recheck(
+                case, payload, actor=safe_reviewer, reason="MDT 初筛修改",
+                affected_item_ids=[item.item_id for item in old_items
+                                  if item.target_type == "consensus_item"],
+            )
+        target_state = ("awaiting_recheck"
+                        if screening_changed and current_state == "doctor_confirmed"
+                        else current_state or STATE_AWAITING_DOCTOR)
         self.store.save_case(
             case_id,
             owner_id=case.get("owner_id") or "",
             patient_name=case.get("patient_name") or "",
             main_issue=case.get("main_issue") or "",
             status=case.get("status") or "running",
-            case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
+            case_state=target_state,
             report_version=int(case.get("report_version") or 1),
             payload=payload,
         )
@@ -1588,8 +1701,6 @@ class CaseFlow:
         case = self.store.load_case(case_id) if self.store else None
         if not case:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
-        if str(case.get("case_state") or "") == "doctor_confirmed":
-            return {"ok": False, "error": "已发布审核版的病例不能重新确认分流方向"}
         try:
             primary = department_domain.resolve(str(primary_department or "")).name
             safe_reason = update_service.sanitize_optional_content(reason, field_name="分流确认理由")
@@ -1619,12 +1730,37 @@ class CaseFlow:
             "reason": safe_reason, "reviewer_id": safe_reviewer, "confirmed_at": _now(),
         }
         payload = dict(case.get("payload") or {})
+        previous_confirmation = payload.get("triage_doctor_confirmation") or {}
+        confirmation_changed = {
+            "status": previous_confirmation.get("status"),
+            "primary_department": previous_confirmation.get("primary_department"),
+            "secondary_departments": list(previous_confirmation.get("secondary_departments") or []),
+            "reason": previous_confirmation.get("reason") or "",
+        } != {
+            "status": confirmation["status"],
+            "primary_department": confirmation["primary_department"],
+            "secondary_departments": list(confirmation["secondary_departments"]),
+            "reason": confirmation["reason"],
+        }
         payload["triage_doctor_confirmation"] = confirmation
+        old_items = review_service.build_items(case)
+        current_state = str(case.get("case_state") or "")
+        if confirmation_changed and (
+                current_state == "doctor_confirmed"
+                or bool((payload.get("review") or {}).get("published"))):
+            payload = self._begin_recheck(
+                case, payload, actor=safe_reviewer, reason="分流确认修改",
+                affected_item_ids=[item.item_id for item in old_items
+                                  if item.target_type == "path_step"],
+            )
+        target_state = ("awaiting_recheck"
+                        if confirmation_changed and current_state == "doctor_confirmed"
+                        else current_state or STATE_AWAITING_DOCTOR)
         self.store.save_case(case_id, owner_id=case.get("owner_id") or "",
                              patient_name=case.get("patient_name") or "",
                              main_issue=case.get("main_issue") or "",
                              status=case.get("status") or "running",
-                             case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
+                             case_state=target_state,
                              report_version=int(case.get("report_version") or 1), payload=payload)
         self.store.add_audit(case_id, "triage_confirmation_recorded",
                              f"primary={primary}; secondary={len(secondary)}; reviewer={safe_reviewer}")
@@ -1640,8 +1776,6 @@ class CaseFlow:
         case = self.store.load_case(case_id) if self.store else None
         if not case:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
-        if str(case.get("case_state") or "") == "doctor_confirmed":
-            return {"ok": False, "error": "已发布审核版的病例不能修改正式 MDT 记录"}
         payload = dict(case.get("payload") or {})
         screening = payload.get("mdt_screening") or {}
         if screening.get("decision") != "recommend_mdt":
@@ -1686,13 +1820,40 @@ class CaseFlow:
             "updated_at": _now(),
             "source": "doctor_recorded",
         }
+        previous_record = payload.get("mdt_formal_record") or {}
+        record_changed = {
+            "status": previous_record.get("status"),
+            "participants": list(previous_record.get("participants") or []),
+            "conclusion": previous_record.get("conclusion") or "",
+            "unresolved": previous_record.get("unresolved") or "",
+            "next_step": previous_record.get("next_step") or "",
+        } != {
+            "status": record["status"],
+            "participants": list(record["participants"]),
+            "conclusion": record["conclusion"],
+            "unresolved": record["unresolved"],
+            "next_step": record["next_step"],
+        }
         payload["mdt_formal_record"] = record
+        old_items = review_service.build_items(case)
+        current_state = str(case.get("case_state") or "")
+        if record_changed and (
+                current_state == "doctor_confirmed"
+                or bool((payload.get("review") or {}).get("published"))):
+            payload = self._begin_recheck(
+                case, payload, actor=safe_reviewer, reason="正式 MDT 记录修改",
+                affected_item_ids=[item.item_id for item in old_items
+                                  if item.target_type == "consensus_item"],
+            )
+        target_state = ("awaiting_recheck"
+                        if record_changed and current_state == "doctor_confirmed"
+                        else current_state or STATE_AWAITING_DOCTOR)
         self.store.save_case(
             case_id, owner_id=case.get("owner_id") or "",
             patient_name=case.get("patient_name") or "",
             main_issue=case.get("main_issue") or "",
             status=case.get("status") or "running",
-            case_state=case.get("case_state") or STATE_AWAITING_DOCTOR,
+            case_state=target_state,
             report_version=int(case.get("report_version") or 1), payload=payload)
         self.store.add_audit(
             case_id, "mdt_formal_record_updated",
@@ -2010,8 +2171,6 @@ class CaseFlow:
                 revisions[item_id] = max(1, int(revisions.get(item_id, 1) or 1))
             except (TypeError, ValueError):
                 revisions[item_id] = 1
-        for item_id in reopened_item_ids:
-            revisions[item_id] = revisions.get(item_id, 1) + 1
         candidate_payload["review_item_revisions"] = revisions
 
         unaffected_departments = [
@@ -2039,13 +2198,25 @@ class CaseFlow:
         payload = candidate_payload
         affected = dict(affected)
         affected.update(review_item_changes)
-        # 新资料进入后待复核（状态机）
+        # 新资料进入后待复核（状态机）。已发布病例统一通过审核轮次入口，
+        # 其它病例保持原有状态流转，但都写入同一份候选 payload。
         if self.store:
             current_state = str(case.get("case_state") or STATE_AWAITING_DOCTOR)
-            target_state = "awaiting_recheck" if current_state == "doctor_confirmed" \
-                else STATE_AWAITING_DOCTOR
-            self.store.transition_case(
-                case_id, target_state, actor=source, reason=f"{kind}更新", payload=payload)
+            review_state = payload.get("review") or {}
+            needs_recheck = current_state in ("doctor_confirmed", "awaiting_recheck") \
+                or bool(review_state.get("published"))
+            if needs_recheck:
+                payload = self._begin_recheck(
+                    case, payload, actor=source, reason=f"{kind}更新",
+                    affected_item_ids=reopened_item_ids,
+                )
+            else:
+                revisions.update(review_service.bump_content_revisions(
+                    revisions, reopened_item_ids))
+                payload["review_item_revisions"] = revisions
+                self.store.transition_case(
+                    case_id, STATE_AWAITING_DOCTOR, actor=source,
+                    reason=f"{kind}更新", payload=payload)
             self.store.add_audit(case_id, "case_updated",
                                  f"{kind}（{source}）→ 受影响科室：{affected['departments'] or '无'}"
                                  f"；变化摘要 {len(summary.changed)} 项")
@@ -2512,6 +2683,22 @@ class CaseFlow:
                 reviewer_name, field_name="审核人") or "模拟审核员"
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+
+        current_review = case.get("payload", {}).get("review") or {}
+        if bool(current_review.get("published")) and str(case.get("case_state") or "") == "doctor_confirmed":
+            version = int(case.get("report_version") or current_review.get("version") or 1)
+            return {
+                "ok": True,
+                "idempotent": True,
+                "case_state": "doctor_confirmed",
+                "version": version,
+                "report_version": version,
+                "review": current_review,
+            }
+        if str(case.get("case_state") or "") not in (
+            "awaiting_doctor", "doctor_reviewed", "awaiting_recheck"
+        ):
+            return {"ok": False, "error": "当前审核轮次尚未进入可发布状态"}
 
         items = review_service.apply_decisions(
             review_service.build_items(case),

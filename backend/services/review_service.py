@@ -538,6 +538,27 @@ def affected_item_ids(old_items: Sequence[ReviewItem], new_items: Sequence[Revie
     return sorted(out)
 
 
+def bump_content_revisions(revisions: Optional[Dict[str, Any]],
+                           item_ids: Sequence[str] = ()) -> Dict[str, int]:
+    """Advance the current content revision for affected review items.
+
+    Historical decisions stay in storage; ``apply_decisions`` ignores them
+    once their content revision no longer matches the current item.  Missing
+    or malformed legacy values start at revision one.
+    """
+    updated: Dict[str, int] = {}
+    for raw_item_id in item_ids or ():
+        item_id = str(raw_item_id or "").strip()
+        if not item_id:
+            continue
+        try:
+            current = max(1, int((revisions or {}).get(item_id, 1) or 1))
+        except (TypeError, ValueError):
+            current = 1
+        updated[item_id] = current + 1
+    return updated
+
+
 def apply_decisions(items: Sequence[ReviewItem],
                     decisions: Sequence[Dict[str, Any]]) -> List[ReviewItem]:
     """把医生决策覆盖到条目上（就地更新并返回），并派生"免审"状态。
