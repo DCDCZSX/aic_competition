@@ -83,6 +83,19 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("enterAs('patient')", html)
         self.assertIn("enterAs('doctor')", html)
 
+    def test_home_role_entries_use_text_only_affordances(self):
+        """角色入口不使用箭头字符，避免装饰符号增加视觉噪声。"""
+        _, html = self.get("/")
+        self.assertNotIn("↗", html)
+
+    def test_home_keeps_mobile_product_anchor_without_menu_dependency(self):
+        """移动端应直接保留产品锚点，不依赖不存在的菜单 DOM。"""
+        _, html = self.get("/")
+        self.assertIn('href="#flow"', html)
+        self.assertIn('了解产品', html)
+        self.assertNotIn('class="burger"', html)
+        self.assertNotIn('class="mobile-panel"', html)
+
     def test_home_content_is_not_hidden_by_default(self):
         """滚动揭示属于渐进增强，脚本未启动时首页内容也必须可见。"""
         _, html = self.get("/")

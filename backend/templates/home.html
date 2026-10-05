@@ -114,20 +114,6 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 .dd-sep{height:1px;background:var(--border);margin:var(--sp-12) 0;}
 .nav-cta{display:none;}
 @media (min-width:720px){.nav-cta{display:inline-flex;}}
-.burger{display:inline-flex;flex-direction:column;justify-content:center;gap:5px;width:40px;height:40px;
-        border:1px solid var(--border-strong);border-radius:var(--br-8);background:var(--gray-000);padding:0 9px;}
-@media (min-width:1000px){.burger{display:none;}}
-.burger i{display:block;height:1.5px;background:var(--text);border-radius:2px;transition:transform .25s var(--ease-out-power2),opacity .2s;}
-.burger[aria-expanded="true"] i:nth-child(1){transform:translateY(6.5px) rotate(45deg);}
-.burger[aria-expanded="true"] i:nth-child(2){opacity:0;}
-.burger[aria-expanded="true"] i:nth-child(3){transform:translateY(-6.5px) rotate(-45deg);}
-.mobile-panel{display:none;background:var(--gray-000);border-bottom:1px solid var(--border-strong);}
-.mobile-panel.open{display:block;}
-@media (min-width:1000px){.mobile-panel.open{display:none;}}
-.mobile-panel .container{padding-top:var(--sp-16);padding-bottom:var(--sp-24);}
-.mobile-panel a{display:block;padding:10px 0;border-bottom:1px solid var(--border);font-size:var(--body-3);}
-.mobile-panel .banner-note{margin-top:var(--sp-16);}
-
 /* ============================ 按钮 ============================ */
 .btn{
   display:inline-flex;align-items:center;justify-content:center;gap:8px;
@@ -182,8 +168,6 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 .hero-form{display:grid;gap:var(--sp-12);}
 .hero-form.role-entries{background:transparent;border:0;box-shadow:none;padding:0;max-width:480px;}
 .role-entry{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-16);width:100%;min-height:52px;padding:12px 16px;border-radius:var(--br-12);}
-.role-entry span:last-child{font-size:20px;line-height:1;transition:transform .16s var(--ease-out-power2);}
-.role-entry:hover span:last-child{transform:translateX(3px);}
 .hero-boundary{margin-top:var(--sp-16);font-size:var(--caption);color:var(--text-3);}
 .legal{font-size:var(--micro);color:var(--text-3);margin-top:var(--sp-12);line-height:1.6;}
 .msg{font-size:var(--caption);margin-top:var(--sp-8);display:none;}
@@ -334,8 +318,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
 .footer-bottom p{font-size:var(--micro);color:var(--gray-500);}
 @media (max-width:720px){
   .nav-right{gap:var(--sp-8);}
-  .nav-right>.nav-link{display:none;}
-  .home-entry .btn{min-height:40px;padding:7px 10px;font-size:var(--caption);}
+  .home-entry .btn{min-height:44px;padding:7px 10px;font-size:var(--caption);}
   .home-entry .btn-sand{display:none;}
   .footer-compact{display:grid;gap:var(--sp-20);}
   .footer-compact .enter{margin-top:0;}
@@ -376,8 +359,8 @@ button{font-family:inherit;font-size:inherit;cursor:pointer;}
         <h1>把复杂资料，<br>变成清楚的下一步</h1>
         <p class="sub">系统帮助患者整理就医资料、推演咨询方向，再由医生审核确认。每一步都有依据，分歧和缺口都会被保留下来。</p>
         <div class="hero-form role-entries" aria-label="选择使用入口">
-          <button class="role-entry btn btn-clay" onclick="enterAs('patient')"><span>进入患者端</span><span aria-hidden="true">↗</span></button>
-          <button class="role-entry btn btn-sand" onclick="enterAs('doctor')"><span>进入医生工作台</span><span aria-hidden="true">↗</span></button>
+          <button class="role-entry btn btn-clay" onclick="enterAs('patient')">进入患者端</button>
+          <button class="role-entry btn btn-sand" onclick="enterAs('doctor')">进入医生工作台</button>
         </div>
         <p class="hero-boundary">不提供诊断或处方，不替代医生判断；急症请立即就医。</p>
       </div>
