@@ -126,7 +126,8 @@ def latest_disagreement_decisions(records: Sequence[Dict[str, Any]]) -> Dict[str
 def make_disagreement_decision(*, disagreement_id: str, topic: str, status: str,
                                choice: str = "", reason: str = "",
                                next_step: str = "", reviewer_name: str = "",
-                               reviewer_dept: str = "", decided_at: str = "") -> Dict[str, Any]:
+                               reviewer_dept: str = "", decided_at: str = "",
+                               content_revision: int = 1) -> Dict[str, Any]:
     """校验并构造独立于 AI 聚合结果的分歧处理记录。"""
     safe_id = str(disagreement_id or "").strip()
     safe_topic = str(topic or "").strip()
@@ -147,6 +148,10 @@ def make_disagreement_decision(*, disagreement_id: str, topic: str, status: str,
         raise ReviewError("未解决分歧必须填写下一步处理方式")
     if not safe_reviewer:
         raise ReviewError("责任审核人不能为空")
+    try:
+        revision = max(1, int(content_revision or 1))
+    except (TypeError, ValueError):
+        revision = 1
     return {
         "disagreement_id": safe_id,
         "topic": safe_topic,
@@ -159,6 +164,7 @@ def make_disagreement_decision(*, disagreement_id: str, topic: str, status: str,
         "reviewer_name": safe_reviewer,
         "reviewer_dept": str(reviewer_dept or "").strip(),
         "decided_at": decided_at or _now(),
+        "content_revision": revision,
     }
 
 

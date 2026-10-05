@@ -1870,6 +1870,17 @@ class CaseFlow:
                 old_items, old_items, update_content=formal_update_text)
             if item_id.startswith("consensus_item:")
         ]
+        if record_changed and not affected_formal_items:
+            # Formal MDT fields are part of the published medical conclusion,
+            # but generic wording may not mention a topic or department. In
+            # that case reopen only consensus items belonging to the screened
+            # MDT departments; never invalidate path decisions as a fallback.
+            screened_departments = list(screening.get("departments") or [])
+            affected_formal_items = [
+                item_id for item_id in review_service.affected_item_ids(
+                    old_items, old_items, screened_departments)
+                if item_id.startswith("consensus_item:")
+            ]
         if record_changed and (
                 current_state in ("doctor_confirmed", "awaiting_recheck")
                 or bool((payload.get("review") or {}).get("published"))):
@@ -2370,11 +2381,22 @@ class CaseFlow:
             conflict_count += len(triage.get("conflicts") or [])
             disagreement_map = review_service.latest_disagreement_decisions(
                 payload.get("disagreement_decisions") or [])
+            current_items = {item.item_id: item for item in items}
             pending_disagreements = sum(
                 1 for index, _ in enumerate(aggregation.get("disagreements") or [], start=1)
-                if f"X-{index:02d}" not in disagreement_map
-                or disagreement_map[f"X-{index:02d}"].get("status")
-                not in review_service.DISAGREEMENT_STATUSES
+                if (
+                    f"X-{index:02d}" not in disagreement_map
+                    or disagreement_map[f"X-{index:02d}"].get("status")
+                    not in review_service.DISAGREEMENT_STATUSES
+                    or (
+                        current_items.get(f"consensus_item:X-{index:02d}")
+                        and review_service._decision_revision(
+                            disagreement_map[f"X-{index:02d}"]
+                        ) != current_items[
+                            f"consensus_item:X-{index:02d}"
+                        ].content_revision
+                    )
+                )
             )
             summary["disagreements"] = len(aggregation.get("disagreements") or [])
             summary["disagreements_pending"] = pending_disagreements
@@ -2521,6 +2543,7 @@ class CaseFlow:
         summary["reopened_items"] = len(item_changes.get("reopened_item_ids") or [])
         disagreement_decisions = review_service.latest_disagreement_decisions(
             payload.get("disagreement_decisions") or [])
+        current_items = {item.item_id: item for item in items}
         disagreements = report_service.disagreements_for_report(
             ((payload.get("mdt") or {}).get("aggregation") or {}).get("disagreements") or [],
             payload.get("disagreement_decisions") or [])
@@ -2529,6 +2552,14 @@ class CaseFlow:
             if item.get("分歧编号") not in disagreement_decisions
             or disagreement_decisions[item.get("分歧编号")].get("status")
             not in review_service.DISAGREEMENT_STATUSES
+            or (
+                current_items.get(f"consensus_item:{item.get('分歧编号')}")
+                and review_service._decision_revision(
+                    disagreement_decisions[item.get("分歧编号")]
+                ) != current_items[
+                    f"consensus_item:{item.get('分歧编号')}"
+                ].content_revision
+            )
         ]
         summary["disagreements"] = len(disagreements)
         summary["disagreements_pending"] = len(pending_disagreements)
@@ -2664,10 +2695,16 @@ class CaseFlow:
                 reviewer_name, field_name="责任审核人") or "模拟审核员"
             safe_reviewer_dept = update_service.sanitize_optional_content(
                 reviewer_dept, field_name="审核科室")
+            current_item = next(
+                (item for item in review_service.build_items(case)
+                 if item.item_id == f"consensus_item:X-{index:02d}"),
+                None,
+            )
             record = review_service.make_disagreement_decision(
                 disagreement_id=f"X-{index:02d}", topic=topic, status=status,
                 choice=safe_choice, reason=safe_reason, next_step=safe_next_step,
                 reviewer_name=safe_reviewer, reviewer_dept=safe_reviewer_dept,
+                content_revision=(current_item.content_revision if current_item else 1),
             )
         except (ValueError, review_service.ReviewError) as exc:
             return {"ok": False, "error": str(exc)}
@@ -2790,11 +2827,19 @@ class CaseFlow:
                          .get("disagreements") or [])
         disagreement_records = list(payload.get("disagreement_decisions") or [])
         disagreement_map = review_service.latest_disagreement_decisions(disagreement_records)
+        current_items = {item.item_id: item for item in items}
         pending_disagreements = [
             f"X-{index:02d}" for index, _ in enumerate(disagreements, start=1)
-            if f"X-{index:02d}" not in disagreement_map
-            or disagreement_map[f"X-{index:02d}"].get("status")
-            not in review_service.DISAGREEMENT_STATUSES
+            if (
+                f"X-{index:02d}" not in disagreement_map
+                or disagreement_map[f"X-{index:02d}"].get("status")
+                not in review_service.DISAGREEMENT_STATUSES
+                or review_service._decision_revision(
+                    disagreement_map[f"X-{index:02d}"]
+                ) != (current_items.get(
+                    f"consensus_item:X-{index:02d}").content_revision
+                    if current_items.get(f"consensus_item:X-{index:02d}") else 1)
+            )
         ]
         summary["disagreements"] = len(disagreements)
         summary["disagreements_pending"] = len(pending_disagreements)

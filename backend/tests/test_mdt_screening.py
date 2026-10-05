@@ -120,11 +120,13 @@ class MdtScreeningFlowTest(unittest.TestCase):
         self.assertIn("recommend_mdt", record["detail"])
         self.assertNotIn("原始", record["detail"])
 
-    def test_published_case_cannot_be_rescreened(self):
+    def test_published_case_reopens_for_rescreening(self):
         self.store.update_case(self.case_id, case_state="doctor_confirmed")
         result = self.submit(decision="single_specialty", reason="不应覆盖已发布审核版")
-        self.assertFalse(result["ok"])
-        self.assertIn("已发布", result["error"])
+        self.assertTrue(result["ok"], result)
+        refreshed = self.store.load_case(self.case_id)
+        self.assertEqual(refreshed["case_state"], "awaiting_recheck")
+        self.assertFalse((refreshed["payload"].get("review") or {}).get("published", False))
 
     def test_urgent_care_is_marked_outside_normal_mdt_route(self):
         result = self.submit(decision="urgent_care", reason="存在需要立即线下处理的风险")
