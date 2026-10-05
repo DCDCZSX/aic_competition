@@ -1629,13 +1629,30 @@ class CaseFlow:
         payload["mdt_screening"] = screening
         old_items = review_service.build_items(case)
         current_state = str(case.get("case_state") or "")
+        changed_screening_departments = sorted(set(
+            list(previous_screening.get("departments") or [])
+            + list(screening.get("departments") or [])
+        ))
+        screening_update_text = "；".join(
+            value for value in (
+                previous_screening.get("reason") or "",
+                previous_screening.get("purpose") or "",
+                screening.get("reason") or "",
+                screening.get("purpose") or "",
+            ) if value
+        )
+        affected_screening_items = [
+            item_id for item_id in review_service.affected_item_ids(
+                old_items, old_items, changed_screening_departments,
+                screening_update_text,
+            ) if item_id.startswith("consensus_item:")
+        ]
         if screening_changed and (
-                current_state == "doctor_confirmed"
+                current_state in ("doctor_confirmed", "awaiting_recheck")
                 or bool((payload.get("review") or {}).get("published"))):
             payload = self._begin_recheck(
                 case, payload, actor=safe_reviewer, reason="MDT 初筛修改",
-                affected_item_ids=[item.item_id for item in old_items
-                                  if item.target_type == "consensus_item"],
+                affected_item_ids=affected_screening_items,
             )
         target_state = ("awaiting_recheck"
                         if screening_changed and current_state == "doctor_confirmed"
@@ -1746,12 +1763,13 @@ class CaseFlow:
         old_items = review_service.build_items(case)
         current_state = str(case.get("case_state") or "")
         if confirmation_changed and (
-                current_state == "doctor_confirmed"
+                current_state in ("doctor_confirmed", "awaiting_recheck")
                 or bool((payload.get("review") or {}).get("published"))):
             payload = self._begin_recheck(
                 case, payload, actor=safe_reviewer, reason="分流确认修改",
                 affected_item_ids=[item.item_id for item in old_items
-                                  if item.target_type == "path_step"],
+                                  if item.target_type == "path_step"
+                                  and item.needs_doctor_review],
             )
         target_state = ("awaiting_recheck"
                         if confirmation_changed and current_state == "doctor_confirmed"
@@ -1837,13 +1855,27 @@ class CaseFlow:
         payload["mdt_formal_record"] = record
         old_items = review_service.build_items(case)
         current_state = str(case.get("case_state") or "")
+        formal_update_text = "；".join(
+            value for value in (
+                previous_record.get("conclusion") or "",
+                previous_record.get("unresolved") or "",
+                previous_record.get("next_step") or "",
+                record.get("conclusion") or "",
+                record.get("unresolved") or "",
+                record.get("next_step") or "",
+            ) if value
+        )
+        affected_formal_items = [
+            item_id for item_id in review_service.affected_item_ids(
+                old_items, old_items, update_content=formal_update_text)
+            if item_id.startswith("consensus_item:")
+        ]
         if record_changed and (
-                current_state == "doctor_confirmed"
+                current_state in ("doctor_confirmed", "awaiting_recheck")
                 or bool((payload.get("review") or {}).get("published"))):
             payload = self._begin_recheck(
                 case, payload, actor=safe_reviewer, reason="正式 MDT 记录修改",
-                affected_item_ids=[item.item_id for item in old_items
-                                  if item.target_type == "consensus_item"],
+                affected_item_ids=affected_formal_items,
             )
         target_state = ("awaiting_recheck"
                         if record_changed and current_state == "doctor_confirmed"

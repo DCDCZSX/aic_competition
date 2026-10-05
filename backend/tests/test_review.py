@@ -613,6 +613,48 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertEqual(refreshed["case_state"], "awaiting_recheck")
         self.assertFalse((refreshed["payload"].get("review") or {}).get("published", False))
 
+    def test_second_triage_change_reopens_decisions_in_same_recheck_round(self):
+        payload = self.flow.get_case(self.case_id)["payload"]
+        selected = list((payload.get("triage") or {}).get("selected") or [])
+        self.assertTrue(self.flow.submit_triage_confirmation(
+            self.case_id,
+            primary_department=selected[0],
+            secondary_departments=selected[1:],
+            reason="初次确认",
+            reviewer_id="医学生",
+        )["ok"])
+        self._accept_required_items()
+        self.assertTrue(self.flow.publish_review(self.case_id, reviewer_name="医学生")["ok"])
+
+        first_change = self.flow.submit_triage_confirmation(
+            self.case_id,
+            primary_department=selected[0],
+            secondary_departments=selected[1:],
+            reason="第一轮补充确认",
+            reviewer_id="医学生",
+        )
+        self.assertTrue(first_change["ok"], first_change.get("error"))
+        for item in self.flow.get_review(self.case_id)["items"]:
+            if item["review_tier"] == rs.REQUIRED and item["state"] == rs.AWAITING:
+                decision = self.flow.submit_decision(
+                    self.case_id, item["item_id"], "accept", reviewer_name="医学生")
+                self.assertTrue(decision["ok"], decision.get("error"))
+
+        second_change = self.flow.submit_triage_confirmation(
+            self.case_id,
+            primary_department=selected[0],
+            secondary_departments=selected[1:],
+            reason="第二轮补充确认",
+            reviewer_id="医学生",
+        )
+        self.assertTrue(second_change["ok"], second_change.get("error"))
+        refreshed = self.flow.get_review(self.case_id)
+        self.assertEqual(refreshed["case_state"], "awaiting_recheck")
+        self.assertTrue(any(
+            item["state"] == rs.AWAITING and item["content_revision"] == 3
+            for item in refreshed["items"] if item["review_tier"] == rs.REQUIRED
+        ))
+
     def test_repeating_same_triage_confirmation_keeps_published_round(self):
         payload = self.flow.get_case(self.case_id)["payload"]
         selected = list((payload.get("triage") or {}).get("selected") or [])
@@ -738,6 +780,111 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         refreshed = self.flow.get_review(self.case_id)
         self.assertEqual(refreshed["case_state"], "awaiting_recheck")
         self.assertEqual(refreshed["stale_decisions"], [])
+
+    def test_second_mdt_screening_change_reopens_current_consensus_decision(self):
+        self._use_sample_disagreement_case()
+        payload = self.flow.get_case(self.case_id)["payload"]
+        selected = list((payload.get("triage") or {}).get("selected") or [])
+        self.assertGreaterEqual(len(selected), 2)
+        self.assertTrue(self.flow.submit_triage_confirmation(
+            self.case_id,
+            primary_department=selected[0],
+            secondary_departments=selected[1:],
+            reason="初次确认",
+            reviewer_id="医学生",
+        )["ok"])
+        self.assertTrue(self.flow.submit_mdt_screening(
+            self.case_id,
+            decision="recommend_mdt",
+            reason="需要共同讨论",
+            purpose="统一检查顺序",
+            departments=selected[:2],
+            reviewer_id="医学生",
+        )["ok"])
+        self.assertTrue(self.flow.submit_mdt_formal_record(
+            self.case_id,
+            status="completed",
+            participants=["医生A"],
+            conclusion="按计划复核",
+            reviewer_id="医学生",
+        )["ok"])
+        self._accept_required_items()
+        self.assertTrue(self.flow.submit_disagreement_decision(
+            self.case_id, "X-01", "resolved", choice="先查眼底",
+            reason="眼科现有资料更直接", reviewer_name="医学生")["ok"])
+        self.assertTrue(self.flow.publish_review(self.case_id, reviewer_name="医学生")["ok"])
+
+        first_change = self.flow.submit_mdt_screening(
+            self.case_id,
+            decision="recommend_mdt",
+            reason="第一轮补充讨论",
+            purpose="统一检查顺序",
+            departments=selected[1:3],
+            reviewer_id="医学生",
+        )
+        self.assertTrue(first_change["ok"], first_change.get("error"))
+        consensus = next(item for item in self.flow.get_review(self.case_id)["items"]
+                         if item["item_id"] == "consensus_item:C-01")
+        accepted = self.flow.submit_decision(
+            self.case_id, consensus["item_id"], "accept", reviewer_name="医学生")
+        self.assertTrue(accepted["ok"], accepted.get("error"))
+
+        second_change = self.flow.submit_mdt_screening(
+            self.case_id,
+            decision="recommend_mdt",
+            reason="第二轮补充讨论",
+            purpose="统一检查顺序",
+            departments=selected[:2],
+            reviewer_id="医学生",
+        )
+        self.assertTrue(second_change["ok"], second_change.get("error"))
+        refreshed = self.flow.get_review(self.case_id)
+        current = next(item for item in refreshed["items"]
+                       if item["item_id"] == "consensus_item:C-01")
+        self.assertEqual(refreshed["case_state"], "awaiting_recheck")
+        self.assertEqual(current["content_revision"], 3)
+        self.assertEqual(current["state"], rs.AWAITING)
+
+    def test_formal_mdt_change_in_open_round_bumps_matching_consensus_revision(self):
+        self._use_sample_disagreement_case()
+        case = self.flow.get_case(self.case_id)
+        payload = dict(case["payload"])
+        payload["mdt_screening"] = {"decision": "recommend_mdt"}
+        payload["mdt_formal_record"] = {
+            "status": "completed",
+            "participants": ["医生A"],
+            "conclusion": "眼底检查",
+            "unresolved": "",
+            "next_step": "复核",
+        }
+        payload["review"] = {"published": False}
+        payload["review_item_revisions"] = {"consensus_item:C-01": 2}
+        self.flow.store.save_case(
+            self.case_id,
+            owner_id=case.get("owner_id") or "",
+            patient_name=case.get("patient_name") or "",
+            main_issue=case.get("main_issue") or "",
+            status=case.get("status") or "running",
+            case_state="awaiting_recheck",
+            report_version=int(case.get("report_version") or 1),
+            payload=payload,
+        )
+        result = self.flow.submit_mdt_formal_record(
+            self.case_id,
+            status="completed",
+            participants=["医生A"],
+            conclusion="眼底复查",
+            reviewer_id="医学生",
+        )
+        self.assertTrue(result["ok"], result.get("error"))
+        refreshed = self.flow.get_review(self.case_id)
+        current = next(item for item in refreshed["items"]
+                       if item["item_id"] == "consensus_item:C-01")
+        self.assertEqual(refreshed["case_state"], "awaiting_recheck")
+        self.assertEqual(current["content_revision"], 3)
+        self.assertIn("review_round_updated", [
+            row["event"] for row in self.flow.store.list_audit(self.case_id)
+        ])
 
     def test_request_more_info_sets_case_state(self):
         ids, _ = self._item_ids()

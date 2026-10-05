@@ -526,7 +526,8 @@ def affected_item_ids(old_items: Sequence[ReviewItem], new_items: Sequence[Revie
     out = set()
     for item_id, item in new_map.items():
         old = old_map.get(item_id)
-        text = " ".join((item.title, item.ai_content, item.reason_hint))
+        text = " ".join((item.title, item.ai_content, item.reason_hint,
+                           *[str(ref) for ref in item.evidence_refs]))
         topic_match = any(token in text for token in tokens)
         content_changed = bool(old and (
             old.ai_content != item.ai_content or old.reason_hint != item.reason_hint
