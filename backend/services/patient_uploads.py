@@ -35,6 +35,23 @@ class PatientUploadStore:
             return metadata, (self.directory / metadata["stored_name"]).read_bytes()
         except OSError:
             return None, None
+    def list_owned(self, owner_id: str):
+        items = []
+        for meta_path in self.directory.glob("*.json"):
+            try:
+                metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                continue
+            if not isinstance(metadata, dict) or metadata.get("owner_id") != owner_id:
+                continue
+            if not UPLOAD_ID_RE.fullmatch(str(metadata.get("upload_id") or "")):
+                continue
+            if not (self.directory / str(metadata.get("stored_name") or "")).is_file():
+                continue
+            items.append({key: metadata.get(key) for key in (
+                "upload_id", "original_name", "content_type", "size", "created_at"
+            )})
+        return sorted(items, key=lambda item: str(item.get("created_at") or ""))
     def _metadata(self, upload_id: str) -> Dict[str, Any] | None:
         if not UPLOAD_ID_RE.fullmatch(str(upload_id or "")): return None
         try: data = json.loads((self.directory / (upload_id + ".json")).read_text(encoding="utf-8"))

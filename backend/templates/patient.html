@@ -726,7 +726,7 @@ function afterLogin(d){
       '<p class="muted">如需查看患者端流程，请退出后选择"进入患者端"。</p>';
     go('done'); return;
   }
-  buildDiseaseChips(); renderContext(); go('goal');
+  buildDiseaseChips(); renderContext(); go('goal'); loadPatientUploads();
 }
 async function logout(){
   await api('/api/logout', {method:'POST', body:JSON.stringify({token:S.token})});
@@ -792,6 +792,20 @@ function renderPatientUploads(){
   const box=document.getElementById('patient-upload-grid'); if(!box) return;
   box.innerHTML=S.imageUploads.map((item,index)=>`<div class="patient-upload-item"><img src="${item.url}" alt="${esc(item.name)}"><button type="button" class="patient-upload-remove" aria-label="删除 ${esc(item.name)}" onclick="removePatientUpload(${index})">×</button><span class="patient-upload-name">${esc(item.name)}${item.uploading?' · 上传中':item.ocrDone?' · 已识别':item.ocrUnavailable?' · 请手动填写':item.upload_id?' · 已暂存':''}</span></div>`).join('');
 }
+async function loadPatientUploads(){
+  try{
+    const r=await api('/api/v2/patient/uploads');
+    if(r.status!==200) return;
+    const items=[];
+    for(const item of (r.data.uploads||[])){
+      const response=await fetch(item.file_url,{headers:{Authorization:'Bearer '+S.token}});
+      if(!response.ok) continue;
+      const blob=await response.blob();
+      items.push({upload_id:item.upload_id,name:item.original_name,url:URL.createObjectURL(blob),uploading:false});
+    }
+    S.imageUploads=items; renderPatientUploads();
+  }catch(error){ /* 恢复失败不影响患者继续手动填写 */ }
+}
 async function handlePatientImages(event){
   const files=[...(event.target.files||[])]; event.target.value='';
   const available=PATIENT_IMAGE_MAX_COUNT-S.imageUploads.length;
@@ -812,8 +826,14 @@ async function handlePatientImages(event){
   await Promise.all(valid.filter(item=>item.upload_id).map(recognizePatientImage));
 }
 async function recognizePatientImage(item){
-  const r=await api('/api/v2/patient/uploads/'+encodeURIComponent(item.upload_id)+'/ocr',{method:'POST'});
-  if(r.status!==200){ item.ocrUnavailable=true; renderPatientUploads(); return; }
+  const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),22000);
+  let r;
+  try{
+    const response=await fetch('/api/v2/patient/uploads/'+encodeURIComponent(item.upload_id)+'/ocr',{method:'POST',headers:{Authorization:'Bearer '+S.token},signal:controller.signal});
+    const data=await response.json().catch(()=>({})); r={status:response.status,data};
+  }catch(error){ r={status:0,data:{error:'识别请求超时或网络中断'}}; }
+  clearTimeout(timer);
+  if(r.status!==200){ item.ocrUnavailable=true; renderPatientUploads(); msg('patient-upload-msg',r.data.error||'图片识别失败，请手动填写病情','warn'); return; }
   const text=String((r.data||{}).text||'').trim(); if(!text) return;
   const history=document.getElementById('history');
   if(history){ history.value=history.value.trim()?history.value.trim()+'\n\n'+text:text; }

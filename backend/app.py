@@ -1,7 +1,8 @@
 import json
+import io
 import queue as queue_module
 import threading
-from flask import Flask, request, jsonify, render_template, Response
+from flask import Flask, request, jsonify, render_template, Response, send_file
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 import sys
@@ -472,6 +473,17 @@ def upload_patient_images():
     return jsonify({'uploads': saved, 'message': '图片已暂存，请确认图片内容后再提交资料'}), 201
 
 
+@app.route('/api/v2/patient/uploads', methods=['GET'])
+def list_patient_images():
+    session, error = _guard('intake')
+    if error:
+        return error
+    items = patient_uploads.list_owned(session.username)
+    for item in items:
+        item['file_url'] = '/api/v2/patient/uploads/' + item['upload_id'] + '/file'
+    return jsonify({'uploads': items})
+
+
 @app.route('/api/v2/patient/uploads/<upload_id>', methods=['DELETE'])
 def delete_patient_image(upload_id):
     session, error = _guard('intake')
@@ -480,6 +492,22 @@ def delete_patient_image(upload_id):
     if not patient_uploads.delete(session.username, upload_id):
         return jsonify({'error': '图片不存在或无权删除', 'code': 'not_found'}), 404
     return jsonify({'ok': True})
+
+
+@app.route('/api/v2/patient/uploads/<upload_id>/file', methods=['GET'])
+def read_patient_image(upload_id):
+    session, error = _guard('intake')
+    if error:
+        return error
+    metadata, data = patient_uploads.read_owned(session.username, upload_id)
+    if not metadata or data is None:
+        return jsonify({'error': '图片不存在或无权访问', 'code': 'not_found'}), 404
+    response = send_file(
+        io.BytesIO(data), mimetype=metadata.get('content_type', 'application/octet-stream'),
+        download_name=metadata.get('original_name') or 'patient-image'
+    )
+    response.headers['Cache-Control'] = 'private, no-store'
+    return response
 
 
 @app.route('/api/v2/patient/uploads/<upload_id>/ocr', methods=['POST'])

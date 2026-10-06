@@ -69,6 +69,18 @@ class PatientUploadHttpTest(unittest.TestCase):
         missing = self.client.delete('/api/v2/patient/uploads/' + upload_id, headers=self.headers)
         self.assertEqual(missing.status_code, 404)
 
+    def test_uploaded_images_can_be_listed_and_read_after_refresh(self):
+        response = self.client.post('/api/v2/patient/uploads', headers=self.headers, data={
+            'files': (BytesIO(b'jpeg-data'), 'report.jpg'),
+        }, content_type='multipart/form-data')
+        upload_id = response.get_json()['uploads'][0]['upload_id']
+        listed = self.client.get('/api/v2/patient/uploads', headers=self.headers)
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.get_json()['uploads'][0]['upload_id'], upload_id)
+        image = self.client.get('/api/v2/patient/uploads/' + upload_id + '/file', headers=self.headers)
+        self.assertEqual(image.status_code, 200)
+        self.assertEqual(image.data, b'jpeg-data')
+
     def test_upload_rejects_non_image(self):
         response = self.client.post('/api/v2/patient/uploads', headers=self.headers, data={
             'files': (BytesIO(b'text'), 'notes.txt'),
