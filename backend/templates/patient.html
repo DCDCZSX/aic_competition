@@ -808,8 +808,8 @@ async function handlePatientImages(event){
   const r=await api('/api/v2/patient/uploads',{method:'POST',body:form});
   if(r.status!==201){ valid.forEach(item=>{item.uploading=false;}); renderPatientUploads(); msg('patient-upload-msg',esc((r.data||{}).error||'图片上传失败，请重试'),'danger'); return; }
   (r.data.uploads||[]).forEach((remote,index)=>{ if(valid[index]){valid[index].upload_id=remote.upload_id; valid[index].uploading=false;} });
-  renderPatientUploads(); msg('patient-upload-msg','图片已暂存，正在尝试识别文字，请确认后再提交。','ok');
-  for(const item of valid){ if(item.upload_id) await recognizePatientImage(item); }
+  renderPatientUploads(); msg('patient-upload-msg','图片已暂存，正在并行识别文字，请确认后再提交。','ok');
+  await Promise.all(valid.filter(item=>item.upload_id).map(recognizePatientImage));
 }
 async function recognizePatientImage(item){
   const r=await api('/api/v2/patient/uploads/'+encodeURIComponent(item.upload_id)+'/ocr',{method:'POST'});
