@@ -127,7 +127,7 @@
   @media (min-width:1001px){
     .patient-shell .rail-left{position:fixed;left:var(--page-pad);top:calc(var(--nav-h) + var(--sp-24));width:var(--rail-left);max-height:calc(100vh - var(--nav-h) - var(--sp-40));z-index:40;}
     .patient-shell .work{grid-column:2;min-width:0;}
-    #patient-case-context:not([hidden]) + .patient-shell .rail-left{top:calc(var(--nav-h) + 56px + var(--sp-24));max-height:calc(100vh - var(--nav-h) - 56px - var(--sp-40));}
+    .patient-shell.has-case-context .rail-left{top:calc(var(--nav-h) + 56px + var(--sp-24));max-height:calc(100vh - var(--nav-h) - 56px - var(--sp-40));}
   }
   @media (max-width:1000px){.patient-shell .rail-left{position:static;width:auto;max-height:none;}.patient-shell .work{grid-column:auto;}}
   @media (max-width:720px){.patient-case-context{flex-wrap:wrap;gap:8px;}}
@@ -621,6 +621,8 @@ function renderSteps(active){
 function renderContext(){
   const panel = document.getElementById('patient-case-context');
   if(panel) panel.hidden = !S.caseId;
+  const shell = document.querySelector('.patient-shell');
+  if(shell) shell.classList.toggle('has-case-context', !!S.caseId);
   const c = document.getElementById('patient-ctx-case');
   if(c) c.textContent = S.caseId ? ('病例 #' + S.caseId) : '尚未建立病例';
   const badge = document.getElementById('patient-badge');

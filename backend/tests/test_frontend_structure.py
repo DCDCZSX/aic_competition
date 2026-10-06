@@ -208,7 +208,7 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('position:sticky', context_css)
         self.assertIn('@media (min-width:1001px)', html)
         self.assertIn('.patient-shell .rail-left{position:fixed', html)
-        self.assertIn('#patient-case-context:not([hidden]) + .patient-shell .rail-left', html)
+        self.assertIn('.patient-shell.has-case-context .rail-left', html)
 
     def test_patient_has_sibling_new_case_entry_and_resets_old_case_state(self):
         _, html = self.get("/patient")
