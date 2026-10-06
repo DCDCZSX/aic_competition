@@ -206,7 +206,8 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="patient-badge"', html)
         context_css = html[html.index('.patient-case-context{'):html.index('}', html.index('.patient-case-context{'))]
         self.assertIn('position:sticky', context_css)
-        self.assertIn('.patient-shell .rail-left{position:sticky', html)
+        self.assertIn('@media (min-width:1001px)', html)
+        self.assertIn('.patient-shell .rail-left{position:fixed', html)
         self.assertIn('#patient-case-context:not([hidden]) + .patient-shell .rail-left', html)
 
     def test_patient_has_sibling_new_case_entry_and_resets_old_case_state(self):
