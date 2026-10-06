@@ -95,6 +95,11 @@
   .patient-record-entry{margin-top:var(--sp-16);padding-top:var(--sp-12);border-top:1px solid var(--line);}
   .patient-record-actions{display:grid;gap:8px;}
   .patient-record-entry button{width:100%;text-align:left;}
+  .patient-home-card{margin-bottom:var(--sp-16);}
+  .patient-home-card .status-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .patient-home-card .status-copy{margin:8px 0 0;color:var(--ink2);line-height:1.6;}
+  .patient-home-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:16px;}
+  @media (max-width:720px){.patient-home-actions button{width:100%;}.patient-home-card{margin-bottom:12px;}}
   .patient-record-list{display:grid;gap:10px;}
   .patient-record-card{padding:14px 16px;border:1px solid var(--line);border-radius:var(--br-12);background:var(--gray-000);}
   .patient-record-card:hover{border-color:var(--accent);background:var(--surface-warm);}
@@ -216,6 +221,13 @@
 
     <!-- 中轨：工作区 -->
     <main class="work">
+    <section id="s-overview" class="card patient-home-card" data-stage="overview" aria-labelledby="patient-overview-title">
+      <div class="stage-heading"><h2 id="patient-overview-title">你的就医进度</h2></div>
+      <div id="patient-overview-status" aria-live="polite">
+        <div class="tiny">正在读取病例状态…</div>
+      </div>
+      <div class="patient-home-actions" id="patient-overview-actions"></div>
+    </section>
     <section id="s-records" class="card hide" data-stage="records">
       <div class="stage-heading"><h2>我的病历</h2><p class="muted">查看你提交过的病例、当前处理状态、报告版本和资料更新记录。</p></div>
       <div id="records-msg"></div>
@@ -244,18 +256,18 @@
 
       <div id="pane-form" class="hide">
         <div class="row" style="margin-bottom:10px;">
-          <div><label class="muted">年龄</label><input id="f-age" type="number" placeholder="58"></div>
-          <div><label class="muted">性别</label>
+          <div><label class="muted" for="f-age">年龄</label><input id="f-age" type="number" placeholder="58"></div>
+          <div><label class="muted" for="f-sex">性别</label>
             <select id="f-sex"><option value="">未知</option><option>男</option><option>女</option></select>
           </div>
         </div>
-        <label class="muted">既往疾病（点选，照顾不方便打字）</label>
+        <label class="muted" for="disease-chips">既往疾病（点选，照顾不方便打字）</label>
         <div class="chips" id="disease-chips"></div>
-        <label class="muted" style="display:block;margin-top:12px;">症状与病程（每行一条，如：视物模糊 3月）</label>
+        <label class="muted" for="f-symptoms" style="display:block;margin-top:12px;">症状与病程（每行一条，如：视物模糊 3月）</label>
         <textarea id="f-symptoms" style="min-height:90px;" placeholder="视物模糊 3月&#10;下肢浮肿 1周"></textarea>
-        <label class="muted" style="display:block;margin-top:12px;">当前用药</label>
+        <label class="muted" for="f-meds" style="display:block;margin-top:12px;">当前用药</label>
         <input id="f-meds" placeholder="二甲双胍 0.5g bid">
-        <label class="muted" style="display:block;margin-top:12px;">已做检查结果</label>
+        <label class="muted" for="f-exams" style="display:block;margin-top:12px;">已做检查结果</label>
         <input id="f-exams" placeholder="尿蛋白++，空腹血糖9.2">
         <div class="actions" style="justify-content:flex-start;">
           <button onclick="buildFromForm()">把这些内容合并到病历文本</button>
@@ -464,7 +476,7 @@ async function api(path, opts={}){
   return {status:res.status, data};
 }
 function stageFor(step){ return STEP_STAGE[step] || step; }
-function show(id){ document.querySelectorAll('main > section').forEach(s=>s.classList.add('hide'));
+function show(id){ document.querySelectorAll('main > section').forEach(s=>{ if(s.id!=='s-overview') s.classList.add('hide'); });
                    const target=document.getElementById(id); if(target) target.classList.remove('hide'); }
 function syncStagePanels(step){
   const stage=stageFor(step);
@@ -514,6 +526,16 @@ function startNewCase(){
   switchTab('paste');
   ['intake-msg','flow-msg','records-msg'].forEach(id=>msg(id,''));
   go('stage1');
+}
+async function renderPatientOverview(){
+  const status=document.getElementById('patient-overview-status'), actions=document.getElementById('patient-overview-actions');
+  if(!status||!actions) return;
+  const r=await api('/api/v2/my-cases?page=1&page_size=5');
+  const cases=(r.status===200&&r.data&&Array.isArray(r.data.cases))?r.data.cases:[];
+  if(!cases.length){ status.innerHTML='<div class="status-line"><span class="pill gray">还没有病例</span></div><p class="status-copy">先整理一份资料，医生才能看到你的情况。</p>'; actions.innerHTML='<button class="primary" type="button" onclick="startNewCase()">新增病例</button>'; return; }
+  const row=cases[0], pair=patientCaseStatus(row), next=row.has_updates?'提交复核':(row.case_state==='doctor_confirmed'?'查看报告':(row.routing_status==='submitted'?'查看进度':'继续处理'));
+  status.innerHTML=`<div class="status-line"><span class="pill ${pair[1]}">${esc(pair[0])}</span></div><p class="status-copy">病例 #${esc(row.case_id)} · ${esc(row.main_issue||'当前病例')}</p>`;
+  actions.innerHTML=`<button class="primary" type="button" onclick="openPatientCase('${esc(row.case_id)}')">${next}</button><button class="ghost" type="button" onclick="goRecords()">查看我的病历</button>`;
 }
 async function loadPatientRecords(page=1){
   const box=document.getElementById('records-body');
@@ -710,7 +732,7 @@ function afterLogin(d){
       '<p class="muted">如需查看患者端流程，请退出后选择"进入患者端"。</p>';
     go('done'); return;
   }
-  buildDiseaseChips(); renderContext(); go('goal');
+  buildDiseaseChips(); renderPatientOverview(); renderContext(); go('goal');
 }
 async function logout(){
   await api('/api/logout', {method:'POST', body:JSON.stringify({token:S.token})});
