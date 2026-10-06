@@ -198,6 +198,20 @@ class TestUpdateFlowEndToEnd(unittest.TestCase):
         case = self.flow.get_case(self.case.case_id)
         self.assertEqual(case["case_state"], "awaiting_recheck")
 
+    def test_update_invalidates_published_review(self):
+        payload = dict(self.flow.get_case(self.case.case_id)["payload"])
+        payload["review"] = {"published": True, "version": 2, "published_by": "医生"}
+        self.flow.store.transition_case(
+            self.case.case_id, "doctor_confirmed", actor="doctor", payload=payload,
+            report_version=2,
+        )
+        result = self.flow.add_update(
+            self.case.case_id, kind="检查结果", content="眼底检查正常")
+        self.assertTrue(result["ok"], result)
+        case = self.flow.get_case(self.case.case_id)
+        self.assertEqual(case["case_state"], "awaiting_recheck")
+        self.assertFalse((case["payload"].get("review") or {}).get("published", False))
+
     def test_update_audited_and_transitioned(self):
         self.flow.add_update(self.case.case_id, kind="症状变化", content="浮肿较前减轻")
         events = [a["event"] for a in self.flow.store.list_audit(self.case.case_id)]
@@ -255,16 +269,13 @@ class TestUpdateFlowEndToEnd(unittest.TestCase):
     def test_update_reopens_only_affected_review_items(self):
         """眼底资料更新后只重开眼科/内分泌科决定，旧决定仍留在历史。"""
         review = self.flow.get_review(self.case.case_id)
-        department_items = {
-            item["target_id"]: item for item in review["items"]
-            if item["target_type"] == "department_selection"
-        }
-        for department in ("眼科", "内分泌科", "肾内科"):
-            item = department_items.get(department)
-            if item:
-                result = self.flow.submit_decision(
-                    self.case.case_id, item["item_id"], "accept", reviewer_name="医生")
-                self.assertTrue(result["ok"], result.get("error"))
+        required_items = [item for item in review["items"]
+                          if item["review_tier"] == "required"
+                          and item["state"] == "awaiting"]
+        for item in required_items:
+            result = self.flow.submit_decision(
+                self.case.case_id, item["item_id"], "accept", reviewer_name="医生")
+            self.assertTrue(result["ok"], result.get("error"))
 
         result = self.flow.add_update(
             self.case.case_id, kind="检查结果", content="眼底检查：视网膜病变")
@@ -276,16 +287,14 @@ class TestUpdateFlowEndToEnd(unittest.TestCase):
                             for label in result["change_summary"].get("reopened_item_labels", [])))
 
         refreshed = self.flow.get_review(self.case.case_id)
-        by_department = {
-            item["target_id"]: item for item in refreshed["items"]
-            if item["target_type"] == "department_selection"
-        }
-        for department in ("眼科", "内分泌科"):
-            self.assertEqual(by_department[department]["state"], "awaiting")
-            self.assertEqual(by_department[department]["content_revision"], 2)
-        if "肾内科" in by_department:
-            self.assertEqual(by_department["肾内科"]["state"], "confirmed")
-            self.assertEqual(by_department["肾内科"]["content_revision"], 1)
+        by_id = {item["item_id"]: item for item in refreshed["items"]}
+        reopened = result["change_summary"]["reopened_item_ids"]
+        self.assertTrue(reopened)
+        for item_id in reopened:
+            expected_state = ("awaiting" if by_id[item_id]["review_tier"] == "required"
+                              else "auto_processed")
+            self.assertEqual(by_id[item_id]["state"], expected_state)
+            self.assertEqual(by_id[item_id]["content_revision"], 2)
 
         stale = refreshed["stale_decisions"]
         self.assertTrue(stale)

@@ -101,6 +101,11 @@
   .patient-record-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;color:var(--ink2);font-size:var(--micro);}
   .patient-record-timeline{display:grid;gap:8px;margin-top:12px;}
   .patient-record-pager{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap;}
+  .patient-upload-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px;}
+  .patient-upload-item{position:relative;min-height:116px;padding:8px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--gray-000);}
+  .patient-upload-item img{display:block;width:100%;height:76px;object-fit:cover;border-radius:6px;background:var(--gray-100);}
+  .patient-upload-name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:6px;font-size:var(--micro);}
+  .patient-upload-remove{position:absolute;right:6px;top:6px;width:28px;height:28px;padding:0;border-radius:50%;background:rgba(20,20,19,.72);color:#fff;border:0;}
   .review-route-card{margin-top:var(--sp-12);padding:16px 18px;border-left:4px solid var(--accent);background:var(--surface-subtle);}
   .summary-hero{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-16);padding:20px 22px;border:1px solid var(--line);border-radius:var(--br-12);background:linear-gradient(120deg,rgba(196,104,73,.11),rgba(196,104,73,.03));}
   .summary-hero-title{font-family:var(--font-display);font-size:22px;}
@@ -236,6 +241,7 @@
       <div class="row" style="margin-top:var(--sp-16);margin-bottom:12px;">
         <button id="tab-paste" class="primary" onclick="switchTab('paste')">粘贴病历</button>
         <button id="tab-form" onclick="switchTab('form')">表单填写</button>
+        <button id="tab-upload" onclick="switchTab('upload')">上传图片</button>
       </div>
 
       <div id="pane-paste">
@@ -244,22 +250,30 @@
 
       <div id="pane-form" class="hide">
         <div class="row" style="margin-bottom:10px;">
-          <div><label class="muted">年龄</label><input id="f-age" type="number" placeholder="58"></div>
-          <div><label class="muted">性别</label>
+          <div><label class="muted" for="f-age">年龄</label><input id="f-age" type="number" placeholder="58"></div>
+          <div><label class="muted" for="f-sex">性别</label>
             <select id="f-sex"><option value="">未知</option><option>男</option><option>女</option></select>
           </div>
         </div>
-        <label class="muted">既往疾病（点选，照顾不方便打字）</label>
+        <label class="muted" for="disease-chips">既往疾病（点选，照顾不方便打字）</label>
         <div class="chips" id="disease-chips"></div>
-        <label class="muted" style="display:block;margin-top:12px;">症状与病程（每行一条，如：视物模糊 3月）</label>
+        <label class="muted" for="f-symptoms" style="display:block;margin-top:12px;">症状与病程（每行一条，如：视物模糊 3月）</label>
         <textarea id="f-symptoms" style="min-height:90px;" placeholder="视物模糊 3月&#10;下肢浮肿 1周"></textarea>
-        <label class="muted" style="display:block;margin-top:12px;">当前用药</label>
+        <label class="muted" for="f-meds" style="display:block;margin-top:12px;">当前用药</label>
         <input id="f-meds" placeholder="二甲双胍 0.5g bid">
-        <label class="muted" style="display:block;margin-top:12px;">已做检查结果</label>
+        <label class="muted" for="f-exams" style="display:block;margin-top:12px;">已做检查结果</label>
         <input id="f-exams" placeholder="尿蛋白++，空腹血糖9.2">
         <div class="actions" style="justify-content:flex-start;">
           <button onclick="buildFromForm()">把这些内容合并到病历文本</button>
         </div>
+      </div>
+
+      <div id="pane-upload" class="hide">
+        <label class="muted" for="patient-images">上传病历、检查单或处方照片</label>
+        <input id="patient-images" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+        <p class="tiny">支持 JPG、PNG、WEBP；每张不超过 10MB，最多 5 张。图片会先暂存，当前不会自动识别文字，请确认后再手动填写病情。</p>
+        <div id="patient-upload-grid" class="patient-upload-grid" aria-live="polite"></div>
+        <div id="patient-upload-msg"></div>
       </div>
 
       <div id="intake-msg"></div>
@@ -440,6 +454,7 @@
 /* ===================== 状态 ===================== */
 const S = { token:null, role:null, label:null, previewToken:null, goals:[], caseId:null, questions:[], answers:{}, gaps:[], recordCases:[], recordPage:1, recordPageSize:10, recordTotal:0,
             profile:null, mode:'paste', triage:null, path:null, mdt:null, report:null,
+            imageUploads:[],
             mdtPending:false, mdtStatus:null, reportView:'summary',
             answerSubmitPending:false, answerSubmitStatus:null,
             departments:[], departmentLoading:false, reviewDepartment:'', routing:null, stage3View:'overview',
@@ -456,7 +471,8 @@ const DISEASES = ['糖尿病','高血压','冠心病','心房颤动','脑梗死'
 
 /* ===================== 工具 ===================== */
 async function api(path, opts={}){
-  const headers = Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+  const isFormData = typeof FormData !== 'undefined' && opts.body instanceof FormData;
+  const headers = Object.assign(isFormData ? {} : {'Content-Type':'application/json'}, opts.headers||{});
   if (S.token) headers['Authorization'] = 'Bearer ' + S.token;
   const res = await fetch(path, Object.assign({}, opts, {headers}));
   let data = null;
@@ -710,7 +726,7 @@ function afterLogin(d){
       '<p class="muted">如需查看患者端流程，请退出后选择"进入患者端"。</p>';
     go('done'); return;
   }
-  buildDiseaseChips(); renderContext(); go('goal');
+  buildDiseaseChips(); renderContext(); go('goal'); loadPatientUploads();
 }
 async function logout(){
   await api('/api/logout', {method:'POST', body:JSON.stringify({token:S.token})});
@@ -748,6 +764,7 @@ document.getElementById('patient-register-form').addEventListener('submit', func
   e.preventDefault();
   registerForm();
 });
+document.getElementById('patient-images').addEventListener('change', handlePatientImages);
 
 /* ===================== P1 目标 ===================== */
 function buildDiseaseChips(){
@@ -764,8 +781,69 @@ function switchTab(which){
   S.mode=which;
   document.getElementById('pane-paste').classList.toggle('hide', which!=='paste');
   document.getElementById('pane-form').classList.toggle('hide', which!=='form');
+  document.getElementById('pane-upload').classList.toggle('hide', which!=='upload');
   document.getElementById('tab-paste').className = which==='paste'?'primary':'';
   document.getElementById('tab-form').className = which==='form'?'primary':'';
+  document.getElementById('tab-upload').className = which==='upload'?'primary':'';
+}
+const PATIENT_IMAGE_MAX = 10 * 1024 * 1024;
+const PATIENT_IMAGE_MAX_COUNT = 5;
+function renderPatientUploads(){
+  const box=document.getElementById('patient-upload-grid'); if(!box) return;
+  box.innerHTML=S.imageUploads.map((item,index)=>`<div class="patient-upload-item"><img src="${item.url}" alt="${esc(item.name)}"><button type="button" class="patient-upload-remove" aria-label="删除 ${esc(item.name)}" onclick="removePatientUpload(${index})">×</button><span class="patient-upload-name">${esc(item.name)}${item.uploading?' · 上传中':item.ocrDone?' · 已识别':item.ocrUnavailable?' · 请手动填写':item.upload_id?' · 已暂存':''}</span></div>`).join('');
+}
+async function loadPatientUploads(){
+  try{
+    const r=await api('/api/v2/patient/uploads');
+    if(r.status!==200) return;
+    const items=[];
+    for(const item of (r.data.uploads||[])){
+      const response=await fetch(item.file_url,{headers:{Authorization:'Bearer '+S.token}});
+      if(!response.ok) continue;
+      const blob=await response.blob();
+      items.push({upload_id:item.upload_id,name:item.original_name,url:URL.createObjectURL(blob),uploading:false});
+    }
+    S.imageUploads=items; renderPatientUploads();
+  }catch(error){ /* 恢复失败不影响患者继续手动填写 */ }
+}
+async function handlePatientImages(event){
+  const files=[...(event.target.files||[])]; event.target.value='';
+  const available=PATIENT_IMAGE_MAX_COUNT-S.imageUploads.length;
+  if(files.length>available){ msg('patient-upload-msg',`最多上传 ${PATIENT_IMAGE_MAX_COUNT} 张图片，请减少 ${files.length-available} 张`,'warn'); return; }
+  const valid=[];
+  for(const file of files){
+    if(!['image/jpeg','image/png','image/webp'].includes(file.type)){ msg('patient-upload-msg','只支持 JPG、PNG 或 WEBP 图片','danger'); continue; }
+    if(file.size>PATIENT_IMAGE_MAX){ msg('patient-upload-msg',`图片 ${esc(file.name)} 超过 10MB`,'danger'); continue; }
+    valid.push({file,name:file.name,url:URL.createObjectURL(file),uploading:true});
+  }
+  S.imageUploads.push(...valid); renderPatientUploads();
+  if(!valid.length) return;
+  const form=new FormData(); valid.forEach(item=>form.append('files',item.file,item.name));
+  const r=await api('/api/v2/patient/uploads',{method:'POST',body:form});
+  if(r.status!==201){ valid.forEach(item=>{item.uploading=false;}); renderPatientUploads(); msg('patient-upload-msg',esc((r.data||{}).error||'图片上传失败，请重试'),'danger'); return; }
+  (r.data.uploads||[]).forEach((remote,index)=>{ if(valid[index]){valid[index].upload_id=remote.upload_id; valid[index].uploading=false;} });
+  renderPatientUploads(); msg('patient-upload-msg','图片已暂存，正在并行识别文字，请确认后再提交。','ok');
+  await Promise.all(valid.filter(item=>item.upload_id).map(recognizePatientImage));
+}
+async function recognizePatientImage(item){
+  const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),22000);
+  let r;
+  try{
+    const response=await fetch('/api/v2/patient/uploads/'+encodeURIComponent(item.upload_id)+'/ocr',{method:'POST',headers:{Authorization:'Bearer '+S.token},signal:controller.signal});
+    const data=await response.json().catch(()=>({})); r={status:response.status,data};
+  }catch(error){ r={status:0,data:{error:'识别请求超时或网络中断'}}; }
+  clearTimeout(timer);
+  if(r.status!==200){ item.ocrUnavailable=true; renderPatientUploads(); msg('patient-upload-msg',r.data.error||'图片识别失败，请手动填写病情','warn'); return; }
+  const text=String((r.data||{}).text||'').trim(); if(!text) return;
+  const history=document.getElementById('history');
+  if(history){ history.value=history.value.trim()?history.value.trim()+'\n\n'+text:text; }
+  item.ocrDone=true; renderPatientUploads();
+  msg('patient-upload-msg','已将识别文字放入“粘贴病历”，请检查并修改后再继续。','ok');
+}
+async function removePatientUpload(index){
+  const item=S.imageUploads[index]; if(!item) return;
+  if(item.upload_id) await api('/api/v2/patient/uploads/'+encodeURIComponent(item.upload_id),{method:'DELETE'});
+  URL.revokeObjectURL(item.url); S.imageUploads.splice(index,1); renderPatientUploads();
 }
 function buildFromForm(){
   const picked=[...document.querySelectorAll('#disease-chips .chip.on')].map(c=>c.textContent);

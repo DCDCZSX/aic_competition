@@ -83,6 +83,48 @@ class AnalysisJobTest(unittest.TestCase):
         payload = self.store.load_case(case_id)["payload"]
         self.assertEqual(payload["mdt"]["departments"], selected)
 
+    def test_retry_is_rejected_for_confirmed_case_until_new_materials_reopen_review(self):
+        case_id = "C-CONFIRMED-RETRY"
+        self.store.save_case(case_id, case_state="doctor_confirmed", payload={
+            "analysis": CaseFlow._new_analysis_status(),
+        })
+
+        result = self.flow.retry_analysis(case_id)
+
+        self.assertFalse(result["ok"])
+        self.assertIn("新资料", result["error"])
+        self.assertEqual(self.store.load_case(case_id)["case_state"], "doctor_confirmed")
+
+    def test_failed_analysis_does_not_promote_case_to_awaiting_doctor(self):
+        case_id = "C-FAILED-ANALYSIS"
+        analysis = CaseFlow._new_analysis_status()
+        self.store.save_case(case_id, case_state="analyzing", payload={
+            "masked_history": "需要分析",
+            "triage": {"selected": ["内分泌科"]},
+            "analysis": analysis,
+        })
+
+        with mock.patch("services.case_flow.extract", side_effect=RuntimeError("模型不可用")):
+            self.flow._analysis_worker(case_id, ["profile"])
+
+        case = self.store.load_case(case_id)
+        self.assertNotEqual(case["case_state"], "awaiting_doctor")
+        self.assertEqual(case["payload"]["analysis"]["state"], "failed")
+        self.assertEqual(case["payload"]["analysis"]["phases"]["profile"]["state"], "failed")
+
+    def test_analysis_start_is_rejected_for_doctor_reviewed_case(self):
+        case_id = "C-REVIEWED-NO-RETRY"
+        self.store.save_case(case_id, case_state="doctor_reviewed", payload={
+            "analysis": CaseFlow._new_analysis_status(),
+        })
+
+        self.assertFalse(self.flow.start_analysis_job(case_id, phases=["profile"]))
+        result = self.flow.retry_analysis(case_id, phases=["profile"])
+
+        self.assertFalse(result["ok"])
+        self.assertIn("审核", result["error"])
+        self.assertEqual(self.store.load_case(case_id)["case_state"], "doctor_reviewed")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

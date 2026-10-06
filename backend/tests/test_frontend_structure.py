@@ -67,6 +67,40 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertNotIn('id="login-pass"', html)
         self.assertNotIn('fillAccount(', html)
 
+    def test_home_uses_value_canvas_instead_of_workflow_graph(self):
+        """首页视觉中心表达产品价值，不再展示顺序流程图。"""
+        _, html = self.get("/")
+        self.assertIn('class="evidence-canvas"', html)
+        self.assertIn('资料已整理', html)
+        self.assertIn('缺口已标记', html)
+        self.assertIn('需要医生确认', html)
+        self.assertNotIn('class="workflow-preview"', html)
+        self.assertNotIn('role="img"', html)
+
+    def test_home_keeps_two_role_entries(self):
+        """首页仍需提供患者端和医生端两个明确入口。"""
+        _, html = self.get("/")
+        self.assertIn("enterAs('patient')", html)
+        self.assertIn("enterAs('doctor')", html)
+
+    def test_home_role_entries_use_text_only_affordances(self):
+        """角色入口不使用箭头字符，避免装饰符号增加视觉噪声。"""
+        _, html = self.get("/")
+        self.assertNotIn("↗", html)
+
+    def test_home_keeps_mobile_product_anchor_without_menu_dependency(self):
+        """移动端应直接保留产品锚点，不依赖不存在的菜单 DOM。"""
+        _, html = self.get("/")
+        self.assertIn('href="#flow"', html)
+        self.assertIn('了解产品', html)
+        self.assertNotIn('class="burger"', html)
+        self.assertNotIn('class="mobile-panel"', html)
+
+    def test_home_content_is_not_hidden_by_default(self):
+        """滚动揭示属于渐进增强，脚本未启动时首页内容也必须可见。"""
+        _, html = self.get("/")
+        self.assertNotIn('.reveal > *{opacity:0', html)
+
     def test_startup_banner_lists_home_as_primary_entry(self):
         """命令行启动提示的主入口必须是根目录首页，不应误导到患者端。"""
         from pathlib import Path

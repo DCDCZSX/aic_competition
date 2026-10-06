@@ -1,11 +1,14 @@
 import json
+import io
 import queue as queue_module
 import threading
-from flask import Flask, request, jsonify, render_template, Response
+from flask import Flask, request, jsonify, render_template, Response, send_file
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 import sys
 import os
+import tempfile
+import tempfile
 
 # 加载 .env（python-dotenv 为可选依赖：未安装时仅使用系统环境变量）
 try:
@@ -28,6 +31,8 @@ from services.config import read_int_env
 from services import department_domain
 from services.intake import MAX_MAIN_ISSUE_LENGTH, MAX_TEXT_LENGTH, sanitized_payload
 from services.preview_tokens import PreviewTokenService
+from services.patient_uploads import PatientUploadStore, MAX_UPLOAD_COUNT, MAX_UPLOAD_BYTES
+from services.ocr_service import OcrService
 from services.store import Store
 from schemas import CASE_STATE_LABELS
 from services.request_validation import (
@@ -43,7 +48,7 @@ from collections import defaultdict, deque
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = read_int_env(
-    'APP_MAX_CONTENT_LENGTH', 1 * 1024 * 1024,
+    'APP_MAX_CONTENT_LENGTH', 16 * 1024 * 1024,
     minimum=1, maximum=16 * 1024 * 1024
 )
 _cors_origins = [x.strip() for x in os.getenv(
@@ -137,6 +142,11 @@ _registration_attempts = defaultdict(deque)
 # use_llm=True 时启用 S2 受限发言与多专科分析；未配置 Key 会自动降级为纯规则分诊。
 _shared_store = Store()
 auth_service = AuthService(store=_shared_store)
+patient_uploads = PatientUploadStore(os.getenv(
+    'APP_PATIENT_UPLOAD_DIR',
+    os.path.join(tempfile.gettempdir(), 'chais-patient-uploads'),
+))
+ocr_service = OcrService()
 case_flow = CaseFlow(
     store=_shared_store,
     ai_service=AIService(),
@@ -430,6 +440,86 @@ def preview_intake():
         )
         preview['preview_expires_in_seconds'] = preview_tokens.ttl.seconds
     return jsonify(preview)
+
+
+@app.route('/api/v2/patient/uploads', methods=['POST'])
+def upload_patient_images():
+    """保存患者上传的临时图片；图片不会未经确认进入分析链路。"""
+    session, error = _guard('intake')
+    if error:
+        return error
+    files = request.files.getlist('files')
+    if not files:
+        return jsonify({'error': '请至少选择一张图片', 'code': 'no_files'}), 400
+    if len(files) > MAX_UPLOAD_COUNT:
+        return jsonify({'error': f'一次最多上传 {MAX_UPLOAD_COUNT} 张图片', 'code': 'too_many_files'}), 400
+    saved = []
+    for uploaded in files:
+        filename = str(uploaded.filename or '').strip()
+        suffix = os.path.splitext(filename)[1].lower()
+        if suffix not in {'.jpg', '.jpeg', '.png', '.webp'}:
+            for item in saved:
+                patient_uploads.delete(session.username, item['upload_id'])
+            return jsonify({'error': '只支持 JPG、PNG 或 WEBP 图片', 'code': 'unsupported_type'}), 400
+        data = uploaded.read(MAX_UPLOAD_BYTES + 1)
+        result = patient_uploads.save(session.username, filename, uploaded.mimetype or '', data)
+        if not result.get('ok'):
+            for item in saved:
+                patient_uploads.delete(session.username, item['upload_id'])
+            return jsonify({'error': result.get('error', '图片上传失败'), 'code': result.get('code', 'upload_failed')}), 400
+        saved.append({key: result[key] for key in (
+            'upload_id', 'original_name', 'content_type', 'size', 'created_at',
+        )})
+    return jsonify({'uploads': saved, 'message': '图片已暂存，请确认图片内容后再提交资料'}), 201
+
+
+@app.route('/api/v2/patient/uploads', methods=['GET'])
+def list_patient_images():
+    session, error = _guard('intake')
+    if error:
+        return error
+    items = patient_uploads.list_owned(session.username)
+    for item in items:
+        item['file_url'] = '/api/v2/patient/uploads/' + item['upload_id'] + '/file'
+    return jsonify({'uploads': items})
+
+
+@app.route('/api/v2/patient/uploads/<upload_id>', methods=['DELETE'])
+def delete_patient_image(upload_id):
+    session, error = _guard('intake')
+    if error:
+        return error
+    if not patient_uploads.delete(session.username, upload_id):
+        return jsonify({'error': '图片不存在或无权删除', 'code': 'not_found'}), 404
+    return jsonify({'ok': True})
+
+
+@app.route('/api/v2/patient/uploads/<upload_id>/file', methods=['GET'])
+def read_patient_image(upload_id):
+    session, error = _guard('intake')
+    if error:
+        return error
+    metadata, data = patient_uploads.read_owned(session.username, upload_id)
+    if not metadata or data is None:
+        return jsonify({'error': '图片不存在或无权访问', 'code': 'not_found'}), 404
+    response = send_file(
+        io.BytesIO(data), mimetype=metadata.get('content_type', 'application/octet-stream'),
+        download_name=metadata.get('original_name') or 'patient-image'
+    )
+    response.headers['Cache-Control'] = 'private, no-store'
+    return response
+
+
+@app.route('/api/v2/patient/uploads/<upload_id>/ocr', methods=['POST'])
+def ocr_patient_image(upload_id):
+    session, error = _guard('intake')
+    if error:
+        return error
+    metadata, data = patient_uploads.read_owned(session.username, upload_id)
+    if not metadata or data is None:
+        return jsonify({'error': '图片不存在或无权访问', 'code': 'not_found'}), 404
+    result = ocr_service.extract(data, metadata.get('content_type', 'image/jpeg'))
+    return jsonify(result), (200 if result.get('ok') else 503)
 
 
 @app.route('/api/guest/preview', methods=['POST'])
@@ -977,12 +1067,13 @@ def submit_mdt_formal_record(case_id):
         conclusion = string_field(data, 'conclusion', default='', max_length=6000)
         unresolved = string_field(data, 'unresolved', default='', max_length=3000)
         next_step = string_field(data, 'next_step', default='', max_length=3000)
+        reopen_reason = string_field(data, 'reopen_reason', default='', max_length=1000)
     except InputValidationError as exc:
         return _invalid_input(exc)
     result = case_flow.submit_mdt_formal_record(
         case_id, status=status, participants=participants,
         conclusion=conclusion, unresolved=unresolved, next_step=next_step,
-        reviewer_id=session.username,
+        reviewer_id=session.username, reopen_reason=reopen_reason,
     )
     return jsonify(result), (200 if result.get('ok') else 400)
 

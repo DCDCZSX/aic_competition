@@ -155,6 +155,15 @@ class TestAnswers(FlowTestBase):
         events = [a["event"] for a in self.store.list_audit(self.case.case_id)]
         self.assertIn("answers_submitted", events)
 
+    def test_answers_after_confirmation_open_new_review_round(self):
+        self.flow.store.transition_case(self.case.case_id, "doctor_confirmed", actor="doctor")
+        result = self.flow.submit_answers(
+            self.case.case_id, {"blood_glucose_control": "最近控制不佳"})
+        self.assertTrue(result["ok"], result)
+        case = self.flow.store.load_case(self.case.case_id)
+        self.assertEqual(case["case_state"], "awaiting_recheck")
+        self.assertFalse((case["payload"].get("review") or {}).get("published", False))
+
     def test_too_many_answers_are_rejected_before_processing(self):
         answers = {f"field-{index}": "回答" for index in range(4)}
         outcome = self.flow.submit_answers(self.case.case_id, answers)
