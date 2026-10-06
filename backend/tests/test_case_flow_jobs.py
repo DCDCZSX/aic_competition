@@ -112,6 +112,19 @@ class AnalysisJobTest(unittest.TestCase):
         self.assertEqual(case["payload"]["analysis"]["state"], "failed")
         self.assertEqual(case["payload"]["analysis"]["phases"]["profile"]["state"], "failed")
 
+    def test_analysis_start_is_rejected_for_doctor_reviewed_case(self):
+        case_id = "C-REVIEWED-NO-RETRY"
+        self.store.save_case(case_id, case_state="doctor_reviewed", payload={
+            "analysis": CaseFlow._new_analysis_status(),
+        })
+
+        self.assertFalse(self.flow.start_analysis_job(case_id, phases=["profile"]))
+        result = self.flow.retry_analysis(case_id, phases=["profile"])
+
+        self.assertFalse(result["ok"])
+        self.assertIn("审核", result["error"])
+        self.assertEqual(self.store.load_case(case_id)["case_state"], "doctor_reviewed")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -68,6 +68,13 @@ MDT_SCREENING_NEXT_STEPS = {
 STATE_PENDING = "pending_materials"
 STATE_AWAITING_DOCTOR = "awaiting_doctor"
 STATE_NEED_MORE_INFO = "need_more_info"
+# Only these states may explicitly enter (or re-enter) the analysis worker.
+# In particular, do not rely on Store.transition_case's graph search: it can
+# find an indirect path through confirmed/recheck states for an audited case.
+ANALYSIS_START_STATES = (
+    STATE_PENDING, "analyzing", STATE_AWAITING_DOCTOR,
+    STATE_NEED_MORE_INFO, "awaiting_recheck",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -872,9 +879,10 @@ class CaseFlow:
             case = self.store.load_case(case_id)
             if not case:
                 return False
-            if str(case.get("case_state") or "") == "doctor_confirmed":
-                # A confirmed report can only be re-analysed after new material
-                # has opened an explicit awaiting_recheck round.
+            current_state = str(case.get("case_state") or STATE_PENDING)
+            if current_state not in ANALYSIS_START_STATES:
+                # A reviewed/confirmed report can only be re-analysed after
+                # new material has opened an explicit awaiting_recheck round.
                 return False
             payload = case.get("payload") or {}
             # 重置状态（重试时保留已完成的相位结果，只把待跑的相位置为 pending）
@@ -1308,6 +1316,12 @@ class CaseFlow:
                 "ok": False,
                 "error": "已确认病例不能直接重新分析，请先提交新资料进入重新审核。",
                 "recovery": {"action": "submit_new_materials", "label": "补充新资料"},
+            }
+        if current_state not in ANALYSIS_START_STATES:
+            return {
+                "ok": False,
+                "error": "医生审核中的病例不能直接重新分析，请按当前审核流程处理。",
+                "recovery": {"action": "continue_review", "label": "继续审核"},
             }
         if phases is not None:
             if not isinstance(phases, list) or any(
