@@ -70,7 +70,8 @@
   .review-level-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px;}
   .review-level-summary>div{padding:10px 12px;border:1px solid var(--line);border-radius:var(--br-8);background:var(--gray-000);}
   .review-level-summary strong{display:block;margin-top:3px;font-size:var(--body-1);}
-  .review-decision-card{padding:14px 16px;background:var(--gray-000);}
+  .review-decision-card{padding:14px 16px;background:var(--gray-000);transition:background .18s ease,border-color .18s ease,box-shadow .18s ease;}
+  .review-decision-card:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px rgba(196,104,73,.12);}
   .review-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
   .review-card-title{min-width:0;line-height:1.45;}
   .review-card-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px;}
@@ -408,11 +409,11 @@
       <div class="doctor-case-layout">
       <nav class="doctor-case-nav view-nav" id="nav" aria-label="病例处理阶段">
         <button type="button" class="nav-link" onclick="go('list')" data-s="list" aria-current="page">病例队列</button>
-        <button type="button" class="nav-link dis" onclick="navCase('overview')" data-s="overview" aria-disabled="true">病例摘要</button>
-        <button type="button" class="nav-link dis" onclick="navCase('triage')" data-s="triage" aria-disabled="true">分流确认</button>
-        <button type="button" class="nav-link dis" onclick="navCase('mdt')" data-s="mdt" aria-disabled="true">MDT 协作</button>
-        <button type="button" class="nav-link dis" onclick="navCase('review')" data-s="review" aria-disabled="true">报告审核</button>
-        <button type="button" class="nav-link dis" onclick="navCase('history')" data-s="history" aria-disabled="true">历史记录</button>
+        <button type="button" class="nav-link dis" onclick="navCase('overview')" data-s="overview" disabled>病例摘要</button>
+        <button type="button" class="nav-link dis" onclick="navCase('triage')" data-s="triage" disabled>分流确认</button>
+        <button type="button" class="nav-link dis" onclick="navCase('mdt')" data-s="mdt" disabled>MDT 协作</button>
+        <button type="button" class="nav-link dis" onclick="navCase('review')" data-s="review" disabled>报告审核</button>
+        <button type="button" class="nav-link dis" onclick="navCase('history')" data-s="history" disabled>历史记录</button>
       </nav>
       <div class="doctor-case-main">
       <section id="s-list" class="card">
@@ -635,6 +636,7 @@ function enableCaseNav(on){
   document.querySelectorAll('#nav [data-s]').forEach(a=>{
     if(a.dataset.s!=='list'){
       a.classList.toggle('dis', !on);
+      a.disabled=!on;
       a.setAttribute('aria-disabled', String(!on));
     }
   });
