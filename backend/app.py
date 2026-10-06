@@ -6,6 +6,8 @@ from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 import sys
 import os
+import tempfile
+import tempfile
 
 # 加载 .env（python-dotenv 为可选依赖：未安装时仅使用系统环境变量）
 try:
@@ -28,6 +30,7 @@ from services.config import read_int_env
 from services import department_domain
 from services.intake import MAX_MAIN_ISSUE_LENGTH, MAX_TEXT_LENGTH, sanitized_payload
 from services.preview_tokens import PreviewTokenService
+from services.patient_uploads import PatientUploadStore, MAX_UPLOAD_COUNT, MAX_UPLOAD_BYTES
 from services.store import Store
 from schemas import CASE_STATE_LABELS
 from services.request_validation import (
@@ -43,7 +46,7 @@ from collections import defaultdict, deque
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = read_int_env(
-    'APP_MAX_CONTENT_LENGTH', 1 * 1024 * 1024,
+    'APP_MAX_CONTENT_LENGTH', 16 * 1024 * 1024,
     minimum=1, maximum=16 * 1024 * 1024
 )
 _cors_origins = [x.strip() for x in os.getenv(
@@ -137,6 +140,10 @@ _registration_attempts = defaultdict(deque)
 # use_llm=True 时启用 S2 受限发言与多专科分析；未配置 Key 会自动降级为纯规则分诊。
 _shared_store = Store()
 auth_service = AuthService(store=_shared_store)
+patient_uploads = PatientUploadStore(os.getenv(
+    'APP_PATIENT_UPLOAD_DIR',
+    os.path.join(tempfile.gettempdir(), 'chais-patient-uploads'),
+))
 case_flow = CaseFlow(
     store=_shared_store,
     ai_service=AIService(),
@@ -430,6 +437,47 @@ def preview_intake():
         )
         preview['preview_expires_in_seconds'] = preview_tokens.ttl.seconds
     return jsonify(preview)
+
+
+@app.route('/api/v2/patient/uploads', methods=['POST'])
+def upload_patient_images():
+    """保存患者上传的临时图片；图片不会未经确认进入分析链路。"""
+    session, error = _guard('intake')
+    if error:
+        return error
+    files = request.files.getlist('files')
+    if not files:
+        return jsonify({'error': '请至少选择一张图片', 'code': 'no_files'}), 400
+    if len(files) > MAX_UPLOAD_COUNT:
+        return jsonify({'error': f'一次最多上传 {MAX_UPLOAD_COUNT} 张图片', 'code': 'too_many_files'}), 400
+    saved = []
+    for uploaded in files:
+        filename = str(uploaded.filename or '').strip()
+        suffix = os.path.splitext(filename)[1].lower()
+        if suffix not in {'.jpg', '.jpeg', '.png', '.webp'}:
+            for item in saved:
+                patient_uploads.delete(session.username, item['upload_id'])
+            return jsonify({'error': '只支持 JPG、PNG 或 WEBP 图片', 'code': 'unsupported_type'}), 400
+        data = uploaded.read(MAX_UPLOAD_BYTES + 1)
+        result = patient_uploads.save(session.username, filename, uploaded.mimetype or '', data)
+        if not result.get('ok'):
+            for item in saved:
+                patient_uploads.delete(session.username, item['upload_id'])
+            return jsonify({'error': result.get('error', '图片上传失败'), 'code': result.get('code', 'upload_failed')}), 400
+        saved.append({key: result[key] for key in (
+            'upload_id', 'original_name', 'content_type', 'size', 'created_at',
+        )})
+    return jsonify({'uploads': saved, 'message': '图片已暂存，请确认图片内容后再提交资料'}), 201
+
+
+@app.route('/api/v2/patient/uploads/<upload_id>', methods=['DELETE'])
+def delete_patient_image(upload_id):
+    session, error = _guard('intake')
+    if error:
+        return error
+    if not patient_uploads.delete(session.username, upload_id):
+        return jsonify({'error': '图片不存在或无权删除', 'code': 'not_found'}), 404
+    return jsonify({'ok': True})
 
 
 @app.route('/api/guest/preview', methods=['POST'])
