@@ -27,6 +27,14 @@ class PatientUploadStore:
         metadata = self._metadata(upload_id)
         if not metadata or metadata.get("owner_id") != owner_id: return False
         (self.directory / metadata["stored_name"]).unlink(missing_ok=True); (self.directory / (upload_id + ".json")).unlink(missing_ok=True); return True
+    def read_owned(self, owner_id: str, upload_id: str):
+        metadata = self._metadata(upload_id)
+        if not metadata or metadata.get("owner_id") != owner_id:
+            return None, None
+        try:
+            return metadata, (self.directory / metadata["stored_name"]).read_bytes()
+        except OSError:
+            return None, None
     def _metadata(self, upload_id: str) -> Dict[str, Any] | None:
         if not UPLOAD_ID_RE.fullmatch(str(upload_id or "")): return None
         try: data = json.loads((self.directory / (upload_id + ".json")).read_text(encoding="utf-8"))

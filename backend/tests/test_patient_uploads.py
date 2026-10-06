@@ -76,6 +76,15 @@ class PatientUploadHttpTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400, response.get_json())
         self.assertEqual(response.get_json()['code'], 'unsupported_type')
 
+    def test_ocr_degrades_without_provider_configuration(self):
+        response = self.client.post('/api/v2/patient/uploads', headers=self.headers, data={
+            'files': (BytesIO(b'jpeg-data'), 'report.jpg'),
+        }, content_type='multipart/form-data')
+        upload_id = response.get_json()['uploads'][0]['upload_id']
+        ocr = self.client.post('/api/v2/patient/uploads/' + upload_id + '/ocr', headers=self.headers)
+        self.assertEqual(ocr.status_code, 503)
+        self.assertEqual(ocr.get_json()['code'], 'ocr_unavailable')
+
 
 if __name__ == '__main__':
     unittest.main()

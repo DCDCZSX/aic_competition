@@ -790,7 +790,7 @@ const PATIENT_IMAGE_MAX = 10 * 1024 * 1024;
 const PATIENT_IMAGE_MAX_COUNT = 5;
 function renderPatientUploads(){
   const box=document.getElementById('patient-upload-grid'); if(!box) return;
-  box.innerHTML=S.imageUploads.map((item,index)=>`<div class="patient-upload-item"><img src="${item.url}" alt="${esc(item.name)}"><button type="button" class="patient-upload-remove" aria-label="删除 ${esc(item.name)}" onclick="removePatientUpload(${index})">×</button><span class="patient-upload-name">${esc(item.name)}${item.uploading?' · 上传中':item.upload_id?' · 已暂存':''}</span></div>`).join('');
+  box.innerHTML=S.imageUploads.map((item,index)=>`<div class="patient-upload-item"><img src="${item.url}" alt="${esc(item.name)}"><button type="button" class="patient-upload-remove" aria-label="删除 ${esc(item.name)}" onclick="removePatientUpload(${index})">×</button><span class="patient-upload-name">${esc(item.name)}${item.uploading?' · 上传中':item.ocrDone?' · 已识别':item.ocrUnavailable?' · 请手动填写':item.upload_id?' · 已暂存':''}</span></div>`).join('');
 }
 async function handlePatientImages(event){
   const files=[...(event.target.files||[])]; event.target.value='';
@@ -808,7 +808,17 @@ async function handlePatientImages(event){
   const r=await api('/api/v2/patient/uploads',{method:'POST',body:form});
   if(r.status!==201){ valid.forEach(item=>{item.uploading=false;}); renderPatientUploads(); msg('patient-upload-msg',esc((r.data||{}).error||'图片上传失败，请重试'),'danger'); return; }
   (r.data.uploads||[]).forEach((remote,index)=>{ if(valid[index]){valid[index].upload_id=remote.upload_id; valid[index].uploading=false;} });
-  renderPatientUploads(); msg('patient-upload-msg','图片已暂存。请确认图片内容后，在粘贴病历或表单中补充文字。','ok');
+  renderPatientUploads(); msg('patient-upload-msg','图片已暂存，正在尝试识别文字，请确认后再提交。','ok');
+  for(const item of valid){ if(item.upload_id) await recognizePatientImage(item); }
+}
+async function recognizePatientImage(item){
+  const r=await api('/api/v2/patient/uploads/'+encodeURIComponent(item.upload_id)+'/ocr',{method:'POST'});
+  if(r.status!==200){ item.ocrUnavailable=true; renderPatientUploads(); return; }
+  const text=String((r.data||{}).text||'').trim(); if(!text) return;
+  const history=document.getElementById('history');
+  if(history){ history.value=history.value.trim()?history.value.trim()+'\n\n'+text:text; }
+  item.ocrDone=true; renderPatientUploads();
+  msg('patient-upload-msg','已将识别文字放入“粘贴病历”，请检查并修改后再继续。','ok');
 }
 async function removePatientUpload(index){
   const item=S.imageUploads[index]; if(!item) return;

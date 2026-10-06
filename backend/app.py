@@ -31,6 +31,7 @@ from services import department_domain
 from services.intake import MAX_MAIN_ISSUE_LENGTH, MAX_TEXT_LENGTH, sanitized_payload
 from services.preview_tokens import PreviewTokenService
 from services.patient_uploads import PatientUploadStore, MAX_UPLOAD_COUNT, MAX_UPLOAD_BYTES
+from services.ocr_service import OcrService
 from services.store import Store
 from schemas import CASE_STATE_LABELS
 from services.request_validation import (
@@ -144,6 +145,7 @@ patient_uploads = PatientUploadStore(os.getenv(
     'APP_PATIENT_UPLOAD_DIR',
     os.path.join(tempfile.gettempdir(), 'chais-patient-uploads'),
 ))
+ocr_service = OcrService()
 case_flow = CaseFlow(
     store=_shared_store,
     ai_service=AIService(),
@@ -478,6 +480,18 @@ def delete_patient_image(upload_id):
     if not patient_uploads.delete(session.username, upload_id):
         return jsonify({'error': '图片不存在或无权删除', 'code': 'not_found'}), 404
     return jsonify({'ok': True})
+
+
+@app.route('/api/v2/patient/uploads/<upload_id>/ocr', methods=['POST'])
+def ocr_patient_image(upload_id):
+    session, error = _guard('intake')
+    if error:
+        return error
+    metadata, data = patient_uploads.read_owned(session.username, upload_id)
+    if not metadata or data is None:
+        return jsonify({'error': '图片不存在或无权访问', 'code': 'not_found'}), 404
+    result = ocr_service.extract(data, metadata.get('content_type', 'image/jpeg'))
+    return jsonify(result), (200 if result.get('ok') else 503)
 
 
 @app.route('/api/guest/preview', methods=['POST'])
