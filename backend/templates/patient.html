@@ -126,9 +126,10 @@
   /* 桌面端左侧流程栏固定在视口中，滚动正文时保持入口可见。 */
   @media (min-width:1001px){
     .patient-shell .rail-left{position:fixed;left:var(--page-pad);top:calc(var(--nav-h) + var(--sp-16));width:var(--rail-left);max-height:calc(100vh - var(--nav-h) - var(--sp-32));z-index:40;}
+    .patient-shell .work{grid-column:2;min-width:0;}
     #patient-case-context:not([hidden]) + .patient-shell .rail-left{top:calc(var(--nav-h) + 56px + var(--sp-16));max-height:calc(100vh - var(--nav-h) - 56px - var(--sp-32));}
   }
-  @media (max-width:1000px){.patient-shell .rail-left{position:static;width:auto;max-height:none;}}
+  @media (max-width:1000px){.patient-shell .rail-left{position:static;width:auto;max-height:none;}.patient-shell .work{grid-column:auto;}}
   @media (max-width:720px){.patient-case-context{flex-wrap:wrap;gap:8px;}}
 </style>
 </head>
