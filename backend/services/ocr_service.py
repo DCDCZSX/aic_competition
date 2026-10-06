@@ -12,7 +12,7 @@ class OcrService:
     def __init__(self) -> None:
         self.api_key = (os.getenv("AI_API_KEY") or "").strip()
         self.api_url = os.getenv("AI_API_URL", "https://openai.uniin.cn/openapi/v2/chat/completions").strip()
-        self.model_name = os.getenv("AI_VISION_MODEL_NAME", os.getenv("AI_MODEL_NAME", "qwen-vl-max")).strip()
+        self.model_name = os.getenv("AI_VISION_MODEL_NAME", os.getenv("AI_MODEL_NAME", "deepseek-flash")).strip()
         # OCR should not make the intake page look frozen. The UI treats a timeout
         # as a recoverable manual-entry fallback.
         self.timeout = max(5, min(int(os.getenv("AI_OCR_TIMEOUT", "20")), 60))
