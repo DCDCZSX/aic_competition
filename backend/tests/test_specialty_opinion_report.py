@@ -90,7 +90,7 @@ class SpecialtyOpinionReviewContractTest(unittest.TestCase):
         items = build_items(case_with_two_specialty_analyses())
         self.assertEqual([item.target_type for item in items].count("ai_analysis"), 2)
         self.assertFalse(any(item.target_type == "path_step" for item in items))
-        self.assertEqual({item.target_id for item in items}, {"眼科", "肾内科"})
+        self.assertEqual({item.department for item in items if item.target_type == "ai_analysis"}, {"眼科", "肾内科"})
 
     def test_single_specialty_still_has_one_whole_card_review_item(self):
         items = build_items(unpublished_case())
