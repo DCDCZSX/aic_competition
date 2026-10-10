@@ -110,6 +110,7 @@ DOCTOR_ACTIONS = (
     "request_more_info",
 )
 DECISION_TARGET_TYPES = (
+    "ai_analysis",           # 专科 AI 分析判断
     "department_selection",  # 科室入选
     "path_step",             # 路径步骤
     "consensus_item",        # 共识/分歧条

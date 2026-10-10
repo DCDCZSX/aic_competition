@@ -204,6 +204,16 @@ class MdtScreeningFlowTest(unittest.TestCase):
         self.assertEqual(payload["mdt_formal_record"]["participants"], ["内分泌科医生", "眼科医生"])
         report = self.flow.build_reports(self.case_id)["full"]
         self.assertEqual(report["sections"]["分诊结果"]["牵头方向"], "内分泌科")
+        self.assertNotIn("正式 MDT 会诊记录", str(report["sections"]["医生最终意见"]))
+        for item in self.flow.get_review(self.case_id)["items"]:
+            if item["needs_doctor_review"]:
+                accepted = self.flow.submit_decision(
+                    self.case_id, item_id=item["item_id"], action="accept", reviewer_name="doctor")
+                self.assertTrue(accepted["ok"], accepted)
+        published = self.flow.publish_review(
+            self.case_id, reviewer_name="doctor", final_advice="完成检查后按会诊安排复评。")
+        self.assertTrue(published["ok"], published)
+        report = self.flow.build_reports(self.case_id)["full"]
         self.assertTrue(any(item.get("来源") == "正式 MDT 会诊记录" for item in report["sections"]["医生最终意见"]))
 
     def test_formal_mdt_completed_requires_conclusion(self):
@@ -216,6 +226,23 @@ class MdtScreeningFlowTest(unittest.TestCase):
             unresolved="", next_step="", reviewer_id="doctor")
         self.assertFalse(result["ok"])
         self.assertIn("结论", result["error"])
+
+    def test_saved_plan_can_be_completed_with_conclusion_and_clears_publication_blocker(self):
+        screening = self.submit(decision="recommend_mdt", reason="需要共同评估",
+                                purpose="确认下一步安排", departments=["内分泌科", "眼科"])
+        self.assertTrue(screening["ok"], screening)
+        planned = self.flow.submit_mdt_formal_record(
+            self.case_id, status="planned", participants=["牵头医生"],
+            conclusion="", reviewer_id="doctor")
+        self.assertTrue(planned["ok"], planned)
+        self.assertIn("mdt_record", {b["code"] for b in self.flow.get_review(self.case_id)["publication_blockers"]})
+        completed = self.flow.submit_mdt_formal_record(
+            self.case_id, status="completed", participants=["牵头医生", "眼科医生"],
+            conclusion="已实际会诊并确认后续检查安排", reviewer_id="doctor")
+        self.assertTrue(completed["ok"], completed)
+        review = self.flow.get_review(self.case_id)
+        self.assertEqual(review["mdt_formal_record"]["status"], "completed")
+        self.assertNotIn("mdt_record", {b["code"] for b in review["publication_blockers"]})
 
     def test_formal_mdt_status_cannot_go_backwards_without_explicit_reopen_reason(self):
         screening = self.submit(

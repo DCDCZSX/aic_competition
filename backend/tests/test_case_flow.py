@@ -36,7 +36,7 @@ class TestHappyPath(FlowTestBase):
         r = self.flow.create_case(medical_history=RICH_CASE,
                                   main_issue="该看哪个科", goals=["multi_disease"], age=58)
         self.assertTrue(r.ok, r.errors)
-        self.assertTrue(r.case_id.startswith("C"))
+        self.assertRegex(r.case_id, r"^YX\d{8}-\d{4}$")
         self.assertTrue(r.passes_gate)
         self.assertIsNotNone(r.profile)
 

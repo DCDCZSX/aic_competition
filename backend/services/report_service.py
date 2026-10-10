@@ -31,7 +31,10 @@ from services.review_service import (  # noqa: E402
     DISAGREEMENT_STATUS_LABELS,
     TARGET_TYPE_LABELS,
     latest_disagreement_decisions,
+    build_items, current_decisions, specialty_analysis_summary,
 )
+
+from services.doctor_mdt import review_analysis
 
 # 未审核角标 / 免责（固定文案，所有导出件必带）
 AI_BADGE = "AI 生成，尚未经医生审核"
@@ -116,7 +119,10 @@ def _reviewed_case(case: Dict[str, Any]) -> Dict[str, Any]:
     """生成报告专用有效视图：修改覆盖、驳回移除，不篡改病例原始审计数据。"""
     reviewed = copy.deepcopy(case or {})
     payload = reviewed.get("payload") or {}
-    decisions = _decision_map(payload.get("decisions") or [])
+    effective_decisions = current_decisions(build_items(case), payload.get("decisions") or [])
+    decisions = _decision_map(effective_decisions)
+    # 报告视图只应用当前内容修订内的决定；原始 decisions 继续保留，供审计历史展示。
+    payload["_effective_decisions"] = copy.deepcopy(effective_decisions)
 
     triage = payload.get("triage") or {}
     confirmation = payload.get("triage_doctor_confirmation") or {}
@@ -145,7 +151,24 @@ def _reviewed_case(case: Dict[str, Any]) -> Dict[str, Any]:
         effective_steps.append(updated)
     path["steps"] = effective_steps
 
+    payload["mdt"] = copy.deepcopy(review_analysis(payload))
     aggregation = (payload.get("mdt") or {}).get("aggregation") or {}
+    # 同一分歧复制到患者问题清单时，沿用医生对该分歧的处理。
+    effective_questions = []
+    for value in aggregation.get("open_questions") or []:
+        decision = {}
+        if isinstance(value, str) and value.startswith("分歧待裁决："):
+            topic = value.removeprefix("分歧待裁决：").strip()
+            for index, disagreement in enumerate(aggregation.get("disagreements") or [], start=1):
+                if str(disagreement.get("topic") or "").strip() == topic:
+                    decision = decisions.get(f"consensus_item:X-{index:02d}") or {}
+                    break
+        if decision.get("action") in ("reject", "uncertain", "request_more_info"):
+            continue
+        if decision.get("action") == "modify" and str(decision.get("after") or "").strip():
+            value = str(decision["after"]).strip()
+        effective_questions.append(value)
+    aggregation["open_questions"] = effective_questions
     effective_consensus = []
     for index, item in enumerate(aggregation.get("consensus") or [], start=1):
         decision = decisions.get(f"consensus_item:C-{index:02d}") or {}
@@ -154,6 +177,7 @@ def _reviewed_case(case: Dict[str, Any]) -> Dict[str, Any]:
         updated = dict(item)
         if decision.get("action") == "modify" and str(decision.get("after") or "").strip():
             updated["example"] = str(decision["after"]).strip()
+            updated["topic"] = str(decision["after"]).strip()
         effective_consensus.append(updated)
     aggregation["consensus"] = effective_consensus
 
@@ -162,12 +186,217 @@ def _reviewed_case(case: Dict[str, Any]) -> Dict[str, Any]:
         decision = decisions.get(f"consensus_item:X-{index:02d}") or {}
         if decision.get("action") == "reject":
             continue
-        updated = dict(item)
+        updated = dict(item, disagreement_id=item.get("disagreement_id") or f"X-{index:02d}")
         if decision.get("action") == "modify" and str(decision.get("after") or "").strip():
             updated["reason"] = str(decision["after"]).strip()
         effective_disagreements.append(updated)
     aggregation["disagreements"] = effective_disagreements
     return reviewed
+
+
+# 患者最终报告里每个科室最多摘取的评估条数与待确认条数：完整分析仍保留在医生端，
+# 患者报告只呈现医生已审核意见中的要点，避免六个科室的长段原文堆成一页说明书。
+FINAL_REPORT_OPINION_LIMIT = 2
+FINAL_REPORT_CHECK_LIMIT = 2
+FINAL_REPORT_FOLLOW_UP_QUESTION_LIMIT = 4
+_CHECK_PREFIXES = ("建议向医生确认是否需要", "建议向医生确认", "建议确认")
+FINAL_REPORT_ROUTE_LABELS = {
+    "recommend_mdt": "多学科会诊（MDT）",
+    "single_specialty": "单专科处理",
+    "need_more_info": "补充资料后复核",
+    "urgent_care": "急症优先处理",
+}
+_EMPTY_RECORD_VALUES = {"", "无", "（无）", "暂无", "没有", "-", "—", "（未记录）"}
+
+
+def _sentence(text: Any) -> str:
+    """去掉条目末尾的分隔标点，避免拼接后出现“。；”之类的重复标点。"""
+    return str(text or "").strip().rstrip("。；;，, ")
+
+
+def _check_question(text: Any) -> str:
+    """把“建议向医生确认是否需要××”压成“是否需要××”，报告标题已说明向医生确认。"""
+    value = _sentence(text)
+    for prefix in _CHECK_PREFIXES:
+        if value.startswith(prefix):
+            rest = value[len(prefix):].strip("：: ")
+            if not rest:
+                return value
+            return rest if rest.startswith("是否") else f"是否需要{rest}"
+    return value
+
+
+def _meaningful(text: Any) -> str:
+    value = str(text or "").strip()
+    return "" if value in _EMPTY_RECORD_VALUES else value
+
+
+def _effective_specialty_opinions(case: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """把当前轮次的专科 AI 意见投影为医生审核后的患者可读结论。
+
+    该投影只读当前决定，不修改病例中保留的 AI 原文；驳回意见不进入患者报告，
+    修改意见使用医生改写后的全文，接受意见只摘取医生已审核内容中的评估要点与
+    待确认事项（信息缺口、证据出处等内部材料留在医生端完整报告）。
+    """
+    case = case or {}
+    payload = case.get("payload") or {}
+    analyses = list((review_analysis(payload) or {}).get("analyses") or [])
+    items = build_items(case)
+    decisions = _decision_map(current_decisions(items, payload.get("decisions") or []))
+    out: List[Dict[str, Any]] = []
+    seen: Dict[str, int] = {}
+    for analysis in analyses:
+        summary = specialty_analysis_summary(analysis)
+        department = summary["department"]
+        seen[department] = seen.get(department, 0) + 1
+        target_id = department if seen[department] == 1 else f"{department}#{seen[department]}"
+        decision = decisions.get(f"ai_analysis:{target_id}") or {}
+        action = str(decision.get("action") or "")
+        if action not in ("accept", "modify"):
+            # 驳回不进入患者报告；doctor_confirmed 理论上不应存在未决定的卡，
+            # 为避免误发布，没有医生决定的意见同样不写入患者最终结论。
+            continue
+        if action == "modify":
+            revised = str(decision.get("after") or "").strip()
+            if not revised:
+                continue
+            opinions, checks = [revised], []
+        else:
+            if summary["status"] != "ok":
+                continue
+            opinions = [_sentence(x) for x in summary["inferences"] if _sentence(x)]
+            opinions = opinions[:FINAL_REPORT_OPINION_LIMIT]
+            if not opinions and _sentence(summary.get("content")):
+                opinions = [_sentence(summary["content"])]
+            checks = [_check_question(x) for x in summary["checks"] if _sentence(x)]
+            checks = checks[:FINAL_REPORT_CHECK_LIMIT]
+        if not opinions:
+            continue
+        out.append({
+            "科室": department,
+            "专科评估意见": opinions,
+            "建议向医生确认": checks,
+            "审核": "医生已修改" if action == "modify" else "医生已确认",
+        })
+    return out
+
+
+def _report_datetime(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return datetime.fromisoformat(text).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return text
+
+
+def _final_report_header(case: Dict[str, Any], opinions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """患者最终报告报头：按真实会诊意见单的基本信息栏组织，只放患者可见信息。"""
+    payload = case.get("payload") or {}
+    profile = payload.get("profile") or {}
+    review = payload.get("review") or {}
+    screening = payload.get("mdt_screening") or {}
+    confirmation = payload.get("triage_doctor_confirmation") or {}
+    formal = payload.get("mdt_formal_record") or {}
+    decision = str(screening.get("decision") or "")
+    is_mdt = decision == "recommend_mdt" or formal.get("status") == "completed"
+    title = {"recommend_mdt": "多学科会诊意见报告",
+             "single_specialty": "专科评估意见报告"}.get(decision, "多学科会诊意见报告" if is_mdt else "医生审核意见报告")
+
+    primary = ""
+    departments: List[str] = []
+    if confirmation.get("status") == "confirmed":
+        primary = str(confirmation.get("primary_department") or "").strip()
+        departments = [str(dep).strip() for dep in (confirmation.get("secondary_departments") or [])
+                       if str(dep).strip()]
+    if not primary:
+        triage_primary = ((payload.get("triage") or {}).get("primary") or {})
+        primary = str(triage_primary.get("department") or "").strip()
+    for dep in screening.get("departments") or []:
+        dep = str(dep or "").strip()
+        if dep and dep not in departments:
+            departments.append(dep)
+    for item in opinions:
+        dep = str(item.get("科室") or "").strip()
+        if dep and dep not in departments:
+            departments.append(dep)
+    departments = [dep for dep in departments if dep != primary]
+
+    complaint = str(profile.get("chief_complaint") or case.get("main_issue") or "").strip()
+    if len(complaint) > 80:
+        complaint = complaint[:80].rstrip() + "…"
+    age = str(profile.get("age") or "").strip()
+    sex = str(profile.get("sex") or "").strip()
+    version = int(case.get("report_version") or 1)
+    case_id = str(case.get("case_id") or "")
+    return {
+        "报告名称": title,
+        "报告编号": f"{case_id}-v{version}" if case_id else f"v{version}",
+        "病历编号": case_id,
+        "性别": sex,
+        "年龄": (age if not age.isdigit() else f"{age} 岁"),
+        "主诉": complaint,
+        "主责科室": primary,
+        "会诊科室": departments,
+        "处理方式": FINAL_REPORT_ROUTE_LABELS.get(decision, ""),
+        "审核医生": str(review.get("published_by") or ""),
+        "报告日期": _report_datetime(review.get("published_at")),
+        "报告版本": version,
+    }
+
+
+def build_patient_final_report(case: Dict[str, Any]) -> Report:
+    """发布后的患者最终报告：报头 + 专科意见 + 会诊结论 + 医生建议 + 后续安排。
+
+    结构对齐线下会诊意见单：先列各科意见要点，再给出（正式 MDT 时）会诊结论、
+    医生最终建议和编号的后续安排；病例画像、信息缺口等就诊前准备内容不进入本报告。
+    """
+    case = case or {}
+    payload = case.get("payload") or {}
+    review = payload.get("review") or {}
+    confirmed = case.get("case_state") == "doctor_confirmed" and bool(review.get("published"))
+    report = Report(kind="patient_final", case_id=case.get("case_id", ""), generated_at=_now(),
+                    badge="医生审核后发布" if confirmed else AI_BADGE,
+                    doctor_confirmed=confirmed,
+                    stage="doctor_reviewed" if confirmed else "ai_preparation",
+                    report_version=int(case.get("report_version") or 1),
+                    review_status="doctor_confirmed" if confirmed else "ai_unreviewed")
+    opinions: List[Any] = _effective_specialty_opinions(case) if confirmed else []
+    report.header = _final_report_header(case, opinions)
+    if not opinions:
+        opinions = ["（暂无已由医生确认的专科评估意见）"]
+
+    follow_up: List[str] = []
+    formal = payload.get("mdt_formal_record") or {}
+    conclusion = ""
+    if formal.get("status") == "completed":
+        conclusion = _meaningful(formal.get("conclusion"))
+        next_step = _meaningful(formal.get("next_step"))
+        unresolved = _meaningful(formal.get("unresolved"))
+        if next_step:
+            follow_up.append(f"会诊后续安排：{_sentence(next_step)}")
+        if unresolved:
+            follow_up.append(f"未解决事项：{_sentence(unresolved)}")
+    for item in (((review_analysis(payload) or {}).get("aggregation") or {}).get("disagreements") or []):
+        topic = _sentence(item.get("topic"))
+        if not topic:
+            continue
+        plan = _sentence(item.get("resolving_info")) or "待补充资料后复核"
+        follow_up.append(f"未解决的不同意见：{topic}（{plan}）")
+    pending = [_sentence(item) for item in (payload.get("review_pending_questions") or []) if _sentence(item)]
+    for question in pending[:FINAL_REPORT_FOLLOW_UP_QUESTION_LIMIT]:
+        follow_up.append(f"需进一步确认：{question}")
+    if not follow_up:
+        follow_up = ["按医生建议执行；如症状变化，请及时联系接诊医生"]
+
+    sections: Dict[str, Any] = {"医生审核后的专科评估意见": opinions}
+    if conclusion:
+        sections["多学科会诊结论"] = conclusion
+    sections["医生最终建议"] = str(review.get("final_advice") or "（医生未填写最终建议）")
+    sections["后续安排"] = follow_up
+    report.sections = sections
+    return report
 
 
 def timeline_for_report(events: Any) -> List[Dict[str, Any]]:
@@ -508,7 +737,7 @@ def disagreements_for_report(items: Any, decisions: Any = None) -> List[Dict[str
     out: List[Dict[str, Any]] = []
     for index, item in enumerate(items or [], start=1):
         positions = item.get("positions") or {}
-        disagreement_id = f"X-{index:02d}"
+        disagreement_id = str(item.get("disagreement_id") or f"X-{index:02d}")
         decision = decision_map.get(disagreement_id) or {}
         status = str(decision.get("status") or "")
         status_label = DISAGREEMENT_STATUS_LABELS.get(status, "待牵头医生处理")
@@ -566,6 +795,8 @@ class Report:
     stage: str = "ai_preparation"
     report_version: int = 1
     review_status: str = "ai_unreviewed"
+    # 患者最终报告的报头（报告名称、病历编号、科室、审核医生等）；其他报告为空。
+    header: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def stage_label(self) -> str:
@@ -602,6 +833,7 @@ class Report:
             "complete": self.complete,
             "disclaimer": self.disclaimer,
             "capability_boundary": CAPABILITY_BOUNDARY,
+            **({"header": dict(self.header)} if self.header else {}),
         }
 
 
@@ -698,6 +930,8 @@ def build_full_report(case: Dict[str, Any]) -> Report:
     triage_confirmation = payload.get("triage_doctor_confirmation") or {}
     formal_mdt = payload.get("mdt_formal_record") or {}
     decisions = payload.get("decisions") or []
+    effective_decisions = payload.get("_effective_decisions") or current_decisions(
+        build_items(case), decisions)
     decision_lookup = _decision_map(decisions)
 
     cards = build_evidence_cards(profile, triage, mdt)
@@ -722,8 +956,17 @@ def build_full_report(case: Dict[str, Any]) -> Report:
     reliability = triage.get("reliability") or {}
     open_questions = [str(question) for question in (aggregation.get("open_questions") or [])]
 
-    doctor_final_opinions = _doctor_opinions(decisions)
-    if formal_mdt.get("status") == "completed":
+    doctor_final_opinions = _doctor_opinions(
+        [d for d in effective_decisions if d.get("target_type") != "ai_analysis"]
+    ) if confirmed else []
+    review = payload.get("review") or {}
+    if confirmed and review.get("final_advice"):
+        doctor_final_opinions.insert(0, {
+            "医生最终建议": review["final_advice"],
+            "发布医生": review.get("published_by") or "",
+            "发布时间": review.get("published_at") or "",
+        })
+    if confirmed and formal_mdt.get("status") == "completed":
         doctor_final_opinions.append({
             "来源": "正式 MDT 会诊记录",
             "会诊结论": formal_mdt.get("conclusion") or "（未记录）",
@@ -781,11 +1024,14 @@ def build_full_report(case: Dict[str, Any]) -> Report:
             "证据卡片": evidence_cards_for_report(cards),
         },
         "医生最终意见": doctor_final_opinions,
-        "AI 与医生意见差异": _differences(decisions),
+        "AI 与医生意见差异": _differences(effective_decisions),
         "审核记录与版本": {
             "报告版本": case.get("report_version", 1),
             "病例状态": CASE_STATE_LABELS.get(str(case.get("case_state")), "（未记录）"),
             "审核条目数": len(decisions),
+            "AI 分析状态": payload.get("ai_unavailable_reason") or
+                ((payload.get("analysis") or {}).get("state") or "已生成专科分析"),
+            "历史版本摘要": list(payload.get("review_history") or []),
             # 免审条目如实单列：规则判定免审 ≠ 医生确认（红线），不能让读者以为医生看过
             "免审条目": _exempt_note(payload),
             "最近操作": recent_decisions_for_report(decisions),
@@ -834,9 +1080,11 @@ def _differences(decisions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out = []
     for d in decisions:
         if d.get("action") in ("modify", "reject"):
+            original_label = ("AI 原始专科意见" if d.get("target_type") == "ai_analysis"
+                              else "AI 原意见")
             out.append({
                 "条目": TARGET_TYPE_LABELS.get(str(d.get("target_type")), str(d.get("target_type"))),
-                "AI 原意见": d.get("before"),
+                original_label: d.get("before"),
                 "医生意见": d.get("after") or "（已驳回，不进入报告）",
                 "差异类型": "医生修改" if d.get("action") == "modify" else "医生驳回",
                 "原因": d.get("reason") or "（未填写）",
@@ -913,9 +1161,20 @@ def build_both(case: Dict[str, Any]) -> Dict[str, Any]:
     """同时生成患者版与完整版（API 一次性返回）。"""
     summary = build_patient_summary(case)
     full = build_full_report(case)
+    patient_final = build_patient_final_report(case)
+    review = (case.get("payload") or {}).get("review") or {}
+    published = case.get("case_state") == "doctor_confirmed"
     return {
+        "doctor_result": {
+            "published": published,
+            "final_advice": str(review.get("final_advice") or "") if published else "",
+            "published_by": str(review.get("published_by") or "") if published else "",
+            "published_at": str(review.get("published_at") or "") if published else "",
+            "report_version": int(case.get("report_version") or 1),
+        },
         "summary": summary.to_dict(),
         "full": full.to_dict(),
+        "patient_final_report": patient_final.to_dict() if case.get("case_state") == "doctor_confirmed" else None,
         "summary_markdown": render_markdown(summary),
         "full_markdown": render_markdown(full),
     }

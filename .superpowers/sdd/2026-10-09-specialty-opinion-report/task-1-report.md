@@ -1,37 +1,28 @@
 # Task 1 report
 
-## Scope
+Status: DONE (controller takeover after implementer interruption)
 
-Added synthetic regression fixtures and failing contracts for specialty opinion review units and the confirmed patient report. The existing `ai_analysis` target type is used for whole-card specialty opinions, per the compatibility ruling; no parallel `specialty_opinion` enum was introduced.
+## Implemented
 
-## Changes
+- Added `backend/tests/test_specialty_opinion_report.py` with synthetic, PII-free fixtures and contract tests for:
+  - one whole-card `ai_analysis` review item per specialty;
+  - failed specialty analysis visibility;
+  - a separate post-publication `patient_final_report` with three final sections;
+  - preservation of the pre-visit summary;
+  - applying doctor modifications/rejections without overwriting AI source text;
+  - formal MDT follow-up, no-AI fallback, and history evidence.
+- Updated the item assertion to check stable department identity rather than a particular target-id encoding. The storage enum is the existing `ai_analysis` value, per the compatibility ruling.
+
+## TDD evidence
+
+- RED command: `python -m unittest backend.tests.test_specialty_opinion_report -v`
+- RED result: exit code 1; 10 tests ran, 9 failed and the existing pre-visit-summary assertion passed. Failures are expected because the current implementation has no specialty-card item generation or `patient_final_report` field.
+- Output: `.superpowers/sdd/2026-10-09-specialty-opinion-report/task-1-red.txt`
+
+## Files
 
 - `backend/tests/test_specialty_opinion_report.py`
-  - Added reusable de-identified case fixtures for unpublished, confirmed, modified, failed, rejected, formal MDT, missing AI key, disagreement, and history snapshot scenarios.
-  - Added review contracts for one `ai_analysis` item per available specialty analysis, single-specialty handling, and failed-analysis flags.
-  - Added report contracts for preparation vs final sections, doctor modifications preserving AI source, rejection, formal MDT/unresolved follow-up, missing AI key fallback, and history snapshots.
-- `backend/tests/test_review.py` and `backend/tests/test_report.py` contain corresponding integration assertions in the working tree. They were not staged here because those files already contained unrelated user changes.
-
-## Verification
-
-Command:
-
-```text
-python -m unittest backend.tests.test_specialty_opinion_report -v
-```
-
-Result: 10 tests ran; 1 preparation-summary test passed and 9 new contracts failed as expected. Failures are due to missing `ai_analysis` review items, missing `patient_final_report`, and missing fallback/history projections. No import or fixture errors remain.
-
-Command:
-
-```text
-python -m unittest backend.tests.test_specialty_opinion_report backend.tests.test_review backend.tests.test_report -v
-```
-
-Result observed before the focused rerun: 118 tests ran, 10 failures and 1 error. The failures correspond to the new contracts plus the integration projection assertion; existing unrelated tests remained diagnosable.
 
 ## Concerns
 
-- The refreshed brief names `specialty_opinion`, but the repository schema and historical decisions require `ai_analysis`; tests intentionally assert `ai_analysis`.
-- `test_review.py` and `test_report.py` have pre-existing concurrent modifications in the shared worktree, so only the new fixture module is staged/committed in this task to avoid capturing unrelated lines.
-- The rejected-specialty contract now first requires a final report projection, preventing a missing-key implementation from passing vacuously.
+- The remaining production work must decide how `ai_analysis` target IDs encode source and department while keeping old decisions readable; tests intentionally assert department behavior rather than the exact hash.

@@ -158,6 +158,47 @@ class PatientFinalReportContractTest(unittest.TestCase):
         self.assertIn("仍需补充合成检查", final)
         self.assertIn("未解决", final)
 
+    def test_final_report_keeps_only_key_points_per_specialty(self):
+        case = confirmed_case_with_reviewed_specialties()
+        analysis = case["payload"]["mdt"]["analyses"][0]
+        analysis["inferences"] = [{"text": f"眼科评估{i}。", "evidence_refs": ["合成资料-1"]} for i in range(1, 5)]
+        analysis["checks"] = [{"content": f"建议向医生确认是否需要合成检查{i}"} for i in range(1, 6)]
+        analysis["information_gaps"] = ["合成缺口不应出现在患者报告"]
+        reports = build_both(case)
+        row = reports["patient_final_report"]["sections"]["医生审核后的专科评估意见"][0]
+        self.assertEqual(row["科室"], "眼科")
+        self.assertEqual(row["专科评估意见"], ["眼科评估1", "眼科评估2"])
+        self.assertEqual(row["建议向医生确认"], ["是否需要合成检查1", "是否需要合成检查2"])
+        self.assertEqual(row["审核"], "医生已确认")
+        final = json.dumps(reports["patient_final_report"], ensure_ascii=False)
+        self.assertNotIn("合成缺口不应出现在患者报告", final)
+        self.assertNotIn("证据出处", final)
+
+    def test_final_report_header_reads_like_consultation_form(self):
+        case = confirmed_case_with_reviewed_specialties()
+        case["payload"]["mdt_screening"] = {"decision": "recommend_mdt", "departments": ["眼科", "肾内科"]}
+        case["payload"]["triage_doctor_confirmation"] = {
+            "status": "confirmed", "primary_department": "眼科", "secondary_departments": ["肾内科"]}
+        header = build_both(case)["patient_final_report"]["header"]
+        self.assertEqual(header["报告名称"], "多学科会诊意见报告")
+        self.assertEqual(header["报告编号"], "SYN-OP-002-v2")
+        self.assertEqual((header["性别"], header["年龄"]), ("女", "42 岁"))
+        self.assertEqual(header["主责科室"], "眼科")
+        self.assertEqual(header["会诊科室"], ["肾内科"])
+        self.assertEqual(header["处理方式"], "多学科会诊（MDT）")
+        self.assertEqual((header["审核医生"], header["报告日期"]), ("合成审核医生", "2026-10-09 10:00"))
+
+    def test_formal_mdt_conclusion_is_its_own_section_before_advice(self):
+        case = confirmed_case_with_reviewed_specialties()
+        case["payload"]["mdt_formal_record"] = {
+            "status": "completed", "conclusion": "正式 MDT 合成结论", "unresolved": "无", "next_step": "两周后复诊",
+        }
+        report = build_both(case)["patient_final_report"]
+        self.assertEqual(report["section_order"],
+                         ["医生审核后的专科评估意见", "多学科会诊结论", "医生最终建议", "后续安排"])
+        self.assertEqual(report["sections"]["多学科会诊结论"], "正式 MDT 合成结论")
+        self.assertEqual(report["sections"]["后续安排"], ["会诊后续安排：两周后复诊"])
+
     def test_no_ai_key_fallback_is_explicit(self):
         case = unpublished_case()
         case["payload"]["mdt"] = {"analyses": [], "aggregation": {}}

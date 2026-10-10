@@ -556,14 +556,14 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
 
     def test_publish_with_accept_all(self):
         ids, _ = self._item_ids()
+        blocked = self.flow.publish_review(self.case_id, reviewer_name="医学生", accept_all=True)
+        self.assertFalse(blocked["ok"])
+        self.assertIn("逐条处理", blocked["error"])
         # 先人工修改一条，制造"人工痕迹"
         modified = self.flow.submit_decision(
             self.case_id, ids[1], "modify", after="改为：建议向医生确认是否需要眼部评估",
             reason="改写为面向患者的中性表述", reviewer_name="医学生")
         self.assertTrue(modified["ok"], modified.get("error"))
-        blocked = self.flow.publish_review(self.case_id, reviewer_name="医学生", accept_all=True)
-        self.assertFalse(blocked["ok"])
-        self.assertIn("逐条处理", blocked["error"])
         for item in (self.flow.get_review(self.case_id) or {}).get("items", []):
             if item["review_tier"] == rs.REQUIRED and item["state"] == rs.AWAITING:
                 decision = self.flow.submit_decision(
@@ -594,6 +594,47 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         self.assertTrue(second["ok"], second.get("error"))
         self.assertTrue(second.get("idempotent"))
         self.assertEqual(second["version"], first["report_version"])
+
+    def test_final_advice_is_published_with_report_and_immutable_snapshot(self):
+        self._accept_required_items()
+        selected=self.flow.get_case(self.case_id)['payload']['triage']['selected']
+        self.assertTrue(self.flow.submit_triage_confirmation(
+            self.case_id, primary_department=selected[0], secondary_departments=selected[1:],
+            reason='确认负责科室', reviewer_id='审核医生')['ok'])
+        self.assertTrue(self.flow.submit_mdt_screening(
+            self.case_id, decision='single_specialty', reason='本次按单科处理', reviewer_id='审核医生')['ok'])
+        advice = "请携带已有检查资料前往眼科复诊，由接诊医生进一步评估。"
+        published = self.flow.publish_review(self.case_id, reviewer_name="审核医生", final_advice=advice)
+        self.assertTrue(published['ok'], published.get('error'))
+        reports = self.flow.build_reports(self.case_id)
+        self.assertEqual(reports['doctor_result']['final_advice'], advice)
+        self.assertTrue(reports['doctor_result']['published'])
+        self.assertEqual(reports['doctor_result']['published_by'], '审核医生')
+        self.assertTrue(reports['doctor_result']['published_at'])
+        self.assertIn(advice, reports['full_markdown'])
+        snapshot = self.flow.store.get_report_version(self.case_id, published['report_version'])
+        self.assertEqual(snapshot['report_json']['doctor_result']['final_advice'], advice)
+        repeat = self.flow.publish_review(self.case_id, final_advice="另一份意见")
+        self.assertTrue(repeat['idempotent'])
+        self.assertEqual(self.flow.build_reports(self.case_id)['doctor_result']['final_advice'], advice)
+
+    def test_final_advice_rejects_blank_and_sensitive_content_without_publishing(self):
+        self._accept_required_items()
+        for advice in ('   ', '患者身份证号110101199001011234', '字' * 4001):
+            with self.subTest(advice=advice[:20]):
+                result = self.flow.publish_review(self.case_id, final_advice=advice)
+                self.assertFalse(result['ok'])
+                self.assertNotEqual(self.flow.get_case(self.case_id)['case_state'], 'doctor_confirmed')
+
+    def test_unpublished_advice_is_not_a_patient_final_result(self):
+        case = self.flow.get_case(self.case_id)
+        payload = dict(case['payload'])
+        payload['review'] = {'published':False, 'final_advice':'草稿建议'}
+        self.flow.store.save_case(self.case_id, case_state=case['case_state'], payload=payload)
+        reports = self.flow.build_reports(self.case_id)
+        self.assertFalse(reports['doctor_result']['published'])
+        self.assertEqual(reports['doctor_result']['final_advice'], '')
+        self.assertNotIn('草稿建议', reports['full_markdown'])
 
     def test_triage_change_after_publish_starts_recheck(self):
         case = self.flow.get_case(self.case_id)
@@ -823,6 +864,10 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
             reviewer_id="医学生",
         )
         self.assertTrue(first_change["ok"], first_change.get("error"))
+        self.assertIsNone(self.flow.get_review(self.case_id)['mdt_formal_record'])
+        self.assertTrue(self.flow.submit_mdt_formal_record(
+            self.case_id, status='completed', participants=['医生A'], conclusion='按新的参与范围重新讨论',
+            reviewer_id='医学生')['ok'])
         consensus = next(item for item in self.flow.get_review(self.case_id)["items"]
                          if item["item_id"] == "consensus_item:C-01")
         accepted = self.flow.submit_decision(
@@ -855,7 +900,7 @@ class TestReviewFlowEndToEnd(unittest.TestCase):
         current = next(item for item in refreshed["items"]
                        if item["item_id"] == "consensus_item:C-01")
         self.assertEqual(refreshed["case_state"], "awaiting_recheck")
-        self.assertEqual(current["content_revision"], 3)
+        self.assertEqual(current["content_revision"], 4)
         self.assertEqual(current["state"], rs.AWAITING)
 
     def test_formal_mdt_change_in_open_round_bumps_matching_consensus_revision(self):
@@ -1062,6 +1107,23 @@ class TestReviewQueuePagination(unittest.TestCase):
         self.assertEqual(result["filters"]["all"], 3)
         self.assertEqual(result["filters"]["doctor_pending"], 0)
         self.assertEqual(result["filters"]["exempt"], 0)
+
+    def test_published_cases_leave_doctor_pending_and_have_their_own_filter(self):
+        self.flow.store.update_case("Q1", case_state="doctor_confirmed")
+        result = self.flow.list_review_cases(limit=20, filter_kind="published")
+        self.assertEqual([r["case_id"] for r in result["rows"]], ["Q1"])
+        self.assertEqual(result["filters"]["published"], 1)
+        pending = self.flow.list_review_cases(limit=20, filter_kind="doctor_pending")
+        self.assertNotIn("Q1", [r["case_id"] for r in pending["rows"]])
+
+
+class TestSpecialtyOpinionRegression(unittest.TestCase):
+    def test_each_available_specialty_analysis_is_a_whole_card_review_unit(self):
+        from tests.test_specialty_opinion_report import case_with_two_specialty_analyses
+
+        items = rs.build_items(case_with_two_specialty_analyses())
+        self.assertEqual([item.target_type for item in items].count("ai_analysis"), 2)
+        self.assertFalse(any(item.target_type == "path_step" for item in items))
 
 
 if __name__ == "__main__":

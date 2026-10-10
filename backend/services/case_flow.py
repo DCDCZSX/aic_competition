@@ -19,6 +19,8 @@ import sys
 import threading
 import uuid
 import logging
+import json
+import hashlib
 from functools import wraps
 from types import SimpleNamespace
 from dataclasses import dataclass, field
@@ -46,6 +48,7 @@ from services import review_service  # noqa: E402
 from services import task_service  # noqa: E402
 from services import update_service  # noqa: E402
 from services import department_domain  # noqa: E402
+from services import doctor_mdt  # noqa: E402
 from services.rule_engine import evaluate as evaluate_rules  # noqa: E402
 from services.s2_analyst import analyze as s2_analyze  # noqa: E402
 from services.store import Store  # noqa: E402
@@ -94,9 +97,24 @@ def patient_safe_mdt_screening(screening: Optional[Dict[str, Any]]) -> Optional[
     return {key: screening[key] for key in allowed if key in screening}
 
 
-def new_case_id() -> str:
-    """生成病例号：#C + 8 位随机（便于脱敏展示与检索）。"""
-    return "C" + uuid.uuid4().hex[:8].upper()
+CASE_ID_PREFIX = "YX"
+
+
+def _short_text(value: Any, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+def new_case_id(store: Optional[Store] = None) -> str:
+    """生成按日期编号的病例号：YX + 建档日期 + 当日 4 位流水，如 YX20261010-0003。
+
+    有存储时由 ``Store.next_case_id`` 在锁内分配当日下一个流水号；无存储（纯计算测试）
+    时用当日日期加 4 位随机数，只保证格式一致，不占用正式流水。
+    """
+    if store is not None and hasattr(store, "next_case_id"):
+        return store.next_case_id(CASE_ID_PREFIX)
+    day = datetime.now().strftime("%Y%m%d")
+    return f"{CASE_ID_PREFIX}{day}-R{uuid.uuid4().int % 1000:03d}"
 
 
 def serialized_case(method):
@@ -177,6 +195,7 @@ class CaseFlow:
         self._active_jobs: Dict[str, threading.Thread] = {}
         self._case_locks_guard = threading.Lock()
         self._case_locks: Dict[str, threading.RLock] = {}
+        self._doctor_mdt_runs = set()
 
     def _case_lock(self, case_id: str) -> threading.RLock:
         with self._case_locks_guard:
@@ -208,13 +227,14 @@ class CaseFlow:
     def _run_mdt(self, *, text: str, outcome: Any, profile: Optional[Dict[str, Any]],
                  case_id: str, answers: Optional[Dict[str, str]] = None,
                  rejections: Optional[List[str]] = None,
-                 on_department: Optional[Callable[[str, int, int], None]] = None) -> Dict[str, Any]:
+                 on_department: Optional[Callable[[str, int, int], None]] = None,
+                 purpose: str = "", max_departments: int = MAX_MDT_DEPARTMENTS) -> Dict[str, Any]:
         """对入选科室做**第一轮独立研判**（互不预读）并聚合（P8）。
 
         每个专科单独调用、提示词里不含其他科室结论 —— 防锚定（主文档 §8.1）。
         `on_department(dept, done, total)` 上报"正在分析第几科"，供接口层显示进度。
         """
-        departments = outcome.selected[:MAX_MDT_DEPARTMENTS]
+        departments = outcome.selected[:max_departments]
         skip_reason = ""
         if not departments:
             skip_reason = "没有明确的就医方向，未运行多学科会诊"
@@ -242,6 +262,7 @@ class CaseFlow:
             a = analyze_specialty(
                 ai_service=self.ai_service, department=dep, text=text,
                 profile=profile, case_id=case_id, answers=answers,
+                **({"focus": "本次医生确认的会诊目标：" + purpose} if purpose else {}),
             )
             analyses.append(a)
 
@@ -362,7 +383,7 @@ class CaseFlow:
             if intake.screen is not None and getattr(intake.screen, "blocked", False):
                 result.advice = intake.screen.advice
             # 阻断也必须留痕（规格书 §4.1：记录触发依据）
-            result.case_id = case_id or new_case_id()
+            result.case_id = case_id or new_case_id(self.store)
             if self.store:
                 self.store.add_audit(
                     result.case_id, "intake_blocked",
@@ -386,7 +407,7 @@ class CaseFlow:
         # 目的：让"点提交"到"看到自己的画像"从 3 秒进一步压到 0.2 秒级。
         # 规则画像是确定性抽取（无模型调用），已经能给患者核对；模型增强随后自动替换。
         if progressive:
-            case_id = case_id or new_case_id()
+            case_id = case_id or new_case_id(self.store)
             rule_extraction = extract(
                 payload["medical_history"], case_id=case_id, main_issue=payload["main_issue"],
                 use_llm=False, ai_service=None,
@@ -446,7 +467,7 @@ class CaseFlow:
             return result
 
         # ---- 3. 病例结构化（P4：画像 + G4 门禁）----
-        case_id = case_id or new_case_id()
+        case_id = case_id or new_case_id(self.store)
         extraction: ExtractionResult = extract(
             payload["medical_history"], case_id=case_id, main_issue=payload["main_issue"],
             use_llm=self.use_llm, ai_service=self.ai_service,
@@ -795,13 +816,29 @@ class CaseFlow:
             "finished_at": "",
         }
 
+    @serialized_case
     def _patch_payload(self, case_id: str, **updates: Any) -> Dict[str, Any]:
         """原子更新病例 payload，避免后台分析与主请求相互覆盖。"""
         if not self.store:
             return {}
         def mutate(case: Dict[str, Any]) -> None:
             payload = dict(case.get("payload") or {})
+            old_items = review_service.build_items(case) if "mdt" in updates else []
             payload.update(updates)
+            if "mdt" in updates:
+                new_items = review_service.build_items(dict(case, payload=payload))
+                old_ids = {item.item_id for item in old_items}
+                new_ids = {item.item_id for item in new_items}
+                affected = sorted(set(review_service.affected_item_ids(old_items, new_items)) | (old_ids - new_ids))
+                if affected:
+                    if case.get("case_state") in ("doctor_confirmed", "awaiting_recheck") or (payload.get("review") or {}).get("published"):
+                        payload = self._begin_recheck(case, payload, actor="system",
+                            reason="专科预分析结果更新", affected_item_ids=affected)
+                        if case.get("case_state") == "doctor_confirmed":case["case_state"]="awaiting_recheck"
+                    else:
+                        revisions = dict(payload.get("review_item_revisions") or {})
+                        revisions.update(review_service.bump_content_revisions(revisions,affected))
+                        payload["review_item_revisions"] = revisions
             case["payload"] = payload
         case = self.store.mutate_case(case_id, mutate)
         return dict((case or {}).get("payload") or {})
@@ -1113,15 +1150,15 @@ class CaseFlow:
             status["finished_at"] = _now()
         self._update_analysis(case_id, finish)
 
-        refreshed = self.store.load_case(case_id)
-        payload_now = dict((refreshed or {}).get("payload") or {})
-        # Failed/partial phases remain visible as retryable analysis work.  Only
-        # a fully successful run may enter the doctor's normal review queue.
-        if state == "done" and payload_now.get("triage"):
-            self.store.transition_case(
-                case_id, STATE_AWAITING_DOCTOR, actor="system",
-                reason="后台分析完成",
-                payload=self._patch_payload(case_id, analysis=payload_now.get("analysis")))
+        with self._case_lock(case_id):
+            refreshed = self.store.load_case(case_id)
+            payload_now = dict((refreshed or {}).get("payload") or {})
+            # 复核轮次保留复核状态；内容未变的已发布病例仍保留已确认状态。
+            if state == "done" and payload_now.get("triage"):
+                current_state = (refreshed or {}).get("case_state")
+                target_state = current_state if current_state in ("awaiting_recheck", "doctor_confirmed") else STATE_AWAITING_DOCTOR
+                self.store.transition_case(case_id,target_state,actor="system",reason="后台分析完成",
+                    payload=self._patch_payload(case_id,analysis=payload_now.get("analysis")))
         self.store.add_audit(case_id, "analysis_finished",
                              f"后台分析结束：{'、'.join(phases)}；失败相位={'、'.join(failed) or '无'}")
 
@@ -1473,6 +1510,8 @@ class CaseFlow:
                 "created_at": case.get("created_at") or "",
                 "updated_at": case.get("updated_at") or "",
                 "main_issue": main_issue,
+                # 列表标题用患者本人的脱敏主诉，便于在多份病历里辨认；只截取前 60 字。
+                "summary": _short_text((payload.get("profile") or {}).get("chief_complaint"), 60),
                 "case_state": case.get("case_state") or "",
                 "case_state_label": case.get("case_state_label") or case.get("case_state") or "",
                 "primary_department": requested,
@@ -1500,6 +1539,9 @@ class CaseFlow:
             "case_id": case_id,
             "title": f"病例 #{case_id} · {main_issue or '未填写主要问题'}",
             "main_issue": main_issue,
+            "goals": list(payload.get("goals") or []),
+            "answers": dict(payload.get("answers") or {}),
+            "routing_status": (payload.get("routing") or {}).get("status") or "not_submitted",
             "submitted_material": {
                 "medical_history": payload.get("initial_medical_history") or payload.get("masked_history") or "",
                 "profile": payload.get("profile") or {},
@@ -1512,6 +1554,55 @@ class CaseFlow:
 
     def archive_patient_case(self, case_id: str, owner_id: str) -> bool:
         return bool(self.store and self.store.archive_case_for_owner(case_id, owner_id))
+
+    def get_patient_report_version(self, case_id: str, version: int,
+                                   owner_id: str) -> Optional[Dict[str, Any]]:
+        """Read the saved snapshot, projecting only patient-facing report content."""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case or case.get("owner_id") != owner_id or case.get("archived_at"):
+            return None
+        snapshot = self.store.get_report_version(case_id, version)
+        if not snapshot:
+            return None
+        saved = snapshot.get("report_json") or {}
+        report = {}
+        section_keys = {
+            "summary": ("主要问题", "关键已知资料", "当前信息缺口", "建议咨询方向",
+                        "需要向医生确认的问题", "当前任务"),
+            "full": ("病例画像", "时间线", "分诊结果", "就医路径", "医生最终意见"),
+            "patient_final_report": ("医生审核后的专科评估意见", "多学科会诊结论", "医生最终建议", "后续安排"),
+        }
+        for kind, keys in section_keys.items():
+            original = saved.get(kind) or {}
+            if not original:
+                continue
+            view = {key: original[key] for key in (
+                "generated_at", "doctor_confirmed", "stage_label", "disclaimer") if key in original}
+            if kind == "patient_final_report" and isinstance(original.get("header"), dict):
+                # 报头只含报告名称、病历编号、科室和审核医生等患者本人可见信息。
+                view["header"] = dict(original["header"])
+            sections = {key: (original.get("sections") or {})[key]
+                        for key in keys if key in (original.get("sections") or {})}
+            for key, fields in {
+                "病例画像": ("基本信息", "主诉", "既往疾病", "检查异常", "当前用药", "信息缺口"),
+                "分诊结果": ("牵头方向", "协同方向"),
+            }.items():
+                if isinstance(sections.get(key), dict):
+                    sections[key] = {field: sections[key][field] for field in fields
+                                     if field in sections[key]}
+            if isinstance(sections.get("医生最终意见"), list):
+                sections["医生最终意见"] = [
+                    (item.get("内容") or item.get("下一步") or item.get("操作") or
+                     "；".join(f"{key}：{item[key]}" for key in
+                              ("会诊结论", "未解决事项", "后续安排") if item.get(key)))
+                    if isinstance(item, dict) else item for item in sections["医生最终意见"]]
+            view.update(sections=sections, section_order=list(sections), report_version=version)
+            report[kind] = view
+        result = saved.get("doctor_result") or {}
+        report["doctor_result"] = {key: result[key] for key in (
+            "published", "final_advice", "published_by", "published_at", "report_version") if key in result}
+        return {"case_id": case_id, "version": snapshot["version"],
+                "published_at": snapshot["published_at"], "report": report}
 
     def restore_patient_case(self, case_id: str, owner_id: str) -> bool:
         return bool(self.store and self.store.restore_case_for_owner(case_id, owner_id))
@@ -1722,6 +1813,11 @@ class CaseFlow:
             "departments": list(screening["departments"]),
         }
         payload["mdt_screening"] = screening
+        if previous_screening and (
+                previous_screening.get("decision") != decision
+                or previous_screening.get("purpose") != safe_purpose
+                or set(previous_screening.get("departments") or []) != set(normalized_departments)):
+            payload.pop("mdt_formal_record", None)
         old_items = review_service.build_items(case)
         current_state = str(case.get("case_state") or "")
         changed_screening_departments = sorted(set(
@@ -1740,7 +1836,7 @@ class CaseFlow:
             item_id for item_id in review_service.affected_item_ids(
                 old_items, old_items, changed_screening_departments,
                 screening_update_text,
-            ) if item_id.startswith("consensus_item:")
+            ) if item_id.startswith(("ai_analysis:", "consensus_item:"))
         ]
         if screening_changed and (
                 current_state in ("doctor_confirmed", "awaiting_recheck")
@@ -1804,6 +1900,154 @@ class CaseFlow:
         }
 
     @serialized_case
+    def submit_doctor_routing(self, case_id: str, *, primary_department: str,
+                              secondary_departments=None, decision: str, reason: str,
+                              purpose: str = "", reviewer_id: str = "",
+                              department_reviewer_map=None) -> Dict[str, Any]:
+        """一次确认负责科室及处理方向，先完整校验，避免保存半个分流决定。"""
+        if not self.store.load_case(case_id):
+            return {"ok": False, "error": "病例不存在"}
+        secondary = secondary_departments or []
+        if not isinstance(secondary, list) or len(secondary) > 5:
+            return {"ok": False, "error": "参与范围最多六个科室"}
+        departments = [department_domain.resolve(str(x or "")).name
+                       for x in [primary_department] + secondary]
+        if not all(departments) or len(set(departments)) != len(departments):
+            return {"ok": False, "error": "请选择科室域内的不同科室"}
+        if departments[0] not in department_domain.PRIMARY_ELIGIBLE_NAMES:
+            return {"ok": False, "error": "辅助科室可以参与会诊，但不能作为主责科室"}
+        if decision not in MDT_SCREENING_DECISIONS:
+            return {"ok": False, "error": "处理方向非法"}
+        try:
+            reason = update_service.sanitize_optional_content(reason, field_name="分流确认理由")
+            purpose = update_service.sanitize_optional_content(purpose, field_name="会诊目标")
+            reviewer_id = update_service.sanitize_optional_content(reviewer_id, field_name="审核人")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not reason or not reviewer_id:
+            return {"ok": False, "error": "确认理由和审核人不能为空"}
+        if decision == "recommend_mdt" and (len(departments) < 2 or not purpose):
+            return {"ok": False, "error": "正式 MDT 至少需要两个科室及会诊目标"}
+        if decision == "single_specialty" and secondary:
+            return {"ok": False, "error": "单专科处理只需确认一个主责科室"}
+        if department_reviewer_map is not None and (
+                not isinstance(department_reviewer_map, dict) or any(
+                    not isinstance(v, list) or any(not isinstance(x, str) for x in v)
+                    for v in department_reviewer_map.values())):
+            return {"ok": False, "error": "科室协作者格式非法"}
+        confirmed = self.submit_triage_confirmation(
+            case_id, primary_department=departments[0], secondary_departments=departments[1:],
+            reason=reason, reviewer_id=reviewer_id)
+        if not confirmed.get("ok"):
+            return confirmed
+        result = self.submit_mdt_screening(
+            case_id, decision=decision, reason=reason, purpose=purpose,
+            departments=departments if decision == "recommend_mdt" else [],
+            reviewer_id=reviewer_id, department_reviewer_map=department_reviewer_map)
+        if result.get("ok"):
+            result["mdt_screening"]["departments_source"] = "doctor_routing"
+            self._patch_payload(case_id, mdt_screening=result["mdt_screening"])
+            result["triage_doctor_confirmation"] = confirmed["triage_doctor_confirmation"]
+        return result
+
+    def get_doctor_mdt_simulation(self, case_id: str) -> Optional[Dict[str, Any]]:
+        case = self.store.load_case(case_id)
+        if not case:
+            return None
+        view = doctor_mdt.simulation_view(case.get("payload") or {})
+        if view.get("state") == "running" and view.get("run_id") not in self._doctor_mdt_runs:
+            view.update(state="failed", message="模拟任务已中断，请重新生成。")
+        return view
+
+    @serialized_case
+    def start_doctor_mdt_simulation(self, case_id: str, *, reviewer_id: str) -> Dict[str, Any]:
+        case = self.store.load_case(case_id)
+        if not case:
+            return {"ok": False, "error": "病例不存在"}
+        payload = case.get("payload") or {}
+        screening = payload.get("mdt_screening") or {}
+        confirmed = payload.get("triage_doctor_confirmation") or {}
+        if screening.get("decision") != "recommend_mdt" or confirmed.get("status") != "confirmed":
+            return {"ok": False, "error": "请先在分流确认中确定正式 MDT 范围和目标"}
+        if set(screening.get("departments") or []) != set(confirmed.get("selected") or []):
+            return {"ok": False, "error": "请在分流确认中统一本次参与科室"}
+        current = self.get_doctor_mdt_simulation(case_id)
+        if current.get("state") == "running":
+            return {"ok": True, "simulation": current}
+        history = list(payload.get("doctor_mdt_simulation_history") or [])
+        if payload.get("doctor_mdt_simulation"):
+            history.append(payload["doctor_mdt_simulation"])
+        record = {"run_id": uuid.uuid4().hex, "state": "running", "started_at": _now(),
+                  "requested_by": reviewer_id, "departments": list(screening["departments"]),
+                  "purpose": screening["purpose"], "input_fingerprint": doctor_mdt.input_fingerprint(payload),
+                  "done": 0, "total": len(screening["departments"]), "current": "",
+                  "message": "正在生成各科独立研判"}
+        revisions = dict(payload.get("review_item_revisions") or {})
+        old_ids = [i.item_id for i in review_service.build_items(case) if i.target_type in ("ai_analysis", "consensus_item")]
+        revisions.update(review_service.bump_content_revisions(revisions, old_ids))
+        record["content_revision"] = max([1, (payload.get("doctor_mdt_simulation") or {}).get("content_revision", 1)]
+                                         + list(revisions.values())) + 1
+        if (payload.get("review") or {}).get("published"):
+            payload = self._begin_recheck(case, payload, actor=reviewer_id,
+                                         reason="重新生成医生 MDT 模拟", affected_item_ids=old_ids)
+            self._patch_payload(case_id, review=payload.get("review"),
+                                review_pending_questions=payload.get("review_pending_questions"))
+        payload["mdt_screening"] = dict(screening, departments_source="doctor_routing")
+        self._doctor_mdt_runs.add(record["run_id"])
+        self._patch_payload(case_id, mdt_screening=payload["mdt_screening"], doctor_mdt_simulation=record,
+                            doctor_mdt_simulation_history=history, review_item_revisions=revisions)
+        self.store.add_audit(case_id, "doctor_mdt_simulation_started", f"run_id={record['run_id']}")
+        thread = threading.Thread(target=self._generate_doctor_mdt_simulation,
+                                  args=(case_id, dict(payload), dict(record)), daemon=True)
+        thread.start()
+        return {"ok": True, "simulation": record}
+
+    def _generate_doctor_mdt_simulation(self, case_id, payload, record):
+        run_id = record["run_id"]
+        def progress(department, done, total):
+            with self._case_lock(case_id):
+                live = self.store.load_case(case_id)["payload"]
+                active = dict(live.get("doctor_mdt_simulation") or {})
+                if active.get("run_id") == run_id:
+                    active.update(current=department, done=done - 1, total=total,
+                                  message="正在生成 " + department + " 独立研判")
+                    self._patch_payload(case_id, doctor_mdt_simulation=active)
+        try:
+            result = self._run_mdt(
+                text=payload.get("masked_history") or "", profile=payload.get("profile"),
+                outcome=SimpleNamespace(selected=record["departments"], behavior_type="B"),
+                case_id=case_id, answers=payload.get("answers"), purpose=record["purpose"],
+                max_departments=6, on_department=progress)
+            failed = result.get("failed_departments") or []
+            available = any(a.get("status") == "ok" for a in result.get("analyses") or [])
+            state = "partial" if failed and available else "failed" if failed or not result.get("analyses") else "done"
+            record.update(state=state, result=result, done=len(record["departments"]) - len(failed),
+                          current="", message={"done": "AI 会诊模拟已生成，请核对后记录实际会诊结果。",
+                          "partial": "部分科室分析未完成，可重试或继续记录实际会诊。",
+                          "failed": "AI 模拟未完成，可重试；仍可记录实际医生会诊。"}[state])
+        except Exception:
+            logger.exception("Doctor MDT simulation failed: %s", case_id)
+            record.update(state="failed", current="", message="AI 模拟生成失败，可重试；仍可记录实际医生会诊。")
+        finally:
+            record["finished_at"] = _now()
+            with self._case_lock(case_id):
+                live = self.store.load_case(case_id)["payload"]
+                if record["input_fingerprint"] != doctor_mdt.input_fingerprint(live):
+                    record.update(state="stale", message="模拟依据已变化，请生成本次模拟。")
+                if (live.get("doctor_mdt_simulation") or {}).get("run_id") == run_id:
+                    if record["state"] in ("done", "partial") and (live.get("review") or {}).get("published"):
+                        case = self.store.load_case(case_id)
+                        self._begin_recheck(case, live, actor=record["requested_by"],
+                                            reason="医生 MDT 模拟生成新审核内容")
+                    self._patch_payload(case_id, doctor_mdt_simulation=record)
+                else:
+                    history = list(live.get("doctor_mdt_simulation_history") or [])
+                    history = [record if x.get("run_id") == run_id else x for x in history]
+                    self._patch_payload(case_id, doctor_mdt_simulation_history=history)
+                self._doctor_mdt_runs.discard(run_id)
+                self.store.add_audit(case_id, "doctor_mdt_simulation_finished", f"run_id={run_id}; state={record['state']}")
+
+    @serialized_case
     def submit_triage_confirmation(
         self, case_id: str, *, primary_department: str,
         secondary_departments: Optional[List[str]] = None, reason: str = "",
@@ -1855,6 +2099,11 @@ class CaseFlow:
             "reason": confirmation["reason"],
         }
         payload["triage_doctor_confirmation"] = confirmation
+        if previous_confirmation.get("status") == "confirmed" and (
+                previous_confirmation.get("primary_department") != primary
+                or set(previous_confirmation.get("secondary_departments") or []) != set(secondary)):
+            payload.pop("mdt_screening", None)
+            payload.pop("mdt_formal_record", None)
         old_items = review_service.build_items(case)
         current_state = str(case.get("case_state") or "")
         if confirmation_changed and (
@@ -1934,8 +2183,10 @@ class CaseFlow:
             else:
                 return {"ok": False, "error": "正式 MDT 状态不能回退"}
         elif previous_status == "planned":
-            if status not in ("planned", "in_progress"):
-                return {"ok": False, "error": "正式 MDT 状态必须按待开始→进行中→已完成推进"}
+            # A lead can record an already completed meeting directly from its plan.
+            # Completion still requires an explicit completed status and conclusion.
+            if status not in ("planned", "in_progress", "completed"):
+                return {"ok": False, "error": "正式 MDT 状态非法"}
         elif previous_status == "in_progress":
             if status not in ("in_progress", "completed"):
                 return {"ok": False, "error": "正式 MDT 状态不能回退"}
@@ -1953,6 +2204,8 @@ class CaseFlow:
             "updated_at": _now(),
             "source": "doctor_recorded",
         }
+        if screening.get("departments_source") == "doctor_routing":
+            record["input_fingerprint"] = doctor_mdt.input_fingerprint(payload)
         if reopen_reason:
             record["reopen_reason"] = reopen_reason
         record_changed = {
@@ -1984,7 +2237,7 @@ class CaseFlow:
         affected_formal_items = [
             item_id for item_id in review_service.affected_item_ids(
                 old_items, old_items, update_content=formal_update_text)
-            if item_id.startswith("consensus_item:")
+            if item_id.startswith(("ai_analysis:", "consensus_item:"))
         ]
         if record_changed and not affected_formal_items:
             # Formal MDT fields are part of the published medical conclusion,
@@ -1995,7 +2248,7 @@ class CaseFlow:
             affected_formal_items = [
                 item_id for item_id in review_service.affected_item_ids(
                     old_items, old_items, screened_departments)
-                if item_id.startswith("consensus_item:")
+                if item_id.startswith(("ai_analysis:", "consensus_item:"))
             ]
         if record_changed and (
                 current_state in ("doctor_confirmed", "awaiting_recheck")
@@ -2035,7 +2288,13 @@ class CaseFlow:
             return None
         payload = dict(case.get("payload") or {})
         # 医生审核记录（若已有）用于"医生最终意见 / AI vs 医生差异"段
-        payload["decisions"] = self.store.list_decisions(case_id) if self.store else []
+        current_items = review_service.build_items(case)
+        payload["decisions"] = review_service.current_decisions(
+            current_items, self.store.list_decisions(case_id) if self.store else [])
+        payload["disagreement_decisions"] = review_service.current_disagreement_decisions(
+            current_items, payload.get("disagreement_decisions") or [])
+        if (payload.get("review") or {}).get("published") and (payload.get("mdt_screening") or {}).get("departments_source") == "doctor_routing":
+            payload["mdt"] = doctor_mdt.review_analysis(payload)
         merged = dict(case)
         merged["payload"] = payload
         reports = report_service.build_both(merged)
@@ -2428,6 +2687,7 @@ class CaseFlow:
         ("low_reliability", "可靠性低"),
         ("recheck", "待复核"),
         ("exempt", "含免审条目"),
+        ("published", "已发布"),
     )
     QUEUE_SORTS = (
         ("risk", "风险优先"),
@@ -2497,7 +2757,7 @@ class CaseFlow:
             primary = triage.get("primary") or {}
             profile = payload.get("profile") or {}
             analysis_state = self._effective_analysis_state(payload)
-            aggregation = (payload.get("mdt") or {}).get("aggregation") or {}
+            aggregation = doctor_mdt.review_mdt(payload).get("aggregation") or {}
             conflict_count = len(aggregation.get("disagreements") or [])
             conflict_count += len(triage.get("conflicts") or [])
             disagreement_map = review_service.latest_disagreement_decisions(
@@ -2591,10 +2851,15 @@ class CaseFlow:
         }
         # 筛选计数使用当前状态/科室范围，但不受当前 filter_kind 影响，
         # 这样左轨可以告诉医生切换筛选后预计有多少病例，而不会把计数显示成误导性的 0。
+        # “待我处理”只统计尚未发布的病例：已发布报告若有新资料会转为待复核，不再留在待办里。
+        def needs_doctor(r: Dict[str, Any]) -> bool:
+            return r.get("case_state") != "doctor_confirmed" and (
+                r["pending_items"] > 0 or r.get("pending_disagreements", 0) > 0)
+
         filter_counts = {
             "all": len(rows),
-            "doctor_pending": sum(1 for r in rows
-                                   if r["pending_items"] > 0 or r.get("pending_disagreements", 0) > 0),
+            "doctor_pending": sum(1 for r in rows if needs_doctor(r)),
+            "published": sum(1 for r in rows if r.get("case_state") == "doctor_confirmed"),
             "conflict": sum(1 for r in rows if r["conflict_count"] > 0),
             "gaps": sum(1 for r in rows if r["gap_count"] > 0),
             "analysis_failed": sum(1 for r in rows if r["analysis_state"] in ("failed", "partial_failed")),
@@ -2603,8 +2868,9 @@ class CaseFlow:
             "exempt": sum(1 for r in rows if r["exempt_items"] > 0),
         }
         if filter_kind == "doctor_pending":
-            rows = [r for r in rows
-                    if r["pending_items"] > 0 or r.get("pending_disagreements", 0) > 0]
+            rows = [r for r in rows if needs_doctor(r)]
+        elif filter_kind == "published":
+            rows = [r for r in rows if r.get("case_state") == "doctor_confirmed"]
         elif filter_kind == "conflict":
             rows = [r for r in rows if r["conflict_count"] > 0]
         elif filter_kind == "gaps":
@@ -2648,6 +2914,38 @@ class CaseFlow:
             "review_summary": review_summary,
         }
 
+    @staticmethod
+    def _publication_blockers(case, summary, pending_disagreements, *, accept_all=False):
+        """医生界面和发布接口共用的待办；最终建议由发布输入另行校验。"""
+        payload = case.get("payload") or {}
+        if case.get("case_state") == "doctor_confirmed" and (payload.get("review") or {}).get("published"):
+            return []
+        blockers = []
+        def add(code, message, screen):
+            blockers.append({"code": code, "message": message, "screen": screen})
+        if case.get("case_state") not in ("awaiting_doctor", "doctor_reviewed", "awaiting_recheck"):
+            add("case_state", "当前病例尚未进入可发布状态，请先核对病例状态和资料", "overview")
+        if (payload.get("triage") or {}).get("primary"):
+            if (payload.get("triage_doctor_confirmation") or {}).get("status") != "confirmed":
+                add("triage", "请先确认主责科室与协同方向", "triage")
+            if (payload.get("mdt_screening") or {}).get("status") != "decided":
+                add("mdt_screening", "请在分流确认中保存处理方向", "triage")
+        if (payload.get("mdt_screening") or {}).get("decision") == "recommend_mdt" and (
+                payload.get("mdt_formal_record") or {}).get("status") != "completed":
+            add("mdt_record", "正式 MDT 尚未完成，请填写并保存会诊结论", "mdt")
+        formal = payload.get("mdt_formal_record") or {}
+        if formal.get("input_fingerprint") and formal["input_fingerprint"] != doctor_mdt.input_fingerprint(payload):
+            add("mdt_record", "会诊依据已变化，请核对并重新确认正式会诊结论", "mdt")
+        if pending_disagreements:
+            add("disagreements", f"还有 {len(pending_disagreements)} 条分歧未记录医生处理结果", "mdt")
+        if not summary.get("total"):
+            add("no_items", "尚无可审核条目，请先完成病例分析", "overview")
+        if summary.get("pending") and not accept_all:
+            add("required_items", f"还有 {summary['pending']} 条必审条目未处理", "review")
+        if accept_all and summary.get("batch_blocked_pending"):
+            add("batch_items", f"还有 {summary['batch_blocked_pending']} 条高风险、冲突或关键安排需要逐条处理，不能批量接受", "review")
+        return blockers
+
     def get_review(self, case_id: str) -> Optional[Dict[str, Any]]:
         """屏 B-F 数据：决策条目 + 审核进度 + 是否可发布 + 线下意见。"""
         case = self.store.load_case(case_id) if self.store else None
@@ -2662,12 +2960,13 @@ class CaseFlow:
         item_changes = payload.get("review_item_changes") or {}
         summary["stale_decisions"] = len(stale)
         summary["reopened_items"] = len(item_changes.get("reopened_item_ids") or [])
-        disagreement_decisions = review_service.latest_disagreement_decisions(
-            payload.get("disagreement_decisions") or [])
+        current_disagreements = review_service.current_disagreement_decisions(
+            raw_items, payload.get("disagreement_decisions") or [])
+        disagreement_decisions = review_service.latest_disagreement_decisions(current_disagreements)
         current_items = {item.item_id: item for item in items}
         disagreements = report_service.disagreements_for_report(
-            ((payload.get("mdt") or {}).get("aggregation") or {}).get("disagreements") or [],
-            payload.get("disagreement_decisions") or [])
+            (doctor_mdt.review_mdt(payload).get("aggregation") or {}).get("disagreements") or [],
+            current_disagreements)
         pending_disagreements = [
             item.get("分歧编号") for item in disagreements
             if item.get("分歧编号") not in disagreement_decisions
@@ -2690,16 +2989,26 @@ class CaseFlow:
         summary["disagreements_unresolved"] = sum(
             1 for record in disagreement_decisions.values()
             if record.get("status") in ("unresolved_with_followup", "need_more_info"))
+        formal = dict(payload.get("mdt_formal_record") or {})
+        if formal.get("input_fingerprint") and formal["input_fingerprint"] != doctor_mdt.input_fingerprint(payload):
+            formal.update(needs_reconfirmation=True, status_label="依据已变化，需重新确认")
         return {
             "case_id": case_id,
             "case_state": case.get("case_state"),
             "case_state_label": CASE_STATE_LABELS.get(str(case.get("case_state")), case.get("case_state")),
             "mdt_screening": payload.get("mdt_screening") or None,
             "triage_doctor_confirmation": payload.get("triage_doctor_confirmation") or None,
-            "mdt_formal_record": payload.get("mdt_formal_record") or None,
+            "mdt_formal_record": formal or None,
+            "department_options": list(department_domain.ALL_NAMES),
+            "primary_department_options": list(department_domain.PRIMARY_ELIGIBLE_NAMES),
+            "doctor_mdt_simulation": self.get_doctor_mdt_simulation(case_id),
+            "mdt_disagreements": disagreements,
             "mdt_preparation_packet": report_service.build_mdt_preparation_packet(case),
             "items": [i.to_dict() for i in items],
             "summary": summary,
+            "publication_blockers": self._publication_blockers(case, summary, pending_disagreements),
+            "batch_publication_blockers": self._publication_blockers(
+                case, summary, pending_disagreements, accept_all=True),
             "pending_questions": review_service.pending_questions(items),
             "decisions": decisions,
             "review": payload.get("review") or {},
@@ -2716,7 +3025,9 @@ class CaseFlow:
     @serialized_case
     def submit_decision(self, case_id: str, item_id: str, action: str, *,
                         after: str = "", reason: str = "",
-                        reviewer_name: str = "模拟审核员", reviewer_dept: str = "") -> Dict[str, Any]:
+                        reviewer_name: str = "模拟审核员", reviewer_dept: str = "",
+                        expected_content_revision: Optional[int] = None,
+                        require_content_revision: bool = False) -> Dict[str, Any]:
         """逐条审核（屏 F）：接受 / 修改 / 驳回 / 暂不确定 / 请求补资料。"""
         case = self.store.load_case(case_id) if self.store else None
         if not case:
@@ -2739,6 +3050,11 @@ class CaseFlow:
         items = review_service.build_items(case)
         try:
             item = review_service.find_item(items, item_id)
+            needs_revision = require_content_revision and ((case.get("payload") or {}).get("mdt_screening") or {}).get("departments_source") == "doctor_routing"
+            if ((needs_revision and expected_content_revision is None)
+                    or (expected_content_revision is not None and expected_content_revision != item.content_revision)):
+                return {"ok": False, "code": "content_revision_changed",
+                        "error": "审核内容已变化，当前决定未保存。请重新加载病例并核对后再提交。"}
             decisions = self.store.list_decisions(case_id) if self.store else []
             decision = review_service.make_decision(
                 case_id=case_id, item=item, action=action, after=safe_after, reason=safe_reason,
@@ -2783,7 +3099,8 @@ class CaseFlow:
     def submit_disagreement_decision(
         self, case_id: str, disagreement_id: str, status: str, *, choice: str = "",
         resolution: str = "", reason: str = "", next_step: str = "",
-        reviewer_name: str = "模拟审核员", reviewer_dept: str = ""
+        reviewer_name: str = "模拟审核员", reviewer_dept: str = "",
+        expected_content_revision: Optional[int] = None, require_content_revision: bool = False
     ) -> Dict[str, Any]:
         """记录牵头医生对某条 MDT 分歧的独立处理决定。"""
         case = self.store.load_case(case_id) if self.store else None
@@ -2791,7 +3108,7 @@ class CaseFlow:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
 
         payload = dict(case.get("payload") or {})
-        disagreements = (((payload.get("mdt") or {}).get("aggregation") or {})
+        disagreements = ((doctor_mdt.review_mdt(payload).get("aggregation") or {})
                          .get("disagreements") or [])
         safe_id = str(disagreement_id or "").strip().upper()
         if safe_id.isdigit():
@@ -2821,6 +3138,11 @@ class CaseFlow:
                  if item.item_id == f"consensus_item:X-{index:02d}"),
                 None,
             )
+            needs_revision = require_content_revision and (payload.get("mdt_screening") or {}).get("departments_source") == "doctor_routing"
+            if ((needs_revision and expected_content_revision is None)
+                    or (expected_content_revision is not None and expected_content_revision != (current_item.content_revision if current_item else 1))):
+                return {"ok": False, "code": "content_revision_changed",
+                        "error": "分歧内容已变化，当前处理未保存。请重新加载病例并核对后再提交。"}
             record = review_service.make_disagreement_decision(
                 disagreement_id=f"X-{index:02d}", topic=topic, status=status,
                 choice=safe_choice, reason=safe_reason, next_step=safe_next_step,
@@ -2852,9 +3174,48 @@ class CaseFlow:
             "pending_disagreements": review.get("pending_disagreements") or [],
         }
 
+    def _publication_preview_revision(self, case, final_advice, reviewer_name):
+        content = {"case": case, "decisions": self.store.list_decisions(case["case_id"]),
+                   "final_advice": final_advice, "reviewer": reviewer_name}
+        return hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+    @serialized_case
+    def preview_publication(self, case_id: str, *, final_advice: str, reviewer_name: str) -> Dict[str, Any]:
+        """只读生成即将发布的患者报告；不落版本、不改变病例状态。"""
+        case = self.store.load_case(case_id) if self.store else None
+        if not case:
+            return {"ok": False, "error": "病例不存在"}
+        try:
+            advice = update_service.sanitize_update_content(final_advice, field_name="医生最终建议")
+            reviewer = update_service.sanitize_optional_content(reviewer_name, field_name="审核人") or "模拟审核员"
+            if len(advice) > 4000:
+                return {"ok": False, "error": "医生最终建议过长（最多 4000 个字符）"}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        review = self.get_review(case_id)
+        if review["publication_blockers"]:
+            return {"ok": False, "error": "请先完成审核及会诊流程再预览发布结果",
+                    "publication_blockers": review["publication_blockers"]}
+        if review["published"] and case.get("case_state") == "doctor_confirmed":
+            return {"ok": False, "error": "此报告已发布，请在历史记录查看"}
+        payload = dict(case.get("payload") or {})
+        items = review_service.build_items(case)
+        payload["decisions"] = review_service.current_decisions(items, self.store.list_decisions(case_id))
+        payload["disagreement_decisions"] = review_service.current_disagreement_decisions(
+            items, payload.get("disagreement_decisions") or [])
+        payload["review_pending_questions"] = review_service.pending_questions(
+            review_service.apply_decisions(items, payload["decisions"]))
+        version = int(case.get("report_version") or 1) + 1
+        payload["review"] = {"published": True, "final_advice": advice,
+                             "published_by": reviewer, "published_at": "发布时记录", "version": version}
+        preview_case = dict(case, payload=payload, case_state="doctor_confirmed", report_version=version)
+        return {"ok": True, "reports": report_service.build_both(preview_case),
+                "preview_revision": self._publication_preview_revision(case, advice, reviewer)}
+
     @serialized_case
     def publish_review(self, case_id: str, *, reviewer_name: str = "模拟审核员",
-                       accept_all: bool = False) -> Dict[str, Any]:
+                       accept_all: bool = False, final_advice: Optional[str] = None,
+                       expected_preview_revision: Optional[str] = None) -> Dict[str, Any]:
         """发布审核版报告（屏 F 底部）：状态 → doctor_confirmed、版本 +1、角标转绿。
 
         规则（写死）：
@@ -2875,6 +3236,17 @@ class CaseFlow:
             return {"ok": False, "error": str(exc)}
 
         current_review = case.get("payload", {}).get("review") or {}
+        safe_advice = ""
+        if final_advice is not None:
+            try:
+                safe_advice = update_service.sanitize_update_content(final_advice, field_name="医生最终建议")
+                if len(safe_advice) > 4000:
+                    return {"ok": False, "error": "医生最终建议过长（最多 4000 个字符）"}
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+        if expected_preview_revision is not None and expected_preview_revision != self._publication_preview_revision(case, safe_advice, safe_reviewer):
+            return {"ok": False, "error": "病例、审核结果或最终建议已变化，请重新预览后发布"}
+
         if bool(current_review.get("published")) and str(case.get("case_state") or "") == "doctor_confirmed":
             version = int(case.get("report_version") or current_review.get("version") or 1)
             return {
@@ -2889,6 +3261,14 @@ class CaseFlow:
             "awaiting_doctor", "doctor_reviewed", "awaiting_recheck"
         ):
             return {"ok": False, "error": "当前审核轮次尚未进入可发布状态"}
+
+        # HTTP 发布必须带最终建议并完整走医生流程；保留旧内部调用兼容。
+        if final_advice is not None:
+            review = self.get_review(case_id)
+            blockers = review["batch_publication_blockers" if accept_all else "publication_blockers"]
+            if blockers:
+                return {"ok": False, "error": "；".join(item["message"] for item in blockers),
+                        "publication_blockers": blockers}
 
         items = review_service.apply_decisions(
             review_service.build_items(case),
@@ -2944,9 +3324,10 @@ class CaseFlow:
         if (screening.get("decision") == "recommend_mdt"
                 and formal_record.get("status") != "completed"):
             return {"ok": False, "error": "正式 MDT 尚未完成记录，不能发布审核版"}
-        disagreements = (((payload.get("mdt") or {}).get("aggregation") or {})
+        disagreements = ((doctor_mdt.review_mdt(payload).get("aggregation") or {})
                          .get("disagreements") or [])
-        disagreement_records = list(payload.get("disagreement_decisions") or [])
+        disagreement_records = review_service.current_disagreement_decisions(
+            items, payload.get("disagreement_decisions") or [])
         disagreement_map = review_service.latest_disagreement_decisions(disagreement_records)
         current_items = {item.item_id: item for item in items}
         pending_disagreements = [
@@ -2983,6 +3364,7 @@ class CaseFlow:
             "published": True,
             "published_by": safe_reviewer,
             "published_at": published_at,
+            "final_advice": safe_advice,
             "version": new_version,
             "counts": summary["by_state"],
             "human_touched": summary["human_touched"],
@@ -2995,11 +3377,15 @@ class CaseFlow:
         payload["review_pending_questions"] = review_service.pending_questions(items)
         # 报告生成使用当前审核决定，但决定本身继续保存在 decisions 表中。
         snapshot_payload = dict(payload)
-        snapshot_payload["decisions"] = self.store.list_decisions(case_id) if self.store else []
+        snapshot_payload["decisions"] = review_service.current_decisions(
+            items, self.store.list_decisions(case_id) if self.store else [])
+        snapshot_payload["disagreement_decisions"] = disagreement_records
         snapshot_case = dict(case)
         snapshot_case["case_state"] = "doctor_confirmed"
         snapshot_case["report_version"] = new_version
         snapshot_case["payload"] = snapshot_payload
+        if screening.get("departments_source") == "doctor_routing":
+            snapshot_payload["mdt"] = doctor_mdt.review_analysis(payload)
         reports = report_service.build_both(snapshot_case)
         snapshot = {
             "case_id": case_id,
@@ -3007,7 +3393,9 @@ class CaseFlow:
             "published_by": safe_reviewer,
             "published_at": published_at,
             "review_summary": summary,
-            "report_json": {"summary": reports["summary"], "full": reports["full"]},
+            "report_json": {"summary": reports["summary"], "full": reports["full"],
+                            "patient_final_report": reports.get("patient_final_report"),
+                            "doctor_result": reports["doctor_result"]},
             "summary_markdown": reports["summary_markdown"],
             "full_markdown": reports["full_markdown"],
         }

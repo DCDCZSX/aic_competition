@@ -494,6 +494,17 @@ def delete_patient_image(upload_id):
     return jsonify({'ok': True})
 
 
+@app.route('/api/v2/patient/uploads', methods=['DELETE'])
+def clear_patient_images():
+    """新增病历时清空当前患者的暂存图片，刷新页面时仍使用 GET 恢复。"""
+    session, error = _guard('intake')
+    if error:
+        return error
+    for item in patient_uploads.list_owned(session.username):
+        patient_uploads.delete(session.username, item['upload_id'])
+    return jsonify({'ok': True})
+
+
 @app.route('/api/v2/patient/uploads/<upload_id>/file', methods=['GET'])
 def read_patient_image(upload_id):
     session, error = _guard('intake')
@@ -830,6 +841,8 @@ def get_case(case_id):
         safe_payload.pop('triage_doctor_confirmation', None)
         # 正式 MDT 记录属于医生协作和审核范围，患者端只通过患者安全摘要获取下一步。
         safe_payload.pop('mdt_formal_record', None)
+        safe_payload.pop('doctor_mdt_simulation', None)
+        safe_payload.pop('doctor_mdt_simulation_history', None)
         safe_case['payload'] = safe_payload
         case = safe_case
     case_role = None
@@ -1029,6 +1042,51 @@ def submit_mdt_screening(case_id):
     if not result.get('ok'):
         result.setdefault('code', 'invalid_request')
     return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/doctor-routing', methods=['POST'])
+def submit_doctor_routing(case_id):
+    session, error = _guard_doctor_case(case_id, 'decision', ('primary', 'coordinator'))
+    if error:
+        return error
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        primary = string_field(data, 'primary_department', default='', max_length=120)
+        secondary = string_list(data, 'secondary_departments', default=(), max_items=5)
+        decision = string_field(data, 'decision', default='', max_length=64)
+        reason = string_field(data, 'reason', default='', max_length=2000)
+        purpose = string_field(data, 'purpose', default='', max_length=2000)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    reviewer_map = {}
+    if decision == 'recommend_mdt':
+        for department in [primary] + secondary:
+            name = department_domain.resolve(department).name
+            code = department_domain.to_code(name or '')
+            reviewer_map[name or department] = [item['username'] for item in
+                auth_service.list_reviewer_accounts(code or '')]
+    result = case_flow.submit_doctor_routing(
+        case_id, primary_department=primary, secondary_departments=secondary,
+        decision=decision, reason=reason, purpose=purpose, reviewer_id=session.username,
+        department_reviewer_map=reviewer_map)
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/doctor-mdt-simulation', methods=['GET', 'POST'])
+def doctor_mdt_simulation(case_id):
+    roles = ('primary', 'coordinator') if request.method == 'POST' else None
+    if request.method == 'POST':
+        session, error = _guard_doctor_case(case_id, 'decision', roles)
+    else:
+        session, error = _guard_doctor_case(case_id)
+    if error:
+        return error
+    if request.method == 'POST':
+        result = case_flow.start_doctor_mdt_simulation(case_id, reviewer_id=session.username)
+        return jsonify(result), (200 if result.get('ok') else 400)
+    return jsonify({'ok': True, 'simulation': case_flow.get_doctor_mdt_simulation(case_id)})
 
 
 @app.route('/api/v2/case/<case_id>/triage-confirmation', methods=['POST'])
@@ -1252,6 +1310,7 @@ def submit_decision(case_id):
         reason = string_field(data, 'reason', default='', max_length=2000)
         reviewer = string_field(data, 'reviewer', default='', max_length=128)
         reviewer_dept = string_field(data, 'reviewer_dept', default='', max_length=120)
+        expected_revision = optional_int(data, 'expected_content_revision')
     except InputValidationError as exc:
         return _invalid_input(exc)
     result = case_flow.submit_decision(
@@ -1262,6 +1321,8 @@ def submit_decision(case_id):
         reason=reason,
         reviewer_name=reviewer or (session.label if session else '模拟审核员'),
         reviewer_dept=reviewer_dept,
+        expected_content_revision=expected_revision,
+        require_content_revision=True,
     )
     return jsonify(result), (200 if result.get('ok') else 400)
 
@@ -1285,6 +1346,7 @@ def submit_disagreement_decision(case_id):
         next_step = string_field(data, 'next_step', default='', max_length=2000)
         reviewer = string_field(data, 'reviewer', default='', max_length=128)
         reviewer_dept = string_field(data, 'reviewer_dept', default='', max_length=120)
+        expected_revision = optional_int(data, 'expected_content_revision')
     except InputValidationError as exc:
         return _invalid_input(exc)
     result = case_flow.submit_disagreement_decision(
@@ -1292,14 +1354,32 @@ def submit_disagreement_decision(case_id):
         reason=reason, next_step=next_step,
         reviewer_name=reviewer or (session.label if session else '模拟审核员'),
         reviewer_dept=reviewer_dept,
+        expected_content_revision=expected_revision,
+        require_content_revision=True,
     )
+    return jsonify(result), (200 if result.get('ok') else 400)
+
+
+@app.route('/api/v2/case/<case_id>/publication-preview', methods=['POST'])
+def preview_publication(case_id):
+    session, error = _guard_doctor_case(case_id, 'report:confirm', required_case_role={'primary', 'coordinator'})
+    if error:
+        return error
+    data, error = _json_object()
+    if error:
+        return error
+    try:
+        advice = string_field(data, 'final_advice', required=True, max_length=4000)
+    except InputValidationError as exc:
+        return _invalid_input(exc)
+    result = case_flow.preview_publication(case_id, final_advice=advice, reviewer_name=session.label)
     return jsonify(result), (200 if result.get('ok') else 400)
 
 
 @app.route('/api/v2/case/<case_id>/publish', methods=['POST'])
 def publish_review(case_id):
     """屏 F 底部：发布审核版报告（状态→doctor_confirmed、版本+1、角标转绿）。"""
-    session, error = _guard_doctor_case(case_id, 'report:confirm')
+    session, error = _guard_doctor_case(case_id, 'report:confirm', required_case_role={'primary', 'coordinator'})
     if error:
         return error
     data, error = _json_object()
@@ -1307,12 +1387,16 @@ def publish_review(case_id):
         return error
     try:
         reviewer = string_field(data, 'reviewer', default='', max_length=128)
+        preview_revision = string_field(data, 'preview_revision', default='', max_length=64)
+        final_advice = string_field(data, 'final_advice', required=True, max_length=4000)
     except InputValidationError as exc:
         return _invalid_input(exc)
     result = case_flow.publish_review(
         case_id,
-        reviewer_name=reviewer or (session.label if session else '模拟审核员'),
+        reviewer_name=session.label if preview_revision else reviewer or session.label,
         accept_all=data.get('accept_all') is True,
+        final_advice=final_advice,
+        expected_preview_revision=preview_revision or None,
     )
     return jsonify(result), (200 if result.get('ok') else 400)
 
@@ -1341,6 +1425,20 @@ def get_case_audit(case_id):
         return jsonify({'error': f'病例不存在：{case_id}'}), 404
     return jsonify(data)
 
+
+@app.route('/api/v2/case/<case_id>/versions/<int:version>/patient-report', methods=['GET'])
+def get_patient_report_version(case_id, version):
+    """患者读取自己的已发布报告快照，不能用当前病例重建旧版本。"""
+    session, _case, error = _guard_case(case_id)
+    if error:
+        return error
+    if not session or session.role != ROLE_PATIENT:
+        return jsonify({'error': '当前角色无权访问患者历史报告'}), 403
+    data = case_flow.get_patient_report_version(case_id, version, session.username)
+    if data is None:
+        return jsonify({'error': '该报告版本未保存或无法访问，请返回历史记录查看其他版本'}), 404
+    return jsonify(data)
+
 if __name__ == '__main__':
     # Windows 中文控制台默认 GBK，emoji 会导致 UnicodeEncodeError 直接崩溃；
     # 统一把标准输出切到 UTF-8（失败则忽略，不影响服务）。
@@ -1356,7 +1454,7 @@ if __name__ == '__main__':
     debug = os.getenv('APP_DEBUG', 'false').strip().lower() in ('1', 'true', 'yes')
 
     print("=" * 60)
-    print("[启动] 多学科就医智助系统")
+    print("[启动] 医序｜多学科就医信息协作平台")
     print(f"[首页] http://{host}:{port}/")
     print(f"[患者端] http://{host}:{port}/patient")
     print(f"[医生端] http://{host}:{port}/doctor")
