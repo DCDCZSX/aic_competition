@@ -55,8 +55,8 @@ class FrontendStructureTest(unittest.TestCase):
         status, html = self.get("/")
         self.assertEqual(status, 200)
         self.assertIn('id="homeHero"', html)
-        self.assertNotIn('<title>多学科就医智助系统 · 患者端</title>', html)
-        self.assertNotIn('<title>多学科就医智助系统 · 医生工作台</title>', html)
+        self.assertNotIn('<title>医序 · 患者端</title>', html)
+        self.assertNotIn('<title>医序 · 医生工作台</title>', html)
 
     def test_home_does_not_duplicate_account_login(self):
         """主页只负责角色选择，账号和密码输入应放在对应角色页。"""
@@ -67,13 +67,20 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertNotIn('id="login-pass"', html)
         self.assertNotIn('fillAccount(', html)
 
-    def test_home_uses_value_canvas_instead_of_workflow_graph(self):
-        """首页视觉中心表达产品价值，不再展示顺序流程图。"""
+    def test_home_uses_brand_image_and_moves_explanation_below_hero(self):
+        """首屏插画可加载，原三步说明位于下方产品区。"""
         _, html = self.get("/")
-        self.assertIn('class="evidence-canvas"', html)
-        self.assertIn('资料已整理', html)
-        self.assertIn('缺口已标记', html)
-        self.assertIn('需要医生确认', html)
+        hero = re.search(r'<section[^>]*id="homeHero"[^>]*>(.*?)</section>', html, re.S).group(1)
+        flow = re.search(r'<section[^>]*id="flow"[^>]*>(.*?)</section>', html, re.S).group(1)
+        image = re.search(r'<img[^>]*src="([^"]+)"[^>]*alt="([^"]+)"', hero)
+        self.assertIsNotNone(image, "首页首屏应展示带说明的品牌图片")
+        asset = self.client.get(image.group(1))
+        self.assertEqual(asset.status_code, 200)
+        self.assertTrue(asset.content_type.startswith("image/"))
+        asset.close()
+        for label in ('资料已整理', '缺口已标记', '需要医生确认'):
+            self.assertIn(label, flow)
+            self.assertNotIn(label, hero)
         self.assertNotIn('class="workflow-preview"', html)
         self.assertNotIn('role="img"', html)
 
@@ -205,10 +212,8 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('id="patient-ctx-case"', html)
         self.assertIn('id="patient-badge"', html)
         context_css = html[html.index('.patient-case-context{'):html.index('}', html.index('.patient-case-context{'))]
-        self.assertIn('position:sticky', context_css)
-        self.assertIn('@media (min-width:1001px)', html)
-        self.assertIn('.patient-shell .rail-left{position:fixed', html)
-        self.assertIn('.patient-shell.has-case-context .rail-left', html)
+        self.assertNotIn('position:fixed', context_css)
+        self.assertIn('.patient-case-context[hidden]{display:none;}', html)
 
     def test_patient_has_sibling_new_case_entry_and_resets_old_case_state(self):
         _, html = self.get("/patient")
@@ -221,7 +226,7 @@ class FrontendStructureTest(unittest.TestCase):
         _, html = self.get("/patient")
         for token in (
             "recordPageSize", "page_size=", "patient-record-pager", "上一页", "下一页",
-            "病例 #", "/patient-record", "我提交的病情资料",
+            "病例 #", "/patient-record", "首次提交病情资料", "查看此版本",
         ):
             self.assertIn(token, html, f"患者病历中心缺少 {token}")
 
@@ -232,7 +237,7 @@ class FrontendStructureTest(unittest.TestCase):
         """
         _, html = self.get("/patient")
         ids = self.sections_of(html, "main")
-        expected = {"s-stage1", "s-stage2", "s-stage3", "s-stage4", "s-update", "s-changes", "s-done"}
+        expected = {"s-stage1", "s-stage2", "s-stage3", "s-stage4", "s-done"}
         self.assertTrue(expected.issubset(set(ids)), f"main 内缺少屏：{expected - set(ids)}")
         self.assertEqual(
             {x for x in ids if x.startswith("s-stage")},
@@ -316,12 +321,15 @@ class FrontendStructureTest(unittest.TestCase):
         stage2_start = html.index('id="s-stage2"')
         stage3_start = html.index('id="s-stage3"')
         stage2 = html[stage2_start:stage3_start]
-        self.assertIn('补充关键问题（最多 3 个，可留空）', stage2)
+        self.assertIn('补充关键问题', stage2)
+        self.assertNotIn('最多 3 个，可留空', stage2)
         self.assertIn('id="ask-body"', stage2)
         self.assertIn('#ask-body{display:grid;gap:var(--sp-16);grid-template-columns:1fr;', html)
         self.assertNotIn('setAns(', html)
         self.assertNotIn('class="chips"', stage2)
-        self.assertIn('placeholder="可填写，不清楚可留空"', html)
+        self.assertNotIn('为什么问：', html)
+        self.assertNotIn('影响判断：', html)
+        self.assertIn('placeholder="请填写补充信息"', html)
 
     def test_patient_profile_hides_stale_goal_selection_warning(self):
         """移除预设目标后，不应再向患者提示未选择就医目标。"""
@@ -386,7 +394,8 @@ class FrontendStructureTest(unittest.TestCase):
         _, html = self.get("/doctor")
         self.assertIn('id="list-pager"', html)
         self.assertIn('id="f-sort"', html)
-        self.assertIn('id="f-page-size"', html)
+        self.assertNotIn('id="f-page-size"', html)
+        self.assertNotIn('id="f-state"', html)
         self.assertIn("offset", html)
         self.assertIn("has_more", html)
 
@@ -433,14 +442,13 @@ class FrontendStructureTest(unittest.TestCase):
         for token in ("content_revision", "stale_decisions", "reopened_item_ids",
                       "reopened_item_labels"):
             self.assertIn(token, doctor, f"医生端缺少修订追踪字段：{token}")
-        for token in ("affected_item_ids", "reopened_item_ids", "affected_departments",
-                      "reopened_item_labels",
-                      "unaffected_departments"):
-            self.assertIn(token, patient, f"患者端变化摘要缺少增量更新字段：{token}")
+        for token in ("patientCaseStatus", "report_version", "published_at", "/versions",
+                      "已保存的患者版报告"):
+            self.assertIn(token, patient, f"患者端版本记录缺少字段：{token}")
 
     # ------------------------------------------------------------------ 4. 合规
-    def test_login_pages_are_focused_single_column(self):
-        """登录页保持单列聚焦，只保留表单和跨角色入口。"""
+    def test_login_pages_keep_home_and_role_navigation(self):
+        """两端登录页保留直接登录、返回首页和跨角色入口。"""
         for path, other in (("/patient", "doctor"), ("/doctor", "patient")):
             with self.subTest(path=path):
                 _, html = self.get(path)
@@ -452,7 +460,7 @@ class FrontendStructureTest(unittest.TestCase):
                 self.assertIn('class="auth-topbar"', html)
                 self.assertIn('class="auth-topbar-brand"', html)
                 self.assertIn('class="auth-home-link"', html)
-                self.assertIn('>返回主页</a>', html)
+                self.assertIn('>返回主页</span>', html)
                 self.assertIn(f'href="/{other}"', html)
                 self.assertNotIn('class="auth-side"', html)
                 self.assertNotIn('class="auth-foot"', html)
@@ -589,6 +597,7 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('summary-card', html)
         self.assertIn('summary-hero', html)
         self.assertNotIn("html += `<div class=\"banner warn\" style=\"margin-top:var(--sp-20);\">${esc(rep.disclaimer", html)
+        self.assertNotIn('本系统为就医信息整理与决策辅助工具', html)
 
     # ------------------------------------------------- 完整报告的逐段折叠
     def test_full_report_is_collapsible(self):
@@ -657,9 +666,9 @@ class FrontendStructureTest(unittest.TestCase):
 
     def test_patient_stage_labels_and_report_status_copy(self):
         _, html = self.get("/patient")
-        for label in ("填写情况", "核对资料", "查看建议", "生成就医摘要"):
+        for label in ("填写情况", "核对资料", "查看建议", "查看医生结果"):
             self.assertIn(label, html)
-        self.assertIn("['stage4','生成就医摘要']", html)
+        self.assertIn("['stage4','查看医生结果']", html)
         self.assertIn("AI 就诊准备摘要", html)
         self.assertIn("医生审核版报告", html)
         self.assertNotIn("AI 生成，尚未经医生审核", html)
@@ -668,8 +677,8 @@ class FrontendStructureTest(unittest.TestCase):
     def test_patient_report_keeps_fourth_process_step_and_print_has_clinical_layout(self):
         _, html = self.get("/patient")
         _, css = self.get("/static/css/dsh.css")
-        self.assertIn("const STEPS = [['stage1','填写情况'],['stage2','核对资料'],['stage3','查看建议'],['stage4','生成就医摘要']];", html)
-        self.assertIn("阶段 4：生成就医摘要", html)
+        self.assertIn("const STEPS = [['stage1','填写情况'],['stage2','核对资料'],['stage3','查看建议'],['stage4','查看医生结果']];", html)
+        self.assertIn("阶段 4：查看医生结果", html)
         for token in ("print-case-id", "print-step-index"):
             self.assertIn(token, html)
         self.assertIn("@page{size:A4 portrait", css)
@@ -679,12 +688,24 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("const source = document.querySelector('.print-report')", html)
         self.assertIn("const printWindow = window.open('', '_blank')", html)
 
+    def test_patient_final_step_receives_doctor_result_instead_of_post_visit_form(self):
+        _, patient = self.get('/patient')
+        _, doctor = self.get('/doctor')
+        self.assertNotIn('id="s-update"', patient)
+        self.assertNotIn('id="s-changes"', patient)
+        self.assertNotIn('submitUpdate()', patient)
+        self.assertNotIn('已就诊，补充新资料', patient)
+        self.assertIn('id="doctor-result-body"', patient)
+        self.assertIn('刷新医生结果', patient)
+        self.assertIn('医生最终建议', doctor)
+        self.assertIn('final_advice', doctor)
+
     def test_mdt_screening_is_explicit_and_patient_safe(self):
         _, doctor = self.get("/doctor")
         _, patient = self.get("/patient")
         for token in (
-            "mdt-screening", "single_specialty", "recommend_mdt",
-            "need_more_info", "urgent_care", "submitMdtScreening",
+            "doctor-routing", "single_specialty", "recommend_mdt",
+            "need_more_info", "urgent_care", "submitTriageConfirmation",
         ):
             self.assertIn(token, doctor, f"医生端缺少初筛入口或决定：{token}")
         self.assertIn("医生建议多学科共同评估", patient)
@@ -694,8 +715,8 @@ class FrontendStructureTest(unittest.TestCase):
     def test_doctor_mdt_preparation_packet_is_source_labeled_before_review(self):
         _, html = self.get("/doctor")
         for token in (
-            "mdt_preparation_packet", "会前资料包", "专科 AI 参考意见",
-            "来源类型", "信息缺口", "建议讨论的问题", "仅供会前参考",
+            "mdt_preparation_packet", "AI 预分析与参考依据", "专科 AI 参考意见",
+            "来源类型", "信息缺口", "已有预分析标记的问题", "仅供会前参考",
         ):
             self.assertIn(token, html, f"医生端会前资料包缺少：{token}")
         self.assertIn("renderMdtPreparationPacket", html)
@@ -706,12 +727,12 @@ class FrontendStructureTest(unittest.TestCase):
         )
 
     def test_doctor_mdt_specialty_packet_groups_content_by_section(self):
-        """专科资料包应按事实、判断、待判断和缺口分组，避免细小长列表。"""
+        """专科资料包应按 AI 判断、待判断和缺口分组，避免细小长列表。"""
         _, html = self.get("/doctor")
         for token in (
-            "mdt-specialty-card", "mdt-specialty-section", "mdt-specialty-facts",
+            "mdt-specialty-card", "mdt-specialty-section",
             "mdt-specialty-inferences", "mdt-specialty-checks", "mdt-specialty-gaps",
-            "已掌握事实", "AI 参考判断", "待医生判断", "查看全部",
+            "AI 参考判断", "待医生判断", "查看全部",
         ):
             self.assertIn(token, html, f"MDT 专科资料包缺少分组结构：{token}")
         self.assertIn("mdt-specialty-copy", html)
@@ -720,7 +741,7 @@ class FrontendStructureTest(unittest.TestCase):
     def test_doctor_mdt_boundary_labels_and_formal_record_are_explicit(self):
         _, html = self.get("/doctor")
         for token in (
-            "AI 多专科预分析", "正式 MDT 会诊记录", "need_more_info", "urgent_care",
+            "AI 会诊模拟", "正式 MDT 会诊记录", "need_more_info", "urgent_care",
             "mdt_formal_record", "仅供会前参考", "待记录",
         ):
             self.assertIn(token, html, f"医生端 MDT 状态边界缺少：{token}")
@@ -855,7 +876,7 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn('class="publish-summary-grid"', html)
         self.assertIn('class="publish-opinion-form"', html)
         self.assertIn('.publish-opinion-form{display:grid;grid-template-columns:1fr;', html)
-        self.assertIn('class="publish-blocker"', html)
+        self.assertIn('class="publication-issue"', html)
         self.assertIn('min-height:120px', html)
         self.assertNotIn('用于生成「AI 建议 vs 医生意见」对照；患者端不承担', html)
         self.assertNotIn('规则：免审条目不会计入医生确认', html)
@@ -875,7 +896,7 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertNotIn('信息缺口：${(p.gaps||[]).map(esc).join', html)
         self.assertIn('class="triage-evidence-list"', html)
         self.assertIn('class="triage-evidence-item"', html)
-        self.assertIn('依据列表', html)
+        self.assertIn('AI 推荐科室与判断依据', html)
 
     def test_doctor_review_detail_typography_is_readable(self):
         """审核正文与证据不能继续使用 11px 的 tiny 字号。"""
@@ -936,11 +957,12 @@ class FrontendStructureTest(unittest.TestCase):
         """病例导航应按医生实际处理顺序组织，而不是按内部屏幕编号组织。"""
         _, html = self.get("/doctor")
         nav = html[html.index('id="nav"'):html.index('id="s-list"')]
-        for label in ("病例摘要", "分流确认", "MDT 协作", "报告审核", "历史记录"):
+        for label in ("病例摘要", "AI 资料包", "分流确认", "MDT 协作与会诊记录", "报告审核", "历史记录"):
             self.assertIn(label, nav)
-        self.assertLess(nav.index("病例摘要"), nav.index("分流确认"))
-        self.assertLess(nav.index("分流确认"), nav.index("MDT 协作"))
-        self.assertLess(nav.index("MDT 协作"), nav.index("报告审核"))
+        self.assertLess(nav.index("病例摘要"), nav.index("AI 资料包"))
+        self.assertLess(nav.index("AI 资料包"), nav.index("分流确认"))
+        self.assertLess(nav.index("分流确认"), nav.index("MDT 协作与会诊记录"))
+        self.assertLess(nav.index("MDT 协作与会诊记录"), nav.index("报告审核"))
 
     def test_doctor_history_prioritizes_key_flow_records(self):
         """历史页默认展示医生需要关注的关键流程。"""
@@ -958,7 +980,7 @@ class FrontendStructureTest(unittest.TestCase):
 
     def test_triage_confirmation_precedes_mdt_and_review(self):
         _, html = self.get("/doctor")
-        for token in ("triage-doctor-confirmation", "确认主责科室", "submitTriageConfirmation", "已确认分流方向"):
+        for token in ("triage-doctor-confirmation", "确认处理方向与负责科室", "submitTriageConfirmation", "已确认分流方向"):
             self.assertIn(token, html)
 
     def test_mdt_controls_live_in_mdt_screen(self):
@@ -969,18 +991,76 @@ class FrontendStructureTest(unittest.TestCase):
         review_start = html.index('id="s-review"')
         overview = html[overview_start:mdt_start]
         mdt = html[mdt_start:review_start]
-        self.assertIn("renderMdtScreening", html)
+        self.assertIn("renderMdtScope", html)
         self.assertIn("renderMdtPreparationPacket", html)
-        self.assertIn("MDT 启动判断", html)
+        self.assertIn("doctor-routing", html)
         self.assertNotIn("查看分诊与 MDT 资料", overview)
-        self.assertIn("MDT 协作", mdt)
+        self.assertIn("MDT 协作与会诊记录", mdt)
+
+    def test_doctor_overview_raw_record_has_dedicated_disclosure(self):
+        """原始脱敏病例使用独立的可展开分区，和结构化摘要保持层级区分。"""
+        _, html = self.get("/doctor")
+        self.assertIn('overview-raw-record', html)
+        self.assertIn('overview-raw-record-title', html)
+        self.assertIn('overview-raw-record-meta', html)
+
+    def test_mdt_hides_redundant_explanatory_copy(self):
+        """MDT 页面保留标题与状态，删除重复的流程解释小字。"""
+        _, html = self.get("/doctor")
+        for copy in (
+            "根据已确认范围生成 AI 讨论参考，再记录实际医生会诊；完成正式记录后进入报告审核。",
+            "以下内容由 AI 模拟各专科分析与讨论，仅供医生参考，不代表真实参会医生的意见或正式会诊结论。",
+            "仅记录医生实际启动和讨论后的结果；AI 预分析不会自动变成会诊结论。",
+        ):
+            self.assertNotIn(copy, html)
+
+    def test_doctor_patient_report_preview_uses_compact_sections(self):
+        """医生发布预览按会诊意见单单栏排版，不再左右并排专科意见与医生建议。"""
+        _, html = self.get("/doctor")
+        self.assertIn('patient-publication-preview', html)
+        self.assertIn('<script src="/static/js/final-report.js"></script>', html)
+        self.assertIn('finalReportDocumentHtml(finalReport,{preview:true})', html)
+        self.assertNotIn('publication-report-lead', html)
+
+    def test_workbench_pages_avoid_decorative_emoji_and_keep_component_headings(self):
+        """工作台不用表情符号做警示；全局标题规则降到元素级，组件标题间距生效。"""
+        _, patient = self.get("/patient")
+        for emoji in ("⚠️", "🏥"):
+            self.assertNotIn(emoji, patient)
+        self.assertIn('class="gap-grid"', patient)
+        _, css = self.get("/static/css/workbench.css")
+        self.assertIn(":where(#app) h3", css)
+        self.assertNotIn("#app h3 {", css)
+
+    def test_final_report_renderer_and_styles_are_shared_by_both_workbenches(self):
+        """医生预览、患者结果页、打印和历史版本共用同一份报告渲染与样式。"""
+        status, script = self.get("/static/js/final-report.js")
+        self.assertEqual(status, 200)
+        self.assertIn('function finalReportDocumentHtml', script)
+        for cls in ('final-report', 'fr-head', 'fr-info', 'fr-dept', 'fr-advice', 'fr-steps', 'fr-sign'):
+            self.assertIn(cls, script)
+        _, css = self.get("/static/css/dsh.css")
+        for selector in ('.final-report{', '.fr-info{', '.fr-dept{', '.fr-sign{'):
+            self.assertIn(selector, css)
+        _, patient = self.get("/patient")
+        self.assertIn('<script src="/static/js/final-report.js"></script>', patient)
+        self.assertIn('function patientFinalReport', patient)
+        self.assertIn('print-final-report', patient)
+        self.assertIn('report-prep-heading', patient)
+
+    def test_patient_report_uses_compact_reading_layout(self):
+        """患者报告使用重点摘要和可折叠详情，避免连续长页面。"""
+        _, html = self.get("/patient")
+        self.assertIn('report-screen', html)
+        self.assertIn('report-summary-layout', html)
+        self.assertIn('report-detail-list', html)
 
     def test_mdt_screening_only_decides_startup_after_triage(self):
         """MDT 页面不能再次承担分流科室选择。"""
         _, html = self.get("/doctor")
         self.assertIn("是否启动正式 MDT", html)
-        self.assertIn("分流确认已经确定主责和协同科室", html)
-        self.assertIn("保存 MDT 启动判断", html)
+        self.assertIn("一次确定是否启动正式 MDT 和本次参与范围", html)
+        self.assertIn("保存分流决定并继续", html)
         mdt_start = html.index('id="s-mdt"')
         review_start = html.index('id="s-review"')
         mdt = html[mdt_start:review_start]
@@ -989,7 +1069,7 @@ class FrontendStructureTest(unittest.TestCase):
     def test_collaborating_doctor_sees_read_only_lead_decisions(self):
         """协同医生可以看资料，但不能看到主责决策表单。"""
         _, html = self.get("/doctor")
-        self.assertIn("等待主责医生决定是否启动正式 MDT", html)
+        self.assertIn("模拟由牵头医生或协调人发起", html)
         self.assertIn("等待主责医生确认分流", html)
         self.assertIn("你是协同医生", html)
 
@@ -1019,30 +1099,33 @@ class FrontendStructureTest(unittest.TestCase):
     def test_doctor_overview_routes_by_mdt_decision(self):
         """病例总览不能把正式 MDT 当作所有病例的必经步骤。"""
         _, html = self.get("/doctor")
-        for token in ("按单专科处理后进入报告审核", "补充资料后重新判断", "不进入普通 MDT", "记录正式 MDT"):
+        for token in ("无需正式 MDT", "先补充资料，再判断", "优先急症处理", "保存会诊进度"):
             self.assertIn(token, html)
-        self.assertIn("正式 MDT 尚未记录", html)
+        self.assertIn("完成会诊并进入报告审核", html)
 
-    def test_doctor_overview_has_prominent_full_record_action(self):
-        """完整资料入口必须是可见按钮，不能伪装成弱化的折叠标题。"""
+    def test_doctor_overview_keeps_original_record_and_sequential_action(self):
+        """完整摘要保留原始病历入口，并按流程进入资料包。"""
         _, html = self.get("/doctor")
-        self.assertIn("overview-full-record-action", html)
-        self.assertIn("查看完整病历资料", html)
-        self.assertIn("overview-workflow-actions", html)
+        overview = html.split('function renderOverview(){', 1)[1].split('function renderPacket(){', 1)[0]
+        self.assertIn("doctorWorkflowNav('overview')", overview)
+        self.assertIn("查看原始脱敏病历", overview)
+        self.assertNotIn("当前待办", overview)
 
     def test_doctor_overview_prioritizes_patient_record_before_todos(self):
         """总览按先理解病例、再处理待办的顺序组织，避免待办卡片占满首屏。"""
         _, html = self.get("/doctor")
-        overview = html
-        self.assertLess(overview.index("overview-patient-record"), overview.index("overview-task-list"))
-        self.assertIn("overview-patient-record", overview)
-        self.assertIn("overview-task-list", overview)
-        self.assertIn("formalComplete", html)
+        overview = html.split('function renderOverview(){', 1)[1].split('function renderPacket(){', 1)[0]
+        self.assertIn('prof.chief_complaint', overview)
+        self.assertIn('c.main_issue', overview)
+        self.assertNotIn('todo', overview)
+        self.assertIn('symptoms_timeline', overview)
+        self.assertIn('medications', overview)
 
     def test_doctor_overview_uses_duration_language_and_removes_redundant_portrait_banner(self):
         """摘要应表达症状持续时长，不能把它误称为时间线或重复展示患者画像横幅。"""
         _, html = self.get("/doctor")
         self.assertIn("症状持续情况", html)
+        self.assertIn("symptomDuration", html)
         self.assertNotIn('<div class="ai-block"><strong>患者画像</strong>', html)
 
     def test_doctor_overview_source_refs_are_human_readable(self):
@@ -1056,24 +1139,27 @@ class FrontendStructureTest(unittest.TestCase):
     def test_doctor_overview_deduplicates_fact_labels_and_uses_grouped_grid(self):
         """资料条目应避免名称和值重复，并使用分组网格消除单侧留白。"""
         _, html = self.get("/doctor")
-        self.assertIn("formatFactLabel", html)
-        self.assertIn("right.startsWith(left)", html)
-        self.assertIn("overview-fact-grid", html)
+        self.assertIn("uniqueText", html)
+        self.assertIn("mdt-specialty-copy", html)
+        self.assertIn("simulation-specialties", html)
         self.assertIn("overview-fact-section", html)
         self.assertIn("overview-gap-item", html)
 
     def test_doctor_overview_expresses_triage_before_mdt_as_conditional_flow(self):
         """摘要页应先引导分流确认，再按条件进入 MDT 预分析。"""
         _, html = self.get("/doctor")
-        self.assertIn("先完成分流确认，再查看 MDT 预分析", html)
-        self.assertIn("查看 MDT 预分析", html)
+        self.assertIn("在这里一次确认处理方向和负责科室", html)
+        self.assertIn('id="mdt-preparation-packet"', html)
+        self.assertIn('id="s-packet"', html)
+        self.assertIn('id="mdt-simulation-body"', html)
+        self.assertIn("完成会诊并进入报告审核", html)
         self.assertIn("启动正式 MDT", html)
         self.assertNotIn('onclick="go(\'triage\')">去分流确认</button><button class="mini" onclick="go(\'mdt\')">查看 MDT 判断</button>', html)
 
     def test_doctor_overview_keeps_triage_review_entry_after_confirmation(self):
         """分流完成后保留回看入口，但不抢占当前 MDT 主任务。"""
         _, html = self.get("/doctor")
-        self.assertIn("查看分流确认", html)
+        self.assertIn("修改分流方向", html)
         self.assertIn("confirmation.status==='confirmed'", html)
 
     def test_doctor_triage_departments_use_readable_selection_grid(self):
@@ -1144,7 +1230,9 @@ class FrontendStructureTest(unittest.TestCase):
         self.assertIn("document.visibilityState", patient)
         self.assertIn("document.addEventListener('visibilitychange'", patient)
         self.assertIn("updateAnalysisStage3Dom", patient)
-        self.assertIn("mdtPlayback", doctor)
+        self.assertIn("document.visibilityState!=='hidden'", doctor)
+        self.assertIn("clearTimeout(S.mdtTimer)", doctor)
+        self.assertIn("refreshDoctorMdtSimulation", doctor)
         self.assertIn("document.addEventListener('visibilitychange'", doctor)
 
     # ------------------------------------------- 医生端关键操作的窄屏可见性
@@ -1163,7 +1251,7 @@ class FrontendStructureTest(unittest.TestCase):
                       "发布入口必须有主区镜像，不能只在右轨里")
         self.assertIn("publishPanelHtml", html)
         self.assertNotIn("publishPanelHtml(sum, canPublish, 'rail')", html)
-        self.assertIn("publishPanelHtml(sum, canPublish, 'inline')", html)
+        self.assertIn("publishPanelHtml(sum, 'inline')", html)
         self.assertNotIn('id="op-text"', html, "线下意见输入框 id 应带前缀，避免两处重复 id")
 
         _, css = self.get("/static/css/dsh.css")

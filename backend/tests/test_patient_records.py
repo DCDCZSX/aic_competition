@@ -117,6 +117,55 @@ class PatientRecordsHttpTest(unittest.TestCase):
         self.assertNotIn("reviewer_id", str(record))
         self.assertNotIn("decisions", record)
 
+    def _save_report_snapshot(self):
+        self.store.save_report_version({
+            "case_id": "C-ALICE-2", "version": 2,
+            "published_by": "审核医生", "published_at": "2026-10-06 10:00",
+            "review_summary": {"internal_reviewer": "internal-account"},
+            "report_json": {
+                "summary": {"doctor_confirmed": True, "report_version": 2,
+                            "sections": {"主要问题": "当时的视物模糊"}},
+                "full": {"doctor_confirmed": True, "sections": {
+                    "病例画像": {"主诉": "当时的视物模糊", "资料完整度": 0.8},
+                    "医生最终意见": [{"内容": "当时的医生建议", "审核人": "internal-account"}],
+                    "审核记录": [{"审核人": "internal-account"}]}},
+                "doctor_result": {"published": True, "final_advice": "当时的复诊安排"}},
+            "summary_markdown": "旧摘要", "full_markdown": "医生内部完整版",
+        })
+
+    def test_patient_reads_saved_report_version_without_current_content_or_internal_review(self):
+        self._save_report_snapshot()
+        self.store.save_case("C-ALICE-2", owner_id="alice", main_issue="后来修改的问题",
+                             case_state="awaiting_recheck", report_version=3,
+                             payload={"profile": {"chief_complaint": "后来修改的病情"},
+                                      "review": {"final_advice": "尚未发布的新建议"}})
+        response = self.client.get("/api/v2/case/C-ALICE-2/versions/2/patient-report",
+                                   headers={"Authorization": f"Bearer {self._token('alice')}"})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        body = response.get_json()
+        self.assertEqual(body["version"], 2)
+        self.assertEqual(body["report"]["summary"]["sections"]["主要问题"], "当时的视物模糊")
+        self.assertEqual(body["report"]["doctor_result"]["final_advice"], "当时的复诊安排")
+        self.assertNotIn("后来修改", str(body))
+        self.assertNotIn("尚未发布", str(body))
+        self.assertNotIn("internal-account", str(body))
+        self.assertNotIn("资料完整度", str(body))
+        self.assertNotIn("审核记录", str(body))
+        self.assertNotIn("full_markdown", body)
+
+    def test_patient_report_version_requires_owner_and_login(self):
+        self._save_report_snapshot()
+        url = "/api/v2/case/C-ALICE-2/versions/2/patient-report"
+        self.assertEqual(self.client.get(url).status_code, 401)
+        response = self.client.get(url, headers={"Authorization": f"Bearer {self._token('bob')}"})
+        self.assertEqual(response.status_code, 404)
+
+    def test_missing_report_snapshot_does_not_fabricate_history_from_current_case(self):
+        response = self.client.get("/api/v2/case/C-ALICE-2/versions/2/patient-report",
+                                   headers={"Authorization": f"Bearer {self._token('alice')}"})
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("未保存", response.get_json()["error"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

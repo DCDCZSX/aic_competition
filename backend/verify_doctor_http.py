@@ -196,10 +196,10 @@ def main():
     check("未知条目被拒", r.status_code == 400, str(r.json().get("error"))[:60])
 
     print("\n[6] 发布审核版（免审条目不阻塞发布，且不得被写成医生接受）")
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/publish", json={"reviewer": "审核医生"}, timeout=60)
+    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/publish", json={"reviewer": "审核医生", "final_advice": "请携带已有资料向接诊医生确认后续安排。"}, timeout=60)
     check("仍有必审条目时发布被拒", r.status_code == 400, str(r.json().get("error"))[:70])
     r = doctor.post(f"{BASE}/api/v2/case/{case_id}/publish",
-                    json={"reviewer": "审核医生", "accept_all": True}, timeout=120)
+                    json={"reviewer": "审核医生", "accept_all": True, "final_advice": "请携带已有资料向接诊医生确认后续安排。"}, timeout=120)
     check("全部接受必审条目并发布成功", r.status_code == 200 and r.json().get("ok"),
           json.dumps(r.json(), ensure_ascii=False)[:140])
     pub = r.json()

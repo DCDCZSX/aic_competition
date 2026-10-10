@@ -3,486 +3,306 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>多学科就医智助系统 · AI 辅助就医信息整理与多学科决策协作平台</title>
-<meta name="description" content="把散乱的病历整理成医生看得懂的一页摘要，推演该看哪些科、还缺什么信息，最后由医生逐条把关。不出诊断、不出处方、不替代医生。">
+<title>医序｜多学科就医信息协作平台</title>
+<meta name="description" content="整理就医资料、看清信息缺口，把关键判断交给医生。医序提供就医信息整理与多学科协作，不提供诊断或处方，不替代医生。">
 <link rel="stylesheet" href="/static/css/tokens.css">
 <style>
-/* ============================================================
-   设计 token —— 暖色编辑风（自有实现：字体为系统字体栈、插画为自绘 SVG、零外链资源）
-   全部为 computed 值，禁止目测改色；颜色只允许从本表取用
-   ============================================================ */
+/* 首页使用公共色板，标题和插画采用居中布局。 */
 :root{
-  /* 首页专用（落地页比工作台用更大的编辑式尺度） */
-  --surface:#fff;
-  --shadow-sm:0 2px 8px rgba(0,0,0,.04);
-  --shadow-md:0 4px 20px rgba(0,0,0,.04);
-  --shadow-lg:0 4px 16px rgba(0,0,0,.10);
-  --whisper:0 4px 24px rgba(0,0,0,.05);
-  --display-2:clamp(32px,22px + 2.5vw,56px);
-  --headline-1:clamp(28px,24px + 1.6vw,48px);
-  --headline-3:clamp(24px,22px + .7vw,34px);
-  --headline-5:clamp(19px,18px + .45vw,24px);
-  --nav-h:72px;
-  /* 首页独有别名（页面自定义命名） */
-  --bg:#faf9f5;
-  --surface-2:#f5f4ed;
-  --text:#141413;
-  --text-2:#5e5d59;
-  --text-3:#87867f;
-  --border:#f0eee6;
-  --border-strong:#e8e6dc;
+  --bg:var(--gray-050);
+  --surface:var(--gray-000);
+  --surface-2:var(--gray-100);
+  --text:var(--gray-950);
+  --text-2:var(--gray-600);
+  --text-3:var(--gray-500);
+  --border:var(--gray-200);
+  --border-strong:var(--gray-300);
   --container:1200px;
+  --nav-h:76px;
+  --display-2:clamp(28px,3.2vw,42px);
 }
-
 *,*::before,*::after{box-sizing:border-box;}
-html{scroll-behavior:smooth;}
-body{
-  margin:0;background:var(--bg);color:var(--text);
-  font-family:var(--font-sans);font-size:var(--body-2);line-height:1.6;
-  -webkit-font-smoothing:antialiased;
+html{scroll-behavior:smooth;scroll-padding-top:calc(var(--nav-h) + 20px);}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-sans);font-size:16px;line-height:1.7;-webkit-font-smoothing:antialiased;}
+::selection{background:var(--oat);color:var(--text);}
+a{color:inherit;text-decoration:none;}
+h1,h2,h3,p,figure{margin:0;}
+h1,h2,h3{font-family:var(--font-sans);}
+button{font:inherit;cursor:pointer;}
+a,button{-webkit-tap-highlight-color:transparent;}
+:focus-visible{outline:2px solid var(--focus-ring);outline-offset:4px;border-radius:var(--br-8);}
+.container{width:100%;max-width:var(--container);margin:0 auto;padding:0 24px;}
+.skip{position:absolute;left:16px;top:12px;z-index:200;padding:8px 16px;min-height:44px;background:var(--surface);border-radius:var(--br-8);transform:translateY(-180%);}
+.skip:focus{transform:none;}
+
+/* 导航保持简洁，手机端直接显示产品锚点与患者入口。 */
+.nav{position:sticky;top:0;z-index:100;background:var(--bg);border-bottom:1px solid transparent;transition:border-color 160ms ease;}
+.nav.scrolled{border-bottom-color:var(--border);}
+.nav-inner{height:var(--nav-h);display:flex;align-items:center;justify-content:space-between;gap:24px;}
+.brand{display:inline-flex;align-items:center;gap:10px;flex:0 0 auto;}
+.brand svg{display:block;flex:0 0 auto;}
+.brand .name{font-size:24px;font-weight:700;letter-spacing:-.03em;white-space:nowrap;}
+.nav-right{display:flex;align-items:center;gap:48px;min-width:0;}
+.nav-links,.home-entry{display:flex;align-items:center;gap:28px;}
+.home-entry{gap:12px;}
+.nav-link{display:inline-flex;align-items:center;min-height:44px;font-size:14px;font-weight:500;color:var(--text-2);white-space:nowrap;}
+.nav-link:hover{color:var(--text);}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 20px;border:1px solid transparent;border-radius:var(--br-8);font-size:14px;font-weight:600;line-height:1.4;white-space:nowrap;transition:background 160ms ease,border-color 160ms ease;}
+.btn-dark{background:var(--gray-950);color:var(--gray-000);}
+.btn-dark:hover{background:var(--gray-750);}
+.btn-clay{background:var(--clay-dark);color:var(--gray-000);}
+.btn-clay:hover{background:var(--text);}
+.btn-outline{background:transparent;border-color:var(--gray-650);color:var(--text);}
+.btn-outline:hover{background:var(--surface-2);}
+.btn-plain{background:transparent;color:var(--text-2);padding-inline:8px;}
+.btn-plain:hover{color:var(--text);background:var(--surface-2);}
+.home-entry .btn{min-height:44px;white-space:nowrap;}
+
+/* 标题、入口与独立插画按单列排列。 */
+.hero-section{padding:42px 0 54px;}
+.hero{display:grid;grid-template-columns:minmax(0,1fr);gap:0;align-items:center;}
+.hero-copy{text-align:center;}
+.hero h1{font-size:clamp(40px,4.8vw,68px);font-weight:700;line-height:1.22;letter-spacing:-.035em;}
+.hero h1 span{display:block;}
+.hero .sub{max-width:680px;margin:18px auto 0;font-size:18px;color:var(--text-2);line-height:1.8;text-wrap:balance;}
+.hero .sub span{display:inline-block;}
+.hero-form{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:14px;margin:26px auto 0;}
+.role-entry{min-height:48px;padding:12px 24px;font-size:15px;}
+.hero-art{width:min(calc(100vw - 40px),1360px);max-width:none;min-width:0;justify-self:center;margin-top:22px;}
+.hero-art img{display:block;width:100%;height:auto;}
+.hero-art figcaption{text-align:center;color:var(--text-2);font-size:14px;margin-top:8px;}
+
+/* 流程用开放的顺序结构，避免额外容器。 */
+.section{padding:56px 0;}
+.section-head{margin-bottom:30px;}
+.h2{font-size:var(--display-2);font-weight:700;line-height:1.3;letter-spacing:-.025em;text-wrap:balance;}
+.lede{margin-top:12px;color:var(--text-2);font-size:17px;max-width:65ch;}
+.product-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:32px;margin:0;padding:0;list-style:none;}
+.step-heading{display:flex;align-items:center;gap:18px;margin-bottom:14px;}
+.step-heading::after{content:"";height:1px;background:var(--gray-250);flex:1;}
+.step-number{font-size:18px;font-weight:600;color:var(--clay-dark);font-variant-numeric:tabular-nums;}
+.product-steps h3{font-size:21px;font-weight:650;line-height:1.5;margin-bottom:8px;}
+.product-steps p{color:var(--text-2);font-size:15px;max-width:35ch;line-height:1.8;}
+.product-flow-note{margin-top:24px;font-size:13px;color:var(--text-3);}
+
+/* 医生把关区沿用浅色背景，保留专业边界和隐私说明。 */
+.trust-section{background:var(--surface-2);padding:48px 0;}
+.trust-compact{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);gap:64px;align-items:start;}
+.trust-copy .h2{font-size:clamp(34px,3.8vw,50px);line-height:1.25;}
+.trust-copy .h2 span{display:block;}
+.trust-copy .lede{font-size:16px;max-width:28ch;}
+.trust-points{margin:0;}
+.trust-point{display:grid;grid-template-columns:minmax(160px,.8fr) minmax(0,1.3fr);gap:24px;padding:18px 0;border-bottom:1px solid var(--border-strong);}
+.trust-point:first-child{padding-top:0;}
+.trust-point:last-child{border-bottom:0;padding-bottom:0;}
+.trust-point dt{font-weight:650;font-size:16px;}
+.trust-point dd{margin:0;font-size:14px;color:var(--text-2);line-height:1.8;}
+
+/* 页脚给出角色入口与完整医疗提示。 */
+.footer{padding:28px 0 24px;}
+.footer-top{display:flex;align-items:center;justify-content:space-between;gap:24px;}
+.footer-brand{display:flex;align-items:center;gap:20px;}
+.footer .brand .name{font-size:20px;}
+.footer .tagline{padding-left:20px;border-left:1px solid var(--border-strong);font-size:13px;color:var(--text-2);}
+.footer-entries{display:flex;gap:24px;flex:0 0 auto;}
+.footer-entries a{display:inline-flex;align-items:center;min-height:44px;font-size:14px;font-weight:500;text-underline-offset:4px;}
+.footer-entries a:hover{text-decoration:underline;}
+.footer-bottom{margin-top:16px;padding-top:14px;border-top:1px solid var(--border);}
+.footer-bottom p{font-size:12px;line-height:1.8;color:var(--text-3);}
+
+/* 内容默认可见，入场效果只增强标题与插画。 */
+@media (prefers-reduced-motion:no-preference){
+  .hero-copy{animation:hero-enter 480ms var(--ease-out-quart);}
+  .hero-art{animation:hero-enter 620ms var(--ease-out-quart);}
+}
+@keyframes hero-enter{from{opacity:.7;transform:translateY(8px);}to{opacity:1;transform:none;}}
+@media (max-width:1000px){
+  .nav-right{gap:24px;}
+  .nav-links{gap:20px;}
+  .nav-links .nav-link:first-child{display:none;}
+  .trust-compact{gap:36px;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);}
+  .trust-point{grid-template-columns:1fr;gap:4px;}
+}
+@media (max-width:720px){
+  :root{--nav-h:68px;}
+  .container{padding-inline:20px;}
+  .nav-inner{gap:16px;}
+  .brand{gap:8px;}
+  .brand .name{font-size:20px;}
+  .brand svg{width:28px;height:28px;}
+  .nav-right{gap:12px;}
+  .nav-links{gap:0;}
+  .nav-links .nav-link:last-child{display:none;}
+  .nav-link{font-size:13px;}
+  .home-entry .btn{min-height:44px;padding:8px 12px;font-size:12px;white-space:nowrap;}
+  .home-entry .btn-plain{display:none;}
+  .hero-section{padding:36px 0 36px;}
+  .hero h1{font-size:clamp(27px,8.2vw,48px);line-height:1.3;letter-spacing:-.025em;}
+  .hero .sub{max-width:460px;font-size:15px;line-height:1.8;margin-top:16px;}
+  .hero-form{gap:10px;margin-top:22px;}
+  .role-entry{min-height:46px;padding:12px 17px;font-size:14px;}
+  .hero-art{width:calc(100vw - 24px);margin-top:28px;}
+  .hero-art figcaption{font-size:12px;margin-top:12px;}
+  .section{padding:36px 0;}
+  .section-head{margin-bottom:24px;}
+  .h2{font-size:28px;line-height:1.4;}
+  .lede{font-size:15px;margin-top:10px;}
+  .product-steps{grid-template-columns:1fr;gap:26px;}
+  .step-heading{margin-bottom:8px;}
+  .step-heading::after{max-width:80px;}
+  .step-number{font-size:16px;}
+  .product-steps h3{font-size:19px;margin-bottom:6px;}
+  .product-steps p{max-width:none;font-size:14px;}
+  .product-flow-note{font-size:12px;margin-top:22px;}
+  .trust-section{padding:36px 0;}
+  .trust-compact{grid-template-columns:minmax(0,1fr);gap:24px;}
+  .trust-copy .h2{font-size:32px;}
+  .trust-copy .lede{max-width:none;font-size:14px;}
+  .trust-point{padding:16px 0;}
+  .trust-point dt{font-size:15px;}
+  .trust-point dd{font-size:13px;}
+  .footer{padding:24px 0 20px;}
+  .footer-top{align-items:flex-start;gap:14px;flex-direction:column;}
+  .footer-brand{gap:16px;flex-wrap:wrap;}
+  .footer .tagline{padding-left:16px;font-size:12px;}
+  .footer-entries{gap:28px;}
+  .footer-bottom{margin-top:12px;}
+}
+@media (max-width:360px){
+  .container{padding-inline:18px;}
+  .nav-inner{gap:8px;}
+  .nav-right{gap:8px;}
+  .home-entry .btn{padding-inline:9px;}
+  .nav-link{font-size:12px;}
 }
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto;}
-  *{animation-duration:.001ms !important;transition-duration:.001ms !important;}
+  .nav,.btn{transition:none;}
+  .hero-copy,.hero-art{animation:none;}
 }
-a{color:inherit;text-decoration:none;}
-h1,h2,h3,h4{font-family:var(--font-display);font-weight:500;margin:0;}
-p{margin:0;}
-ul{margin:0;padding:0;list-style:none;}
-button{font-family:inherit;font-size:inherit;cursor:pointer;}
-:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:var(--br-8);}
-.skip{position:absolute;left:-9999px;top:0;background:var(--gray-000);padding:10px 16px;
-      border-radius:0 0 var(--br-8) 0;z-index:200;}
-.skip:focus{left:0;}
-.container{max-width:var(--container);margin:0 auto;padding:0 var(--sp-24);}
-.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
-.muted{color:var(--text-2);}
-.tiny{font-size:var(--caption);color:var(--text-3);}
-.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
-
-/* ============================ 滚动揭示（渐进增强） ============================ */
-.reveal > *{opacity:1;transform:none;}
-.js-ready .reveal > *{
-  opacity:0;transform:translateY(10px);
-  transition:opacity .75s var(--ease-out-power2),transform .75s var(--ease-out-power2);
-  transition-delay:calc(var(--reveal-index,0) * .1s);
-}
-.js-ready .reveal.revealed > *{opacity:1;transform:none;}
-@media (prefers-reduced-motion:reduce){
-  .reveal > *,.js-ready .reveal > *{opacity:1;transform:none;transition:none;}
-}
-
-/* ============================ 顶栏（固定） ============================ */
-.nav{
-  position:fixed;top:0;left:0;right:0;z-index:100;
-  background:rgba(250,249,245,.92);backdrop-filter:saturate(180%) blur(12px);
-  border-bottom:1px solid transparent;transition:border-color .2s,box-shadow .2s;
-  animation:navIn 1s var(--ease-out-power2) both;
-}
-@keyframes navIn{from{opacity:0;transform:translateY(-20px);}to{opacity:1;transform:none;}}
-.nav.scrolled{border-bottom-color:var(--border);box-shadow:var(--shadow-sm);}
-@media (prefers-reduced-motion:reduce){.nav{animation:none;}}
-.nav-inner{display:flex;align-items:center;justify-content:space-between;height:var(--nav-h);gap:var(--sp-24);min-width:0;}
-@media (min-width:1200px){:root{--nav-h:84px;}}
-.brand{display:flex;align-items:center;gap:10px;flex:0 0 auto;}
-.brand svg{display:block;}
-.brand .name{font-family:var(--font-display);font-weight:500;font-size:17px;letter-spacing:.01em;white-space:nowrap;}
-.nav-right{display:flex;align-items:center;gap:var(--sp-24);flex:0 0 auto;min-width:0;}
-.home-entry{display:flex;align-items:center;gap:var(--sp-8);}
-.nav-links{display:none;align-items:center;gap:var(--sp-24);}
-@media (min-width:1000px){.nav-links{display:flex;}}
-.nav-link{font-size:var(--body-3);color:var(--text-2);padding:6px 0;background:none;border:0;white-space:nowrap;flex:0 0 auto;}
-.nav-link:hover{color:var(--text);}
-.dd{position:relative;}
-.dd-trigger{display:inline-flex;align-items:center;gap:6px;}
-.dd-trigger .caret{transition:transform .2s var(--ease-out-power2);}
-.dd.open .dd-trigger .caret{transform:rotate(180deg);}
-.dd-panel{
-  position:absolute;top:calc(100% + 10px);left:50%;translate:-50% 0;
-  min-width:320px;background:var(--gray-000);border:1px solid var(--border-strong);
-  border-radius:var(--br-16);box-shadow:var(--whisper);padding:var(--sp-16);
-  opacity:0;visibility:hidden;transform:translateY(-6px);
-  transition:opacity .18s var(--ease-out-power2),transform .18s var(--ease-out-power2),visibility .18s;
-}
-.dd.open .dd-panel{opacity:1;visibility:visible;transform:none;}
-.dd-panel .grp-title{font-size:var(--label);letter-spacing:.06em;text-transform:uppercase;
-                     color:var(--text-3);margin-bottom:8px;font-family:var(--font-sans);}
-.dd-panel .cols{display:grid;grid-template-columns:1fr;gap:2px;}
-.dd-panel a{display:block;padding:8px 10px;border-radius:var(--br-8);font-size:var(--body-3);color:var(--text);}
-.dd-panel a:hover{background:var(--gray-100);}
-.dd-panel a span{display:block;font-size:var(--caption);color:var(--text-3);margin-top:2px;}
-.dd-sep{height:1px;background:var(--border);margin:var(--sp-12) 0;}
-.nav-cta{display:none;}
-@media (min-width:720px){.nav-cta{display:inline-flex;}}
-/* ============================ 按钮 ============================ */
-.btn{
-  display:inline-flex;align-items:center;justify-content:center;gap:8px;
-  min-height:44px;padding:8px 16px;border-radius:var(--br-12);
-  border:1px solid transparent;font-size:var(--body-3);font-weight:500;
-  transition:background .16s,border-color .16s,transform .16s var(--ease-out-power2);
-}
-.btn:active{transform:translateY(1px);}
-.btn-clay{background:var(--clay);color:var(--gray-050);box-shadow:0 0 0 0 var(--clay),0 0 0 1px var(--clay);}
-.btn-clay:hover{background:var(--clay-hover);}
-.btn-sand{background:var(--gray-200);color:var(--gray-650);box-shadow:0 0 0 1px var(--gray-300);}
-.btn-sand:hover{background:var(--gray-250);}
-.btn-white{background:var(--gray-000);color:var(--text);box-shadow:0 0 0 1px var(--gray-300);}
-.btn-white:hover{background:var(--gray-100);}
-.btn-ghost{background:transparent;color:var(--text-2);border-color:var(--border-strong);}
-.btn-ghost:hover{color:var(--text);border-color:var(--gray-300);}
-.btn-dark{background:var(--gray-750);color:var(--gray-050);}
-.btn-dark:hover{background:var(--gray-700);}
-.btn-block{width:100%;}
-.btn .ico{width:16px;height:16px;flex:0 0 16px;}
-
-/* ============================ 区块骨架 ============================ */
-.section{padding-block:var(--sp-96);}
-.section:first-of-type{padding-top:calc(var(--nav-h) + var(--sp-96));}
-.section-head{max-width:var(--container);margin:0 auto var(--sp-40);}
-.eyebrow{font-family:var(--font-mono);font-size:var(--label);letter-spacing:.08em;
-         text-transform:uppercase;color:var(--text-3);margin-bottom:var(--sp-12);}
-.h2{font-size:var(--display-2);line-height:1.1;}
-.lede{font-size:var(--body-1);color:var(--text-2);max-width:62ch;margin-top:var(--sp-16);}
-.theme-dark{background:var(--gray-950);color:var(--gray-050);}
-.theme-dark .muted,.theme-dark .lede{color:var(--gray-400);}
-.theme-dark .tiny{color:var(--gray-500);}
-.theme-dark .eyebrow{color:var(--gray-500);}
-
-/* ============================ Hero ============================ */
-.hero{display:grid;gap:var(--sp-48);align-items:center;}
-@media (min-width:1000px){.hero{grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:var(--sp-64);}}
-.hero h1{font-size:var(--display-1);line-height:1.1;letter-spacing:-.01em;}
-.hero .sub{font-size:var(--body-1);color:var(--text-2);margin-top:var(--sp-24);max-width:56ch;}
-.hero-form{margin-top:var(--sp-32);background:var(--gray-000);border:1px solid var(--border-strong);
-           border-radius:var(--br-24);padding:var(--sp-24);box-shadow:var(--whisper);max-width:440px;}
-.hero-form .or{display:flex;align-items:center;gap:var(--sp-12);color:var(--text-3);
-               font-size:var(--caption);margin:var(--sp-12) 0;}
-.hero-form .or::before,.hero-form .or::after{content:"";height:1px;background:var(--border);flex:1;}
-.hero-form .form-row{display:none;margin-top:var(--sp-12);}
-.hero-form .form-row.open{display:block;}
-.hero-form .form-row input{
-  width:100%;min-height:44px;padding:8px 12px;border:1px solid var(--border-strong);
-  border-radius:var(--br-12);font-family:inherit;font-size:var(--body-3);
-  background:var(--gray-000);color:var(--text);margin-bottom:8px;
-}
-.hero-form{display:grid;gap:var(--sp-12);}
-.hero-form.role-entries{background:transparent;border:0;box-shadow:none;padding:0;max-width:480px;}
-.role-entry{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-16);width:100%;min-height:52px;padding:12px 16px;border-radius:var(--br-12);}
-.hero-boundary{margin-top:var(--sp-16);font-size:var(--caption);color:var(--text-3);}
-.legal{font-size:var(--micro);color:var(--text-3);margin-top:var(--sp-12);line-height:1.6;}
-.msg{font-size:var(--caption);margin-top:var(--sp-8);display:none;}
-.msg.show{display:block;}
-.msg.err{color:var(--danger);}
-.msg.ok{color:var(--ok);}
-/* Hero 右侧：产品界面预览（自绘，非截图；结构对齐真实界面） */
-.preview{
-  background:var(--gray-000);border:1px solid var(--border-strong);border-radius:var(--br-32);
-  padding:var(--sp-16);box-shadow:var(--whisper);overflow:hidden;
-}
-.preview .chrome{display:flex;align-items:center;gap:8px;padding-bottom:var(--sp-12);
-                 border-bottom:1px solid var(--border);}
-.preview .dot{width:9px;height:9px;border-radius:50%;background:var(--gray-200);}
-.preview .chrome .t{margin-left:8px;font-size:var(--micro);color:var(--text-3);}
-.preview .stage{display:grid;gap:var(--sp-12);padding-top:var(--sp-12);}
-@media (min-width:560px){.preview .stage{grid-template-columns:1fr 1.1fr;}}
-.pv-card{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--br-12);padding:var(--sp-12);}
-.pv-card .ct{font-size:var(--caption);color:var(--text-3);margin-bottom:8px;}
-.pv-row{display:flex;align-items:center;justify-content:space-between;gap:8px;
-        font-size:var(--caption);padding:5px 0;border-bottom:1px dashed var(--border);}
-.pv-row:last-child{border-bottom:0;}
-.chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:var(--micro);
-      background:var(--gray-150);color:var(--text-2);white-space:nowrap;}
-.chip.ok{background:rgba(46,125,79,.12);color:var(--ok);}
-.chip.warn{background:rgba(183,121,31,.14);color:var(--warn);}
-.chip.danger{background:rgba(179,64,46,.12);color:var(--danger);}
-.chip.info{background:rgba(91,75,138,.12);color:var(--info);}
-.chip.clay{background:rgba(217,119,87,.16);color:var(--clay-dark);}
-.badge-ai{display:inline-flex;align-items:center;gap:6px;margin-top:var(--sp-12);
-          padding:5px 12px;border-radius:999px;background:var(--gray-150);
-          color:var(--text-2);font-size:var(--micro);}
-/* ============================ Hero 视觉中心：证据画布 ============================ */
-.evidence-canvas{position:relative;isolation:isolate;overflow:hidden;background:var(--gray-950);color:var(--gray-050);border-radius:var(--br-32);padding:clamp(var(--sp-24),4vw,var(--sp-40));box-shadow:var(--whisper);}
-.evidence-canvas::before{content:"";position:absolute;z-index:0;width:260px;height:260px;right:-80px;top:-100px;border-radius:50%;background:rgba(217,119,87,.24);filter:blur(18px);animation:evidenceGlow 9s ease-in-out infinite;}
-@keyframes evidenceGlow{0%,100%{transform:translate3d(0,0,0);opacity:.65;}50%{transform:translate3d(-22px,20px,0);opacity:1;}}
-.evidence-canvas-title{position:relative;z-index:1;font-family:var(--font-display);font-size:var(--headline-3);line-height:1.15;}
-.evidence-cards{display:grid;gap:var(--sp-12);margin-top:var(--sp-32);}
-.evidence-card{position:relative;z-index:1;display:grid;gap:6px;padding:var(--sp-16);background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:var(--br-12);}
-.evidence-card:nth-child(2){margin-inline-start:clamp(12px,3vw,32px);background:rgba(217,119,87,.18);border-color:rgba(217,119,87,.5);}
-.evidence-card:nth-child(3){margin-inline-start:clamp(5px,1.5vw,16px);}
-.evidence-card span{font-family:var(--font-mono);font-size:var(--micro);color:var(--gray-400);}
-.evidence-card strong{font-size:var(--body-2);font-weight:600;color:var(--gray-050);}
-.evidence-card p{font-size:var(--caption);color:var(--gray-400);}
-.evidence-card.accent p{color:var(--gray-300);}
-.evidence-canvas-note{position:relative;z-index:1;margin-top:var(--sp-24);padding-top:var(--sp-16);border-top:1px solid rgba(255,255,255,.14);font-size:var(--caption);color:var(--gray-400);}
-/* 信任条 */
-.trustbar{margin-top:var(--sp-40);display:flex;flex-wrap:wrap;gap:var(--sp-12);}
-.trustbar span{display:inline-flex;align-items:center;gap:6px;font-size:var(--caption);
-               color:var(--text-2);background:var(--gray-000);border:1px solid var(--border-strong);
-               border-radius:999px;padding:6px 14px;}
-.trustbar b{font-weight:500;color:var(--text);}
-
-/* ============================ 卡片网格 ============================ */
-.grid{display:grid;gap:var(--sp-16);}
-.grid-3{grid-template-columns:1fr;}
-.grid-4{grid-template-columns:1fr;}
-@media (min-width:768px){.grid-3{grid-template-columns:repeat(3,1fr);}.grid-4{grid-template-columns:repeat(2,1fr);}}
-@media (min-width:1100px){.grid-4{grid-template-columns:repeat(4,1fr);}}
-.card{background:var(--gray-000);border:1px solid var(--border);border-radius:var(--br-16);
-      padding:var(--sp-24);box-shadow:var(--shadow-md);}
-.card h3{font-size:var(--headline-5);line-height:1.2;margin-bottom:var(--sp-12);}
-.card .kicker{font-family:var(--font-mono);font-size:var(--micro);letter-spacing:.06em;
-              color:var(--clay-dark);text-transform:uppercase;margin-bottom:var(--sp-12);}
-.card p{color:var(--text-2);font-size:var(--body-3);}
-.card .list{margin-top:var(--sp-16);}
-.card .list li{position:relative;padding-left:18px;font-size:var(--body-3);color:var(--text-2);margin-bottom:8px;}
-.card .list li::before{content:"";position:absolute;left:2px;top:9px;width:5px;height:5px;
-                       border-radius:50%;background:var(--gray-400);}
-.check li::before{background:var(--ok) !important;}
-.theme-dark .card{background:var(--gray-750);border-color:var(--gray-750);color:var(--gray-050);}
-.theme-dark .card p,.theme-dark .card .list li{color:var(--gray-400);}
-.theme-dark .card h3{color:var(--gray-050);}
-
-/* ============================ 紧凑区块 ============================ */
-.compact-section{padding-block:var(--sp-64);}
-.compact-card{padding:var(--sp-20);box-shadow:none;}
-.compact-card h3{margin-bottom:var(--sp-8);}
-.trust-compact{display:grid;gap:var(--sp-32);align-items:start;}
-@media (min-width:900px){.trust-compact{grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:var(--sp-64);}}
-.trust-points{display:grid;gap:var(--sp-16);}
-.trust-points p{display:grid;gap:4px;padding-bottom:var(--sp-16);border-bottom:1px solid var(--gray-750);}
-.trust-points p:last-child{padding-bottom:0;border-bottom:0;}
-.trust-points strong{font-size:var(--body-2);color:var(--gray-050);}
-.trust-points span{font-size:var(--caption);color:var(--gray-400);}
-
-/* ============================ 标签页 + 卡片（对应套餐区） ============================ */
-.tabs-wrap{display:flex;justify-content:center;margin-bottom:var(--sp-32);}
-.tablist{position:relative;display:inline-flex;background:var(--gray-150);border-radius:999px;padding:4px;}
-.tablist button{position:relative;z-index:1;border:0;background:transparent;color:var(--text-2);
-                padding:9px 20px;border-radius:999px;font-size:var(--body-3);}
-.tablist button[aria-selected="true"]{color:var(--text);font-weight:500;}
-.tabpanel{display:none;}
-.tabpanel.active{display:block;animation:fadeUp .4s var(--ease-out-power2) both;}
-@keyframes fadeUp{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
-.scene-card{display:flex;flex-direction:column;height:100%;}
-.scene-card .who{font-family:var(--font-mono);font-size:var(--micro);color:var(--text-3);margin-bottom:6px;}
-.scene-card .pitch{font-size:var(--body-3);color:var(--text-2);margin-bottom:var(--sp-16);}
-.scene-card.featured{border-color:var(--clay);box-shadow:0 0 0 1px var(--clay),var(--shadow-md);}
-.scene-card .flag{display:inline-block;font-size:var(--micro);color:var(--clay-dark);
-                  background:rgba(217,119,87,.12);border-radius:999px;padding:2px 10px;margin-bottom:var(--sp-12);}
-.scene-card .cta{margin-top:auto;padding-top:var(--sp-20);}
-
-/* ============================ 评测数字 ============================ */
-.metric{background:var(--gray-000);border:1px solid var(--border);border-radius:var(--br-16);
-        padding:var(--sp-24);}
-.metric .v{font-family:var(--font-display);font-size:var(--headline-1);line-height:1.1;}
-.metric .k{font-size:var(--body-3);margin-top:8px;}
-.metric .s{font-size:var(--caption);color:var(--text-3);margin-top:6px;}
-
-/* ============================ FAQ ============================ */
-.faq{max-width:var(--container);margin:0 auto;border-top:1px solid var(--border);}
-.faq-item{border-bottom:1px solid var(--border);}
-.faq-trigger{width:100%;display:flex;align-items:center;justify-content:space-between;gap:var(--sp-16);
-             background:transparent;border:0;padding:var(--sp-24) 0;text-align:left;}
-.faq-trigger h3{font-size:var(--headline-5);}
-.faq-trigger .plus{position:relative;width:16px;height:16px;flex:0 0 16px;}
-.faq-trigger .plus::before,.faq-trigger .plus::after{content:"";position:absolute;background:var(--text-2);
-             transition:transform .25s var(--ease-out-power2),opacity .2s;}
-.faq-trigger .plus::before{left:0;right:0;top:7px;height:1.5px;}
-.faq-trigger .plus::after{top:0;bottom:0;left:7px;width:1.5px;}
-.faq-item.open .plus::after{transform:scaleY(0);opacity:0;}
-.faq-content{max-width:74ch;color:var(--text-2);font-size:var(--body-3);
-             padding-bottom:var(--sp-24);}
-.faq-content p+p{margin-top:var(--sp-12);}
-
-/* ============================ 页脚 ============================ */
-.footer{background:var(--gray-950);color:var(--gray-050);padding-block:var(--sp-64) var(--sp-32);}
-.footer .top{display:grid;gap:var(--sp-32);}
-@media (min-width:900px){.footer .top{grid-template-columns:1.3fr 2fr;gap:var(--sp-64);}}
-.footer .brand .name{color:var(--gray-050);}
-.footer .tagline{color:var(--gray-400);font-size:var(--body-3);margin-top:var(--sp-16);max-width:40ch;}
-.footer .enter{display:flex;gap:var(--sp-12);flex-wrap:wrap;margin-top:var(--sp-24);}
-.footer .cols{display:grid;gap:var(--sp-24);grid-template-columns:1fr 1fr;}
-@media (min-width:700px){.footer .cols{grid-template-columns:repeat(4,1fr);}}
-.footer h4{font-family:var(--font-sans);font-size:var(--label);letter-spacing:.06em;text-transform:uppercase;
-           color:var(--gray-500);font-weight:500;margin-bottom:var(--sp-12);}
-.footer li{margin-bottom:8px;}
-.footer li a,.footer li span{font-size:var(--caption);color:var(--gray-400);}
-.footer li a:hover{color:var(--gray-050);}
-.footer .bottom{margin-top:var(--sp-48);padding-top:var(--sp-24);border-top:1px solid var(--gray-750);
-                display:flex;flex-wrap:wrap;gap:var(--sp-16);justify-content:space-between;align-items:center;}
-.footer .bottom p{font-size:var(--micro);color:var(--gray-500);max-width:70ch;}
-.footer .legal-line{margin-top:var(--sp-12);font-size:var(--micro);color:var(--gray-500);}
-.footer-compact{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-32);}
-.footer-compact .tagline{margin-top:var(--sp-8);}
-.footer-bottom{margin-top:var(--sp-32);padding-top:var(--sp-20);border-top:1px solid var(--gray-750);}
-.footer-bottom p{font-size:var(--micro);color:var(--gray-500);}
-@media (max-width:720px){
-  .nav-inner{gap:var(--sp-12);}
-  .nav-right{gap:var(--sp-8);}
-  .home-entry .btn{min-height:44px;padding:7px 10px;font-size:var(--caption);white-space:nowrap;flex:0 0 auto;}
-  .home-entry .btn-sand{display:none;}
-  .footer-compact{display:grid;gap:var(--sp-20);}
-  .footer-compact .enter{margin-top:0;}
-}
-@media (prefers-reduced-motion:reduce){.evidence-canvas::before{animation:none;}}
 </style>
 </head>
 <body>
-
 <a class="skip" href="#main">跳转到主要内容</a>
-
-<!-- ===================== 顶栏 ===================== -->
 <header class="nav" id="nav">
   <div class="container nav-inner">
-    <a class="brand" href="#homeHero" aria-label="多学科就医智助系统 首页">
-      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
-        <rect x="1" y="1" width="26" height="26" rx="8" fill="#141413"/>
-        <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.2" stroke-linecap="round"/>
-        <circle cx="14" cy="14" r="3.2" fill="#faf9f5"/>
+    <a class="brand" href="#homeHero" aria-label="医序｜多学科就医信息协作平台 首页">
+      <svg width="32" height="32" viewBox="0 0 28 28" aria-hidden="true">
+        <rect x="1" y="1" width="26" height="26" rx="7" fill="#141413"/>
+        <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.6" stroke-linecap="round"/>
+        <circle cx="14" cy="14" r="2.7" fill="#faf9f5"/>
       </svg>
-      <span class="name">多学科就医智助系统</span>
+      <span class="name">医序</span>
     </a>
     <nav class="nav-right" aria-label="主导航">
-      <a class="nav-link" href="#flow">了解产品</a>
+      <div class="nav-links">
+        <a class="nav-link" href="#homeHero">了解产品</a>
+        <a class="nav-link" href="#flow">工作流程</a>
+        <a class="nav-link" href="#trust">医生把关</a>
+      </div>
       <div class="home-entry">
-        <button class="btn btn-clay" onclick="enterAs('patient')">进入患者端</button>
-        <button class="btn btn-sand" onclick="enterAs('doctor')">进入医生工作台</button>
+        <button class="btn btn-plain" type="button" onclick="enterAs('doctor')">医生工作台</button>
+        <button class="btn btn-clay" type="button" onclick="enterAs('patient')">开始整理资料</button>
       </div>
     </nav>
   </div>
 </header>
 
 <main id="main">
-  <section class="section" id="homeHero">
-    <div class="container hero reveal">
-      <div>
-        <p class="eyebrow">就医信息整理 · 多学科决策协作</p>
-        <h1>把复杂资料，<br>变成清楚的下一步</h1>
-        <p class="sub">系统帮助患者整理就医资料、推演咨询方向，再由医生审核确认。每一步都有依据，分歧和缺口都会被保留下来。</p>
+  <section class="hero-section" id="homeHero" aria-labelledby="home-title">
+    <div class="container hero">
+      <div class="hero-copy">
+        <h1 id="home-title"><span>把复杂资料，</span><span>变成清楚的下一步。</span></h1>
+        <p class="sub"><span>整理就医资料、看清信息缺口，</span><span>把关键判断交给医生。</span></p>
         <div class="hero-form role-entries" aria-label="选择使用入口">
-          <button class="role-entry btn btn-clay" onclick="enterAs('patient')">进入患者端</button>
-          <button class="role-entry btn btn-sand" onclick="enterAs('doctor')">进入医生工作台</button>
+          <button class="role-entry btn btn-dark" type="button" onclick="enterAs('patient')">开始整理资料</button>
+          <button class="role-entry btn btn-outline" type="button" onclick="enterAs('doctor')">进入医生工作台</button>
         </div>
-        <p class="hero-boundary">不提供诊断或处方，不替代医生判断；急症请立即就医。</p>
       </div>
-
-      <div class="evidence-canvas" aria-labelledby="canvas-title">
-        <div class="evidence-canvas-title" id="canvas-title">清楚的下一步</div>
-        <div class="evidence-cards">
-          <article class="evidence-card"><span>01</span><strong>资料已整理</strong><p>把分散描述变成有出处的摘要</p></article>
-          <article class="evidence-card accent"><span>02</span><strong>缺口已标记</strong><p>明确还需要补充哪些信息</p></article>
-          <article class="evidence-card"><span>03</span><strong>需要医生确认</strong><p>把建议与最终判断分开呈现</p></article>
-        </div>
-        <p class="evidence-canvas-note">AI 负责整理与提示，最终判断权留给医生。</p>
-      </div>
+      <figure class="hero-art">
+        <img src="/static/images/home-care-collaboration.png" alt="患者的症状描述、既往病历和检查记录汇聚成就医资料，再交给医生核对" width="2172" height="724" fetchpriority="high" decoding="async">
+        <figcaption>资料有序，判断有据。</figcaption>
+      </figure>
     </div>
   </section>
 
-  <section class="section compact-section" id="flow" style="background:var(--gray-100);">
+  <section class="section" id="flow" aria-labelledby="flow-title">
     <div class="container">
-      <div class="section-head reveal">
-        <p class="eyebrow">它解决什么问题</p>
-        <h2 class="h2">三件事，让就医准备更清楚</h2>
+      <div class="section-head">
+        <h2 class="h2" id="flow-title">从资料准备，到医生确认。</h2>
+        <p class="lede">患者整理信息，医生逐条审核，保留每一步的依据。</p>
       </div>
-      <div class="grid grid-3 reveal">
-        <div class="card compact-card"><h3>整理资料</h3><p>把散乱的描述整理成有出处的病例摘要，缺少什么也会明确列出。</p></div>
-        <div class="card compact-card"><h3>辅助分流</h3><p>结合规则和受限模型，给出牵头方向与协同科室，并说明依据。</p></div>
-        <div class="card compact-card"><h3>医生把关</h3><p>医生逐条审核关键内容，修改、驳回和分歧都会留下记录。</p></div>
-      </div>
+      <ol class="product-steps" aria-label="就医资料处理流程">
+        <li>
+          <div class="step-heading"><span class="step-number" aria-hidden="true">01</span></div>
+          <h3>资料已整理</h3>
+          <p>把分散描述整理成有出处的病例摘要，辅助推演牵头方向与协同科室。</p>
+        </li>
+        <li>
+          <div class="step-heading"><span class="step-number" aria-hidden="true">02</span></div>
+          <h3>缺口已标记</h3>
+          <p>明确需要补充的信息和待确认问题，保留依据与分歧，方便继续准备。</p>
+        </li>
+        <li>
+          <div class="step-heading"><span class="step-number" aria-hidden="true">03</span></div>
+          <h3>需要医生确认</h3>
+          <p>建议与最终判断分开呈现，医生逐条审核关键内容，修改与驳回留下记录。</p>
+        </li>
+      </ol>
+      <p class="product-flow-note">AI 负责整理与提示，最终判断权留给医生。</p>
     </div>
   </section>
 
-  <section class="section theme-dark compact-section" id="trust">
+  <section class="trust-section" id="trust" aria-labelledby="trust-title">
     <div class="container trust-compact">
-      <div class="section-head reveal">
-        <p class="eyebrow">安全边界</p>
-        <h2 class="h2">把判断权留给医生</h2>
+      <div class="trust-copy">
+        <h2 class="h2" id="trust-title"><span>把判断权，</span><span>留给医生。</span></h2>
+        <p class="lede">AI 整理与提示，医生作出专业判断。</p>
       </div>
-      <div class="trust-points reveal">
-        <p><strong>不出诊断，不出处方</strong><span>只整理资料、提示方向和待确认问题。</span></p>
-        <p><strong>AI 不覆盖医生</strong><span>医生意见与 AI 建议并列展示，分歧不会被强行合并。</span></p>
-        <p><strong>隐私先脱敏</strong><span>病例默认保存在本机，发送模型前先处理直接身份信息。</span></p>
-      </div>
+      <dl class="trust-points">
+        <div class="trust-point"><dt>不提供诊断或处方</dt><dd>只整理资料、提示方向和待确认问题，不替代医生面诊。</dd></div>
+        <div class="trust-point"><dt>建议与意见分开呈现</dt><dd>医生意见与 AI 建议并列展示，保留信息缺口与分歧，供医生核对。</dd></div>
+        <div class="trust-point"><dt>审核过程留有记录</dt><dd>关键内容由医生确认后发布，修改与驳回保留审核记录。</dd></div>
+        <div class="trust-point"><dt>隐私先脱敏</dt><dd>病例默认保存在本机，发送外部模型前先处理直接身份信息。</dd></div>
+      </dl>
     </div>
   </section>
 </main>
 
-<!-- ===================== 页脚 ===================== -->
 <footer class="footer">
-  <div class="container footer-compact">
-    <div>
-      <div class="brand">
-        <svg width="26" height="26" viewBox="0 0 28 28" aria-hidden="true">
-          <rect x="1" y="1" width="26" height="26" rx="8" fill="#30302e"/>
-          <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.2" stroke-linecap="round"/>
-          <circle cx="14" cy="14" r="3.2" fill="#faf9f5"/>
-        </svg>
-        <span class="name">多学科就医智助系统</span>
+  <div class="container">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <a class="brand" href="#homeHero" aria-label="医序首页">
+          <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+            <rect x="1" y="1" width="26" height="26" rx="7" fill="#141413"/>
+            <path d="M14 7.5v13M7.5 14h13" stroke="#d97757" stroke-width="2.6" stroke-linecap="round"/>
+            <circle cx="14" cy="14" r="2.7" fill="#faf9f5"/>
+          </svg>
+          <span class="name">医序</span>
+        </a>
+        <p class="tagline">整理资料，让下一步更清楚。</p>
       </div>
-      <p class="tagline">整理资料，推演方向，如实呈现不确定性。</p>
+      <div class="footer-entries" aria-label="角色入口">
+        <a href="/patient">我是患者</a>
+        <a href="/doctor">我是医生</a>
+      </div>
     </div>
-    <div class="enter">
-      <button class="btn btn-clay" onclick="enterAs('patient')">开始整理资料</button>
+    <div class="footer-bottom">
+      <p>本系统提供就医信息整理与决策辅助，不提供诊断或处方，不能替代医生面诊与专业判断；出现急症请立即就医。</p>
     </div>
-  </div>
-  <div class="container footer-bottom">
-    <p>本系统提供就医信息整理与决策辅助，不提供诊断或处方，不能替代医生面诊与专业判断；出现急症请立即就医。</p>
   </div>
 </footer>
-
 <script>
-/* ============================================================
-   交互 shim（零依赖原生 JS）
-   1) 滚动揭示  2) 顶栏滚动态  3) 一键进入工作台
-   ============================================================ */
-(function () {
+(function(){
   'use strict';
-
-  /* 先标记脚本增强状态；脚本失败时 .reveal 内容保持默认可见。 */
-  document.documentElement.classList.add('js-ready');
-
-  /* ---------- 1. 滚动揭示（IntersectionObserver + 4s 安全网） ---------- */
-  var revealEls = [].slice.call(document.querySelectorAll('.reveal'));
-  revealEls.forEach(function (el) {
-    [].slice.call(el.children).forEach(function (child, i) {
-      child.style.setProperty('--reveal-index', i);
-    });
-  });
-  function reveal(el) { el.classList.add('revealed'); }
-  if ('IntersectionObserver' in window) {
-    var io = new IntersectionObserver(function (entries) {
-      entries.forEach(function (e) {
-        if (e.isIntersecting) { reveal(e.target); io.unobserve(e.target); }
-      });
-    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.01 });
-    revealEls.forEach(function (el) { io.observe(el); });
-    setTimeout(function () { revealEls.forEach(reveal); }, 4000);   // 安全网：不让内容永久隐藏
-    window.addEventListener('load', function () {
-      revealEls.forEach(function (el) {
-        var r = el.getBoundingClientRect();
-        if (r.top < window.innerHeight && r.bottom > 0) reveal(el);
-      });
-    });
-  } else {
-    revealEls.forEach(reveal);
-  }
-
-  /* ---------- 2. 顶栏滚动态 ---------- */
-  var nav = document.getElementById('nav');
-  function onScroll() { if (nav) nav.classList.toggle('scrolled', window.scrollY > 8); }
-  window.addEventListener('scroll', onScroll, { passive: true });
+  var nav=document.getElementById('nav');
+  function onScroll(){nav.classList.toggle('scrolled',window.scrollY>8);}
+  window.addEventListener('scroll',onScroll,{passive:true});
   onScroll();
-
 })();
-
-/* ============================================================
-   角色入口
-   ============================================================ */
-function goTo(role) { location.href = (role === 'doctor') ? '/doctor' : '/patient'; }
-
-function enterAs(role) {
-  goTo(role);
-}
+function goTo(role){location.href=(role==='doctor')?'/doctor':'/patient';}
+function enterAs(role){goTo(role);}
 </script>
 </body>
 </html>

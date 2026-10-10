@@ -1,0 +1,444 @@
+/*
+ * 医序工作台：登录后的患者、医生操作界面。
+ * 单独挂在 screen media，避免影响首页、登录页和打印版式。
+ */
+@media screen {
+  #app {
+    --workbench-line: #e8e6dc;
+    --workbench-soft: #f5f3ed;
+    --workbench-ink: #141413;
+    --workbench-muted: #625f58;
+    font-family: var(--font-sans);
+  }
+
+  /* 标题只给默认值：用 :where() 把特异性降到元素级，组件自己的标题间距（卡片、分区）优先生效。 */
+  :where(#app) :is(h1, h2, h3, h4) {
+    font-family: var(--font-sans);
+    font-weight: 700;
+    letter-spacing: -.02em;
+  }
+  :where(#app) h1 { font-size: 28px; line-height: 1.3; }
+  :where(#app) h2 { font-size: 24px; line-height: 1.35; margin-bottom: 16px; }
+  :where(#app) h3 { font-size: 18px; line-height: 1.4; margin-top: 28px; margin-bottom: 12px; }
+  #app .muted { font-size: 14px; line-height: 1.65; }
+  #app .tiny, #app .source-ref { font-size: 13px; line-height: 1.6; }
+
+  #app .appbar { background: #fff; backdrop-filter: none; }
+  #app .appbar-inner { min-height: 72px; padding-inline: 32px; }
+  #app .ab-brand .name { font-family: var(--font-sans); font-size: 21px; font-weight: 800; letter-spacing: -.03em; }
+  #app .tag { padding: 3px 10px; font-size: 12px; }
+  #app .card { padding: 28px; border-color: var(--workbench-line); border-radius: 12px; box-shadow: none; }
+  #app .work { gap: 24px; }
+  #app button { min-height: 44px; border-radius: 8px; box-shadow: none; font-size: 14px; }
+  #app button.primary { background: var(--workbench-ink); border-color: var(--workbench-ink); color: #fff; }
+  #app button.primary:hover:not(:disabled) { background: #34332f; border-color: #34332f; }
+  #app input:not([type=checkbox]):not([type=radio]), #app select { min-height: 48px; border-radius: 8px; border-color: #c9c5ba; font-size: 16px; }
+  #app textarea { border-radius: 8px; border-color: #c9c5ba; font-size: 16px; line-height: 1.75; }
+  #app :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+  #app ::selection { background: var(--oat); color: var(--workbench-ink); }
+
+  /* 患者端：流程导航和录入区 */
+  #app .patient-shell { grid-template-columns: 220px minmax(0, 1fr); gap: 32px; padding: 32px; }
+  #app .patient-shell .work { width: 100%; max-width: 1040px; }
+  #app .patient-shell .steps .step { min-height: 48px; border-radius: 8px; }
+  #app .patient-shell .steps .step.active { background: #fff; border-color: #c9c5ba; box-shadow: none; font-weight: 700; }
+  #app .patient-shell .steps .step .step-t { font-size: 14px; }
+  #app .patient-record-entry { margin-top: 8px; }
+  #app .patient-record-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  #app .patient-record-actions button { width: 100%; background: transparent; color: var(--workbench-ink); border: 1px solid #c9c5ba; }
+  #app .patient-record-actions #new-case-btn { background: var(--workbench-ink); color: #fff; border-color: var(--workbench-ink); }
+  #app .stage-heading { margin-bottom: 24px; }
+  #app .intake-focus { padding: 0 0 24px; background: none; border: 0; border-bottom: 1px solid var(--workbench-line); border-radius: 0; }
+  #app .intake-focus label { display: block; margin-bottom: 10px; font-size: 15px; font-weight: 700; color: var(--workbench-ink); }
+  #app #s-intake > .row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; background: var(--workbench-soft); border-radius: 10px; }
+  #app #s-intake > .row button { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--workbench-muted); }
+  #app #s-intake > .row button.primary { background: #fff; color: var(--workbench-ink); font-weight: 700; }
+  #app #history { min-height: 220px; padding: 16px; }
+  #app #s-stage1 .actions { margin-top: 24px; }
+  #app #s-stage1 .actions .primary { padding-inline: 24px; }
+
+  /* 患者病例列表：主诉优先，元信息退到第二层 */
+  #app .patient-record-card { padding: 20px 0; border: 0; border-bottom: 1px solid var(--workbench-line); border-radius: 0; background: transparent; }
+  #app .patient-record-card:hover { background: var(--gray-050); }
+  #app .patient-record-card > .inline-between > strong { font-size: 18px; line-height: 1.45; }
+  #app .patient-record-meta { gap: 8px 16px; margin-top: 8px; }
+  #app .patient-record-card .actions { gap: 12px; }
+  #app .patient-record-card .actions .primary { min-width: 100px; }
+  #app .patient-record-card .actions .ghost { border: 0; color: var(--accent); }
+  #app .patient-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  #app .patient-record-event { padding: 16px 0; border-bottom: 1px solid var(--workbench-line); }
+
+  /* 医生队列：桌面保留真实五列，统计条只做文字分组 */
+  #app .queue-summary { padding: 12px 0 20px; border: 0; background: none; }
+  #app .queue-tier-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+  #app .queue-tier-stat { gap: 8px; padding: 0; border: 0; background: none; }
+  #app .queue-tier-stat strong { font-size: 15px; }
+  #app .queue-table { border: 0; border-radius: 0; overflow: visible; }
+  #app .queue-head { padding-block: 12px; background: var(--workbench-soft); font-size: 13px; }
+  #app .queue-row { padding-block: 18px; box-shadow: none; }
+  #app .queue-row:hover { background: var(--gray-050); box-shadow: none; }
+  #app .q-main .muted { font-size: 15px; }
+  #app .queue-toolbar { gap: 10px; }
+
+  /* 医生病例：事实、来源和待判断内容用分区与细线区分 */
+  #app .doctor-case-context-strip { border: 0; border-radius: 0; background: none; }
+  #app .doctor-card-info, #app .doctor-card-accent { margin: 24px 0; padding: 24px 0; border: 0; border-top: 1px solid var(--workbench-line); border-radius: 0; box-shadow: none; }
+  #app .overview-raw-record { margin-top: 24px; overflow: hidden; border: 1px solid var(--workbench-line); border-radius: 12px; background: #fff; }
+  #app .overview-raw-record-summary { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 14px 18px; list-style: none; cursor: pointer; background: var(--workbench-soft); }
+  #app .overview-raw-record-summary::-webkit-details-marker { display: none; }
+  #app .overview-raw-record-summary:hover { background: #efede6; }
+  #app .overview-raw-record-summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -3px; }
+  #app .overview-raw-record-title { color: var(--workbench-ink); font-size: 16px; font-weight: 700; }
+  #app .overview-raw-record-meta { margin-left: auto; color: var(--workbench-muted); font-size: 13px; }
+  #app .overview-raw-record-chevron { width: 9px; height: 9px; flex: 0 0 auto; border-right: 1.5px solid var(--workbench-muted); border-bottom: 1.5px solid var(--workbench-muted); transform: rotate(45deg) translateY(-2px); transition: transform .18s ease; }
+  #app .overview-raw-record[open] .overview-raw-record-chevron { transform: rotate(225deg) translate(-1px, -1px); }
+  #app .overview-raw-record-copy { padding: 18px 20px 20px; color: var(--workbench-ink); font-size: 15px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #app .mdt-ai-boundary { padding: 12px 16px; border: 0; border-radius: 8px; background: var(--workbench-soft); font-size: 14px; }
+  #app .mdt-specialty-card { padding: 20px 0; border: 0; border-top: 1px solid var(--workbench-line); border-radius: 0; }
+  #app .mdt-specialty-focus { border-radius: 8px; background: var(--workbench-soft); }
+  #app .mdt-specialty-sections { gap: 16px; }
+  #app .mdt-specialty-section { padding-top: 16px; }
+  #app .history-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--workbench-line); }
+  #app .report-detail-list { display: grid; gap: 10px; }
+  #app .report-detail-list .sec { margin: 0; }
+  #app .triage-confirmation-card, #app .mdt-formal-route, #app .mdt-formal-record { border-color: var(--workbench-line); box-shadow: none; }
+  #app .triage-secondary-option { min-height: 44px; align-items: center; }
+  #app .triage-secondary-option input { width: 18px; height: 18px; }
+  #app .doctor-workflow-nav { margin: 28px 0 0; padding: 20px 0; }
+  #app .doctor-workflow-nav .actions { gap: 12px; }
+
+  /* 审核：把分类、前置条件、预览和最终建议拉开层级 */
+  #app .review-category-card { min-height: 0; padding: 20px; border-radius: 8px; box-shadow: none; }
+  #app .review-category-card:hover { box-shadow: none; }
+  #app .review-category-card-title { font-size: 17px; }
+  #app .review-category-card-count { font-size: 24px; }
+  #app .review-category-card-meta { font-size: 14px; }
+  #app .review-category-card button.primary, #app #s-review .doctor-workflow-nav button.primary { background: transparent; border-color: #c9c5ba; color: var(--workbench-ink); }
+  #app .publish-summary-stat { padding: 8px 12px; border: 0; border-right: 1px solid var(--workbench-line); border-radius: 0; background: none; }
+  #app .publish-summary-stat:last-child { border-right: 0; }
+  #app .publish-summary-stat strong { font-size: 22px; }
+  #app .banner { font-size: 14px; line-height: 1.65; }
+
+  /* 病例详情桌面使用页面滚动，避免长报告被嵌套滚动框截断。 */
+  @media (min-width: 961px) {
+    body.doctor-case-mode { overflow: auto; }
+    #app #doctor-shell.has-case { height: auto; min-height: calc(100vh - 72px); overflow: visible; padding-bottom: 40px; }
+    #app #doctor-shell.has-case .work, #app #doctor-shell.has-case .doctor-case-main { max-height: none; overflow: visible; padding-right: 0; }
+    #app #doctor-shell.has-case .doctor-case-nav { position: sticky; top: 88px; max-height: none; overflow: visible; }
+  }
+
+  /* 手机队列以主诉为主线：病例号、主诉、风险/状态、更新时间各自占明确行。 */
+  @media (max-width: 960px) {
+    #app .patient-shell { grid-template-columns: minmax(0, 1fr); gap: 20px; padding: 20px; }
+    #app .patient-shell .rail-left { padding: 0; border: 0; background: none; box-shadow: none; gap: 10px; }
+    #app .patient-shell .rail-title { display: none; }
+    #app .patient-shell #steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; overflow: visible; }
+    #app .patient-shell #steps .step { min-width: 0; min-height: 44px; margin: 0; padding: 8px 10px; }
+    #app .patient-shell .rail-foot { margin: 0; padding: 0; border: 0; }
+    #app .patient-shell .rail-foot .progress { display: none; }
+    #app .doctor-case-nav { display: flex; flex-direction: row; flex-wrap: nowrap; gap: 6px; overflow-x: auto; padding: 8px 0; border: 0; }
+    #app .doctor-case-nav .nav-link { flex: 0 0 auto; width: auto; white-space: nowrap; }
+  }
+  @media (max-width: 1100px) {
+    #app .queue-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #app .queue-row > div::before { flex: 0 0 70px; font-size: 13px; }
+  }
+  @media (max-width: 760px) {
+    #app .appbar-inner { min-height: 64px; padding: 10px 16px; gap: 10px; }
+    #app .ab-brand .name { font-size: 20px; }
+    #app .card { padding: 20px; }
+    :where(#app) :is(h1, h2) { font-size: 24px; }
+    #app .shell { padding: 16px; gap: 16px; }
+    #app #history { min-height: 180px; }
+    #app #s-stage1 .actions .primary { width: 100%; }
+    #app .patient-record-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #app .queue-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    #app .queue-toolbar select { width: 100% !important; min-width: 0; font-size: 13px; }
+    #app #f-sort { grid-column: 1 / -1; width: 100% !important; }
+    #app .queue-head { display: none; }
+    #app .queue-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; padding: 18px 0; align-items: start; }
+    #app .queue-row > div { display: block; min-width: 0; overflow-wrap: anywhere; }
+    #app .queue-row > div::before { display: none; }
+    #app .queue-row > .q-id { grid-column: 1 / -1; font-size: 13px; font-weight: 500; color: var(--workbench-muted); }
+    #app .queue-row > .q-id .tiny { display: inline; margin-left: 10px; font-size: 12px; }
+    #app .queue-row > .q-main { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+    #app .queue-row > .q-main strong { font-size: 16px; }
+    #app .queue-row > .q-main .muted { flex: 1 1 220px; min-width: 0; white-space: normal; overflow: visible; font-size: 15px; }
+    #app .queue-row > [data-label="风险"], #app .queue-row > [data-label="处理状态"] { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    #app .queue-row > [data-label="风险"]::before, #app .queue-row > [data-label="处理状态"]::before { display: block; content: attr(data-label); flex: none; font-size: 12px; font-weight: 400; }
+    #app .queue-row > [data-label="更新"] { grid-column: 1 / -1; font-size: 12px; }
+    #app .queue-tier-summary { gap: 8px 16px; }
+    #app .doctor-case-header { gap: 12px; }
+    #app .doctor-case-context-strip { padding: 0; font-size: 13px; }
+    #app .back-to-queue { align-self: flex-start; }
+    #app .doctor-card-info, #app .doctor-card-accent { padding: 20px 0; }
+    #app .overview-raw-record-summary { align-items: flex-start; flex-wrap: wrap; padding: 14px 16px; }
+    #app .overview-raw-record-meta { margin-left: 0; }
+    #app .overview-raw-record-chevron { margin-left: auto; }
+    #app .overview-raw-record-copy { padding: 16px; }
+    #app .patient-record-meta { font-size: 13px; }
+    #app .patient-history-heading { align-items: flex-start; flex-direction: column; }
+  }
+  @media (max-width: 420px) {
+    #app .card { padding: 16px; }
+    #app .patient-shell { padding-inline: 12px; }
+    #app .patient-record-actions { grid-template-columns: 1fr; }
+    #app .patient-record-actions button { width: 100%; }
+  }
+  /* ---------------------------------------------------------------------------
+     细节统一（2026-10-10）：沿用首页 / 登录页的克制做法——白底细线分区、黑色主按钮、
+     陶土色只用于“当前位置”和“需要处理”的少量提示；去掉装饰性渐变、表情符号和
+     等高拉伸造成的大块留白。
+     --------------------------------------------------------------------------- */
+
+  /* 顶栏：账号信息过长时省略，退出按钮不换行 */
+  #app .ab-right .ident { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #app .ab-right button { flex: none; white-space: nowrap; }
+
+  /* 患者 · 核对资料：画像卡按内容高度排列，值从左边起，不再空出一列标签位 */
+  #app .prof-grid { align-items: start; }
+  #app .prof-block { padding: 18px 20px; background: #fff; border-color: var(--workbench-line); }
+  #app .prof-block .rt { margin-bottom: 4px; color: var(--workbench-ink); font-size: 15px; font-weight: 700; }
+  #app .prof-line { display: flex; align-items: baseline; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--workbench-line); }
+  #app .prof-line:last-child { border-bottom: 0; padding-bottom: 0; }
+  #app .prof-line-label { flex: 0 0 auto; }
+  #app .prof-line-value { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  #app .prof-line .ref { flex: none; color: var(--workbench-muted); border-color: var(--workbench-line); background: var(--gray-050); }
+  #app .gap-note { margin: -4px 0 12px; }
+  #app .gap-grid { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  #app .gap-grid .gap { margin: 0; padding: 5px 12px; border: 1px solid #e8dcc4; border-radius: 999px; background: #fbf7ef; color: #6d5221; font-size: 13px; line-height: 1.5; }
+
+  /* 患者 · 查看建议：牵头科室用细线卡片；入口卡左对齐 */
+  #app .triage-primary { padding: 18px 20px; border: 1px solid var(--workbench-line); border-left: 3px solid var(--accent); border-radius: 10px; background: #fff; }
+  #app .triage-primary-label { font-size: 14px; }
+  #app .stage3-secondary { border-color: var(--workbench-line); border-radius: 10px; }
+  #app .stage3-secondary .rt { color: var(--workbench-ink); font-weight: 700; }
+  #app .card .stage3-link-card { justify-content: space-between; padding: 18px 20px; border-color: var(--workbench-line); border-radius: 10px; text-align: left; }
+  #app .card .stage3-link-card:hover { transform: none; box-shadow: none; border-color: #c9c5ba; background: var(--gray-050); }
+  #app .stage3-link-card strong { font-size: 16px; }
+
+  /* 患者 · 医生结果与就诊准备资料 */
+  #app #s-report > .col { padding: 20px 22px; border-color: var(--workbench-line); }
+  #app #s-report > .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; max-width: 420px; padding: 4px; background: var(--workbench-soft); border-radius: 10px; }
+  #app #s-report > .row button { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--workbench-muted); }
+  #app #s-report > .row button.primary { background: #fff; color: var(--workbench-ink); font-weight: 700; }
+  #app .summary-hero { padding: 4px 0 14px; border: 0; border-bottom: 1px solid var(--workbench-line); border-radius: 0; background: none; }
+  #app .summary-hero-title { font-family: var(--font-sans); font-size: 18px; font-weight: 700; }
+  #app .report-summary-layout { align-items: start; }
+  #app .summary-card { padding: 18px 20px; border-color: var(--workbench-line); border-radius: 10px; }
+  #app .summary-card h3 { margin: 0 0 10px; color: var(--workbench-ink); font-size: 15px; }
+
+  /* 医生 · 队列：一行一例；“查看详情”固定在行尾，展开后详情面板占满整行、贴在该行下方 */
+  #app .queue-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; transition: background .15s ease; }
+  #app .queue-entry > .queue-row { padding-block: 16px; }
+  #app .queue-entry.is-open { background: var(--gray-050); }
+  #app .queue-entry.is-open > .queue-row:hover { background: transparent; }
+  #app .queue-detail-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-width: 104px; min-height: 36px; margin-right: 16px; padding: 0 12px; border: 1px solid var(--workbench-line); border-radius: 8px; background: #fff; color: var(--workbench-muted); font-size: 13px; white-space: nowrap; cursor: pointer; }
+  #app .queue-detail-toggle:hover, #app .queue-detail-toggle[aria-expanded="true"] { border-color: #c9c5ba; color: var(--workbench-ink); }
+  #app .queue-detail-chevron { width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform .18s ease; }
+  #app .queue-detail-toggle[aria-expanded="true"] .queue-detail-chevron { transform: translateY(1px) rotate(225deg); }
+  #app .queue-entry > .queue-details { grid-column: 1 / -1; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin: 0 16px 16px; padding: 16px 20px; border: 1px solid var(--workbench-line); border-radius: 10px; background: #fff; }
+  #app .queue-entry > .queue-details[hidden] { display: none; }
+  #app .queue-detail-grid { display: flex; flex-wrap: wrap; gap: 14px 40px; margin: 0; min-width: 0; }
+  #app .queue-detail-grid > div { min-width: 0; }
+  #app .queue-detail-grid > .full { flex-basis: 100%; }
+  #app .queue-detail-grid dt { margin: 0 0 6px; color: var(--workbench-muted); font-size: 12px; }
+  #app .queue-detail-grid dd { display: flex; align-items: center; gap: 6px; min-height: 26px; margin: 0; color: var(--workbench-ink); font-size: 15px; font-weight: 600; }
+  #app .queue-detail-grid dd .pill { font-size: 12px; font-weight: 500; }
+  #app .queue-detail-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  #app .queue-detail-dot.warn { background: var(--warn); }
+  #app .queue-detail-dot.danger { background: var(--danger); }
+  #app .queue-detail-counts { gap: 18px !important; font-weight: 400 !important; }
+  #app .queue-detail-counts span { display: inline-flex; align-items: baseline; gap: 4px; color: var(--workbench-muted); font-size: 13px; }
+  #app .queue-detail-counts strong { color: var(--workbench-ink); font-size: 17px; font-weight: 700; }
+  #app .queue-detail-flags span { padding: 2px 10px; border-radius: 999px; background: rgba(179,64,46,.08); color: var(--danger); font-size: 13px; font-weight: 500; }
+  #app .queue-detail-grid > .full dd { display: block; font-size: 14px; font-weight: 400; color: var(--warn); }
+  #app .queue-detail-open { flex: none; min-height: 36px; padding: 0 16px; border: 1px solid var(--workbench-ink); border-radius: 8px; background: var(--workbench-ink); color: #fff; font-size: 13px; cursor: pointer; }
+  #app .queue-detail-open:hover { background: #34332f; }
+
+  /* 医生 · 病例摘要：状态改成一条信息栏，资料用细线列表代替成片灰底卡片 */
+  #app .overview-status-summary { gap: 0; margin: 16px 0 8px; border: 1px solid var(--workbench-line); border-radius: 10px; }
+  #app .overview-status-card { padding: 12px 18px; border: 0; border-radius: 0; background: none; }
+  #app .overview-status-card + .overview-status-card { border-left: 1px solid var(--workbench-line); }
+  #app .overview-status-card .status-label { font-size: 13px; color: var(--workbench-muted); }
+  #app .overview-status-card .status-value { margin-top: 4px; font-size: 17px; }
+  #app .overview-status-card .pill { font-size: 13px; padding: 2px 10px; }
+  #app .overview-full-record-action { border-color: var(--workbench-line); background: var(--workbench-soft); color: var(--workbench-ink); font-weight: 700; }
+  #app .overview-full-record-action:hover { background: #efede6; }
+  #app .overview-fact-section { margin-top: 24px; }
+  #app .overview-fact-grid { gap: 0 28px; }
+  #app .overview-fact { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 4px 12px; padding: 10px 2px; border: 0; border-bottom: 1px solid var(--workbench-line); border-radius: 0; background: none; }
+  #app .overview-fact-source { margin: 0; padding: 0; border: 0; }
+  #app .overview-fact-source:empty { display: none; }
+  #app .overview-fact-source .source-ref { display: inline-block; width: auto; }
+  #app .overview-fact:has(.source-ref[open]) .overview-fact-source { grid-column: 1 / -1; }
+  #app .overview-fact:has(.source-ref[open]) .source-ref { display: block; width: 100%; }
+
+  /* 医生 · 分流确认：表单标签统一宽度，控件左缘对齐 */
+  #app #triage-doctor-confirmation .field { align-items: flex-start; }
+  #app #triage-doctor-confirmation .field > label:first-child,
+  #app #triage-doctor-confirmation .field > .muted:first-child,
+  #app #triage-doctor-confirmation .field > div:first-child:not(:only-child) { flex: 0 0 120px; padding-top: 12px; }
+  #app #triage-doctor-confirmation .field > .muted:first-child { padding-top: 0; }
+
+  /* 医生 · 审核卡：意见分行展示，操作与“查看详情”同一行 */
+  #app .review-decision-card { padding: 18px 20px; border-color: var(--workbench-line); border-radius: 10px; }
+  #app .review-card-summary { display: block; padding: 12px 14px; }
+  #app .review-card-source { display: block; margin: 0 0 4px; font-size: 12px; }
+  #app .review-card-lines p { margin: 0; line-height: 1.75; overflow-wrap: anywhere; }
+  #app .review-card-lines p + p { margin-top: 6px; }
+  #app .review-card-key { margin-right: 6px; color: var(--workbench-ink); font-weight: 700; }
+  #app .review-card-lines p.is-quiet { color: var(--workbench-muted); font-size: 14px; }
+  #app .review-card-actions { align-items: center; }
+  #app .review-card-actions .review-card-detail { margin-left: auto; }
+
+  /* 卡片、分区的第一个标题贴住容器顶边，不再继承页面级 28px 上边距 */
+  :where(#app) :where(section, article, .col, .item, .card, .banner) > :is(h3, h4):first-child { margin-top: 0; }
+  #app .triage-confirmation-card { padding: 20px 22px; background: #fff; }
+  #app #mdt-preparation-packet > h4 { margin: 28px 0 10px; font-size: 16px; }
+  #app .mdt-prep-question { border-left-color: var(--workbench-line); }
+  #app .queue-head { padding-right: 124px; }
+
+  @media (max-width: 760px) {
+    #app .ab-right .ident { max-width: 34vw; font-size: 13px; }
+    #app .prof-block { padding: 16px; }
+    #app .overview-status-card + .overview-status-card { border-left: 0; border-top: 1px solid var(--workbench-line); }
+    #app .queue-entry { display: block; }
+    #app .queue-entry.is-open { background: none; }
+    #app .queue-detail-toggle { margin: 0 0 14px; }
+    #app .queue-entry > .queue-details { flex-direction: column; align-items: stretch; gap: 16px; margin: 0 0 16px; padding: 14px 16px; }
+    #app .queue-detail-grid { gap: 14px 28px; }
+    #app .queue-detail-open { width: 100%; min-height: 44px; }
+    #app #triage-doctor-confirmation .field { flex-direction: column; gap: 6px; }
+    #app #triage-doctor-confirmation .field > label:first-child,
+    #app #triage-doctor-confirmation .field > div:first-child:not(:only-child) { flex: none; padding-top: 0; }
+    #app #triage-doctor-confirmation .field > select,
+    #app #triage-doctor-confirmation .field > input,
+    #app #triage-doctor-confirmation .field > textarea,
+    #app #triage-doctor-confirmation .field > div:last-child { width: 100%; }
+    #app .review-card-actions .review-card-detail { margin-left: 0; }
+    #app #s-report > .col { padding: 16px; }
+    #app .doctor-result-report .final-report { padding: 20px 14px 16px; }
+  }
+
+  /* ---------------------------------------------------------------------------
+     流程导航与列表（2026-10-10）：患者端左轨改成竖向进度条（圆点 + 连线 + 状态说明），
+     “我的病历”按建档日期排成病历登记簿，医生队列改成标题区 + 统计条 + 细线表格。
+     --------------------------------------------------------------------------- */
+
+  /* 患者 · 就医流程：竖向进度，已完成为黑色对勾，当前步骤用陶土色 */
+  #app .patient-shell .rail-left { gap: 0; }
+  #app .patient-shell .rail-title { margin: 0 0 12px; padding: 0 10px; color: var(--workbench-ink); font-size: 13px; font-weight: 700; letter-spacing: 0; text-transform: none; }
+  #app .patient-shell .steps { gap: 0; }
+  #app .patient-shell .steps .step { position: relative; display: flex; align-items: flex-start; gap: 12px; min-height: 0; margin: 0; padding: 10px 10px 16px; border: 0; border-radius: 8px; background: none; box-shadow: none; color: var(--workbench-ink); font-weight: 400; text-decoration: none; }
+  #app .patient-shell .steps .step.active { border: 0; background: none; box-shadow: none; }
+  #app .patient-shell .steps .step:not(:last-child)::before { content: ""; position: absolute; left: 23px; top: 40px; bottom: -6px; width: 2px; border-radius: 1px; background: var(--workbench-line); }
+  #app .patient-shell .steps .step.done:not(:last-child)::before { background: var(--workbench-ink); }
+  #app .patient-shell .steps .step[onclick]:hover { background: var(--gray-100); }
+  #app .patient-shell .step-n { position: relative; z-index: 1; display: grid; flex: none; place-items: center; width: 28px; height: 28px; border: 1.5px solid #c9c5ba; border-radius: 50%; background: #fff; color: var(--workbench-muted); font-family: var(--font-sans); font-size: 13px; font-weight: 700; }
+  #app .patient-shell .step.done .step-n { border-color: var(--workbench-ink); background: var(--workbench-ink); color: transparent; }
+  #app .patient-shell .step.done .step-n::after { content: ""; position: absolute; top: 8px; left: 8px; width: 9px; height: 5px; border-left: 2px solid #fff; border-bottom: 2px solid #fff; transform: rotate(-45deg); }
+  #app .patient-shell .step.active .step-n { border-color: var(--accent); background: var(--accent); color: #fff; }
+  #app .patient-shell .step-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-top: 3px; }
+  #app .patient-shell .steps .step .step-t { overflow: visible; color: var(--workbench-ink); font-size: 15px; font-weight: 500; white-space: normal; }
+  #app .patient-shell .step.active .step-t { font-weight: 700; }
+  #app .patient-shell .step:not(.done):not(.active) .step-t { color: var(--workbench-muted); }
+  #app .patient-shell .step-s { color: var(--workbench-muted); font-size: 12px; }
+  #app .patient-shell .step.active .step-s { color: var(--accent); }
+  #app .patient-shell .rail-foot { margin: 4px 0 0; padding: 12px 10px 0; border-top: 1px solid var(--workbench-line); }
+  #app .patient-shell .rail-foot .progress { display: none; }
+  #app .patient-shell .rail-foot .tiny { color: var(--workbench-muted); font-size: 12px; }
+  #app .patient-shell .patient-record-entry { margin-top: 16px; padding: 0 10px; }
+  #app .patient-shell .patient-record-actions { grid-template-columns: 1fr; }
+
+  /* 患者 · 我的病历：左侧建档日期，中间主诉与进度，右侧操作 */
+  #app .patient-record-list { border-top: 1px solid var(--workbench-line); }
+  #app .patient-record-card { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; column-gap: 22px; align-items: center; padding: 20px 4px; border-bottom: 1px solid var(--workbench-line); }
+  #app .patient-record-card:hover { background: #fff; }
+  #app .patient-record-date { display: flex; flex-direction: column; align-items: center; align-self: stretch; justify-content: center; border-right: 1px solid var(--workbench-line); padding-right: 18px; }
+  #app .patient-record-date strong { color: var(--workbench-ink); font-size: 28px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  #app .patient-record-date span { margin-top: 6px; color: var(--workbench-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #app .patient-record-main { min-width: 0; }
+  #app .patient-record-topline { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  #app .patient-record-topline .pill { font-size: 12px; }
+  #app .patient-record-id { color: var(--workbench-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #app .patient-record-main .inline-between { display: block; }
+  #app .patient-record-card .patient-record-main .inline-between > strong { display: block; overflow: hidden; color: var(--workbench-ink); font-size: 16px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+  #app .patient-record-card .patient-record-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; color: var(--workbench-muted); font-size: 13px; }
+  #app .patient-record-next { margin-top: 4px; color: var(--ink2); font-size: 13px; line-height: 1.6; }
+  #app .patient-record-card > .actions { display: flex; flex-wrap: nowrap; gap: 8px; margin: 0; }
+  #app .patient-record-card .actions .primary { background: #fff; border: 1px solid #c9c5ba; color: var(--workbench-ink); }
+  #app .patient-record-card .actions .primary:hover:not(:disabled) { border-color: var(--workbench-ink); background: var(--gray-050); }
+  #app .patient-record-card .actions .ghost { border: 0; color: var(--accent); }
+
+  /* 医生 · 队列：标题区 + 统计条 + 细线表格 */
+  body.doctor-queue-mode #app .rail-left .rail-foot { display: none; }
+  body.doctor-queue-mode #app .doctor-case-nav { display: none; }
+  #app .queue-rail-title { margin: 0 0 14px; padding: 0 4px; color: var(--workbench-ink); font-size: 17px; font-weight: 800; letter-spacing: -.01em; text-transform: none; }
+  #app .rail-filters { gap: 4px; }
+  #app .rail-filters .filter-link { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; padding: 10px 12px; border: 1px solid transparent; border-radius: 10px; background: none; text-align: left; }
+  #app .rail-filters .filter-link:hover { background: #fff; }
+  #app .rail-filters .filter-link.on { border-color: var(--workbench-line); background: #fff; box-shadow: none; }
+  #app .rail-filters .filter-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  #app .rail-filters .filter-label { color: var(--workbench-ink); font-size: 15px; font-weight: 500; line-height: 1.4; }
+  #app .rail-filters .filter-link.on .filter-label { font-weight: 700; }
+  #app .rail-filters .filter-hint { color: var(--workbench-muted); font-size: 12px; font-weight: 400; line-height: 1.4; }
+  #app .rail-filters .filter-count { flex: none; min-width: 30px; padding: 2px 9px; border-radius: 999px; background: var(--gray-100); color: var(--workbench-muted); font-size: 13px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
+  #app .rail-filters .filter-link.on .filter-count { background: var(--workbench-ink); color: #fff; }
+  #app .queue-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 24px; margin-bottom: 20px; }
+  #app .queue-heading h2 { margin: 0; }
+  #app .queue-heading .queue-page-note { margin: 6px 0 0; color: var(--workbench-muted); font-size: 14px; }
+  #app .queue-header .queue-toolbar { flex-wrap: wrap; gap: 8px; margin: 0; }
+  #app .queue-header .queue-toolbar select { min-height: 40px; padding-block: 0; font-size: 14px; }
+  #app .queue-header .queue-toolbar button { min-height: 40px; }
+  #app .queue-summary { margin: 0 0 20px; padding: 0; }
+  #app .queue-tier-summary { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--workbench-line); border-radius: 10px; background: var(--workbench-line); }
+  #app .queue-tier-stat { display: flex; flex-direction: column; gap: 2px; padding: 12px 16px; background: #fff; }
+  #app .queue-tier-stat strong { color: var(--workbench-ink); font-size: 22px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
+  #app .queue-tier-stat span { color: var(--workbench-muted); font-size: 12px; }
+  #app .queue-tier-stat[data-zero] strong { color: #b0aea5; }
+  #app .queue-table { border-top: 1px solid var(--workbench-line); }
+  #app .queue-head { padding-block: 10px; border-bottom: 1px solid var(--workbench-line); background: none; color: var(--workbench-muted); font-size: 12px; }
+  #app .queue-entry { border-top: 0; border-bottom: 1px solid var(--workbench-line); }
+  #app .queue-row > .q-id { color: var(--workbench-ink); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  #app .queue-row > .q-id .tiny { margin-top: 4px; color: var(--workbench-muted); font-size: 13px; font-weight: 400; }
+  #app .queue-row > .q-main strong { display: inline-block; margin-bottom: 4px; padding: 1px 8px; border-radius: 4px; background: var(--workbench-soft); color: var(--workbench-ink); font-size: 12px; font-weight: 600; }
+  #app .queue-row > .q-main .muted { color: var(--ink2); font-size: 14px; }
+
+  @media (min-width: 1101px) {
+    #app .queue-head, #app .queue-row { grid-template-columns: 170px minmax(240px, 2.4fr) 96px 132px 156px; }
+  }
+  @media (max-width: 960px) {
+    #app .patient-shell .rail-title { display: none; }
+    #app .patient-shell #steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; }
+    #app .patient-shell #steps .step { flex-direction: column; align-items: center; gap: 6px; min-height: 0; padding: 4px 2px 6px; text-align: center; }
+    #app .patient-shell #steps .step:not(:last-child)::before { top: 17px; bottom: auto; left: calc(50% + 18px); right: calc(-50% + 18px); width: auto; height: 2px; }
+    #app .patient-shell .step-copy { align-items: center; padding-top: 0; }
+    #app .patient-shell #steps .step .step-t { font-size: 13px; line-height: 1.35; }
+    #app .patient-shell .step-s { font-size: 11px; }
+    #app .patient-shell .rail-foot { display: none; }
+    #app .patient-shell .patient-record-entry { margin-top: 12px; padding: 0; }
+    #app .patient-shell .patient-record-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #app .queue-tier-summary { display: flex; flex-wrap: wrap; }
+    #app .rail-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #app .rail-filters .filter-link { min-height: 52px; }
+    #app .queue-tier-stat { flex: 1 1 84px; }
+  }
+  @media (max-width: 760px) {
+    #app .patient-record-card { grid-template-columns: 48px minmax(0, 1fr); column-gap: 14px; align-items: start; }
+    #app .patient-record-date { padding-right: 12px; }
+    #app .patient-record-date strong { font-size: 22px; }
+    #app .patient-record-card .patient-record-main .inline-between > strong { white-space: normal; }
+    #app .patient-record-card > .actions { grid-column: 2; justify-content: flex-start; margin-top: 12px; }
+    #app .patient-record-date { align-self: start; justify-content: flex-start; padding-top: 2px; }
+    #app .queue-header { align-items: stretch; }
+    #app .queue-header .queue-toolbar { width: 100%; }
+    #app .queue-rail-title { margin-bottom: 10px; }
+    #app .queue-tier-stat { padding: 10px 12px; }
+    #app .queue-tier-stat strong { font-size: 18px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #app *, #app *::before, #app *::after { transition-duration: .001ms !important; animation-duration: .001ms !important; }
+  }
+}
