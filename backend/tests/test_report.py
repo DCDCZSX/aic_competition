@@ -503,5 +503,16 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn("免审条目", markdown)
 
 
+class TestSpecialtyOpinionRegression(unittest.TestCase):
+    def test_confirmed_report_has_patient_final_report_projection(self):
+        from tests.test_specialty_opinion_report import confirmed_case_with_reviewed_specialties
+
+        reports = build_both(confirmed_case_with_reviewed_specialties())
+        self.assertEqual(
+            set(reports["patient_final_report"]["sections"]),
+            {"医生审核后的专科评估意见", "医生最终建议", "后续安排"},
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schemas import DOCTOR_ACTIONS, DECISION_TARGET_TYPES, DoctorDecision, Reviewer  # noqa: E402
 from services.model_output_guard import public_text  # noqa: E402
+from services.doctor_mdt import review_analysis, review_mdt, analysis_source  # noqa: E402
 
 # 条目状态（界面层可见规则，对应 UI 设计说明 §4）
 AWAITING = "awaiting"
@@ -82,7 +83,8 @@ ACTION_LABELS: Dict[str, str] = {
 # 审核对象类型中文标签（报告与审核记录对外展示用，避免暴露内部英文枚举）
 TARGET_TYPE_LABELS: Dict[str, str] = {
     "department_selection": "科室入选",
-    "path_step": "路径步骤",
+    "ai_analysis": "AI 专科意见",
+    "path_step": "医疗安排",
     "consensus_item": "共识 / 分歧条目",
     "patient_advice": "患者建议",
 }
@@ -177,6 +179,65 @@ def _clean(text: Any) -> str:
     return public_text(text)
 
 
+def specialty_analysis_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
+    """将一条专科分析压缩成一张可审核的整体意见卡。
+
+    医生审核的是一个科室对本病例的整体意见；事实、判断、待确认事项
+    和缺口留在卡片上下文中，不拆成几十条互相重复的审核项。
+    """
+    analysis = analysis or {}
+    department = str(analysis.get("department") or "未知科室").strip()
+    status = str(analysis.get("status") or "ok").strip().lower()
+    inferences = []
+    for item in (analysis.get("inferences") or [])[:4]:
+        text = item.get("text") if isinstance(item, dict) else item
+        if str(text or "").strip():
+            inferences.append(_clean(text))
+    checks = []
+    for item in (analysis.get("checks") or [])[:5]:
+        text = item.get("content") if isinstance(item, dict) else item
+        if str(text or "").strip():
+            checks.append(_clean(text))
+    gaps = [_clean(value) for value in (analysis.get("information_gaps") or [])[:6]
+            if str(value or "").strip()]
+    facts = [_clean(value) for value in (analysis.get("facts") or [])[:6]
+             if str(value or "").strip()]
+    focus = _clean(analysis.get("focus") or "")
+    referral = _clean(analysis.get("referral") or "")
+    refs = []
+    for item in (analysis.get("inferences") or []):
+        if not isinstance(item, dict):
+            continue
+        refs.extend(str(ref).strip() for ref in (item.get("evidence_refs") or [])
+                    if str(ref).strip())
+    if status != "ok":
+        content = f"{department}本次专科 AI 意见未完成，不能按已生成意见发布。"
+    else:
+        parts = []
+        if focus:
+            parts.append(f"关注重点：{focus}")
+        if inferences:
+            parts.append("AI 评估：" + "；".join(inferences))
+        if checks:
+            parts.append("待确认事项：" + "；".join(checks))
+        if gaps:
+            parts.append("该科信息缺口：" + "；".join(gaps))
+        if referral:
+            parts.append("协作方向：" + referral)
+        content = "\n".join(parts) or f"{department}本次未提供可审核的专科意见。"
+    return {
+        "department": department,
+        "status": status or "ok",
+        "content": _clean(content),
+        "facts": facts,
+        "inferences": inferences,
+        "checks": checks,
+        "information_gaps": gaps,
+        "referral": referral,
+        "evidence_refs": list(dict.fromkeys(refs)),
+    }
+
+
 @dataclass
 class ReviewItem:
     """一条可审核的决策条目。"""
@@ -203,6 +264,8 @@ class ReviewItem:
     analysis_failed: bool = False
     # 同一稳定 item_id 的内容发生变化时递增；旧决定仍保留但不再覆盖新内容。
     content_revision: int = 1
+    department: str = ""
+    source_label: str = ""
 
     def __post_init__(self) -> None:
         """规范化分级；未知值必须回到必审，避免静默放行。"""
@@ -259,6 +322,8 @@ class ReviewItem:
             return "冲突或分歧条目必须逐条处理"
         if self.analysis_failed:
             return "分析失败条目必须逐条处理"
+        if self.target_type == "ai_analysis":
+            return "AI 关键判断必须逐条确认"
         if self.target_type == "path_step":
             return "关键路径步骤必须逐条确认"
         return ""
@@ -272,6 +337,8 @@ class ReviewItem:
             "item_id": self.item_id,
             "target_type": self.target_type,
             "target_id": self.target_id,
+            "department": self.department,
+            "source_label": self.source_label,
             "title": _clean(self.title),
             "ai_content": _clean(self.ai_content),
             "final_content": _clean(self.final_content),
@@ -317,7 +384,59 @@ def build_items(case: Any) -> List[ReviewItem]:
         seen_contents.add(key)
         return False
 
-    # ---- ① 路径步骤 ----
+    # ---- ① 专科整体意见（医生审核的主对象） ----
+    # 一个科室只生成一张卡；事实、判断、待确认项和缺口收敛在卡片上下文中，
+    # 避免把同一份专科意见拆成几十个无法独立判断的审核条目。
+    analysis_view = review_analysis(payload)
+    source = analysis_source(payload)
+    analyses = list(analysis_view.get("analyses") or [])
+    seen_departments: Dict[str, int] = {}
+    for analysis in analyses:
+        summary = specialty_analysis_summary(analysis)
+        department = summary["department"]
+        seen_departments[department] = seen_departments.get(department, 0) + 1
+        occurrence = seen_departments[department]
+        target_id = department if occurrence == 1 else f"{department}#{occurrence}"
+        item = ReviewItem(
+            item_id=f"ai_analysis:{target_id}",
+            target_type="ai_analysis",
+            target_id=target_id,
+            title=f"AI 专科意见：{department}",
+            ai_content=summary["content"],
+            reason_hint=(f"审核 {department} 对本病例的整体判断；"
+                         "请结合原始资料决定是否采纳、修改或驳回"),
+            evidence_refs=summary["evidence_refs"],
+            needs_doctor_review=True,
+            review_tier=REQUIRED,
+            tier_reason="AI 专科意见必须由医生逐科确认",
+            analysis_failed=summary["status"] != "ok",
+            department=department,
+            source_label=("本次 AI MDT 模拟" if source == "simulation"
+                          else "提交阶段 AI 专科分析"),
+        )
+        items.append(item)
+
+    # 若分析服务只返回失败科室清单而没有占位分析，也要留下可处理的失败卡，
+    # 不能因为结果为空就静默放行。
+    failed_departments = analysis_view.get("failed") or analysis_view.get("failed_departments") or []
+    for department in failed_departments:
+        department = str(department or "").strip()
+        if not department or department in seen_departments:
+            continue
+        seen_departments[department] = 1
+        items.append(ReviewItem(
+            item_id=f"ai_analysis:{department}", target_type="ai_analysis",
+            target_id=department, title=f"AI 专科意见：{department}",
+            ai_content=f"{department}本次专科 AI 意见未完成，不能按已生成意见发布。",
+            reason_hint="分析失败，需医生决定是否补充资料或重新运行分析",
+            needs_doctor_review=True, review_tier=REQUIRED,
+            tier_reason="分析失败条目必须逐条处理", analysis_failed=True,
+            department=department,
+            source_label=("本次 AI MDT 模拟" if source == "simulation"
+                          else "提交阶段 AI 专科分析"),
+        ))
+
+    # ---- ② 路径步骤（保留为发布门槛/上下文） ----
     for step in (payload.get("path") or {}).get("steps") or []:
         step_id = str(step.get("step_id") or "")
         if not step_id:
@@ -336,8 +455,9 @@ def build_items(case: Any) -> List[ReviewItem]:
                          if step.get("requires_doctor") else AUTO_PROCESSED_REASON),
         ))
 
-    # ---- ② 共识 / 分歧 ----
-    mdt = payload.get("mdt") or {}
+    # ---- ③ 共识 / 分歧（保留为发布门槛/上下文） ----
+    mdt = review_mdt(payload)
+    source_label = "本次 AI MDT 模拟" if analysis_source(payload) == "simulation" else "提交阶段专科 AI 分析"
     agg = mdt.get("aggregation") or {}
     for idx, entry in enumerate(agg.get("consensus") or [], start=1):
         topic = str(entry.get("topic") or "")
@@ -356,6 +476,7 @@ def build_items(case: Any) -> List[ReviewItem]:
             evidence_refs=refs,
             review_tier=SAMPLE,
             tier_reason="与上方 MDT 结果一致，建议抽查，不阻塞发布",
+            source_label=source_label,
         ))
     for idx, entry in enumerate(agg.get("disagreements") or [], start=1):
         topic = str(entry.get("topic") or "")
@@ -386,6 +507,9 @@ def build_items(case: Any) -> List[ReviewItem]:
             item.content_revision = max(1, int(revisions.get(item.item_id, 1) or 1))
         except (TypeError, ValueError):
             item.content_revision = 1
+        if item.target_type == "consensus_item" and analysis_source(payload) == "simulation":
+            item.content_revision = max(item.content_revision,
+                int((payload.get("doctor_mdt_simulation") or {}).get("content_revision") or 1))
     return items
 
 
@@ -399,7 +523,7 @@ def _annotate_item_flags(items: Sequence[ReviewItem], payload: Dict[str, Any]) -
     这里只使用可解释的结构化字段，不使用模型置信度作为免审依据。
     """
     triage = payload.get("triage") or {}
-    mdt = payload.get("mdt") or {}
+    mdt = review_mdt(payload)
     aggregation = mdt.get("aggregation") or {}
     reliability = (triage.get("reliability") or {}).get("level")
     high_risk = bool(
@@ -445,7 +569,7 @@ def _annotate_item_flags(items: Sequence[ReviewItem], payload: Dict[str, Any]) -
         )
         item.analysis_failed = bool(
             item.analysis_failed or
-            (global_analysis_failed and item.target_type in ("path_step", "consensus_item"))
+            (global_analysis_failed and item.target_type in ("ai_analysis", "path_step", "consensus_item"))
         )
 
         item_text = " ".join((item.title, item.ai_content, item.reason_hint))
@@ -494,6 +618,24 @@ def _decision_revision(decision: Dict[str, Any]) -> int:
         return 1
 
 
+def current_decisions(items: Sequence[ReviewItem],
+                      decisions: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """报告只应用绑定当前条目修订的决定；历史仍保留在存储中。"""
+    revisions = {item.item_id: item.content_revision for item in items or []}
+    return [record for record in decisions or []
+            if revisions.get(f"{record.get('target_type')}:{record.get('target_id')}")
+            == _decision_revision(record)]
+
+
+def current_disagreement_decisions(items: Sequence[ReviewItem],
+                                   records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """同名分歧在新模拟中重新出现时，不沿用上一修订的处理内容。"""
+    revisions = {item.item_id: item.content_revision for item in items or []}
+    return [record for record in records or []
+            if revisions.get(f"consensus_item:{record.get('disagreement_id')}")
+            == _decision_revision(record)]
+
+
 def stale_decisions(items: Sequence[ReviewItem],
                     decisions: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """返回不再针对当前审核项内容的历史决定。"""
@@ -537,7 +679,7 @@ def affected_item_ids(old_items: Sequence[ReviewItem], new_items: Sequence[Revie
         topic_match = any(token in text for token in tokens)
         content_changed = bool(old and (
             old.ai_content != item.ai_content or old.reason_hint != item.reason_hint
-            or old.title != item.title
+            or old.title != item.title or old.evidence_refs != item.evidence_refs
         ))
         if item_id not in old_map or topic_match or content_changed:
             out.add(item_id)
@@ -635,6 +777,12 @@ def summarize(items: Sequence[ReviewItem]) -> Dict[str, Any]:
     high_risk = sum(1 for i in items or [] if i.high_risk)
     conflict = sum(1 for i in items or [] if i.conflict)
     analysis_failed = sum(1 for i in items or [] if i.analysis_failed)
+    specialty_items = [i for i in items or [] if i.target_type == "ai_analysis"]
+    specialty_pending = sum(1 for i in specialty_items
+                            if i.review_tier == REQUIRED and i.state == AWAITING)
+    specialty_reviewed = sum(1 for i in specialty_items
+                             if i.decision_id and i.state in TERMINAL_STATES)
+    specialty_failed = sum(1 for i in specialty_items if i.analysis_failed)
     batch_blocked = sum(1 for i in items or []
                         if i.review_tier == REQUIRED and not i.batch_eligible)
     batch_blocked_pending = sum(1 for i in items or []
@@ -660,6 +808,10 @@ def summarize(items: Sequence[ReviewItem]) -> Dict[str, Any]:
         "high_risk": high_risk,
         "conflict": conflict,
         "analysis_failed": analysis_failed,
+        "specialty_total": len(specialty_items),
+        "specialty_pending": specialty_pending,
+        "specialty_reviewed": specialty_reviewed,
+        "specialty_failed": specialty_failed,
         "batch_blocked": batch_blocked,
         "batch_blocked_pending": batch_blocked_pending,
         # 兼容字段：语义收紧为"医生真正处理过"（此前把免审放行也算进去，分不清人和规则）

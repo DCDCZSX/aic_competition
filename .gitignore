@@ -54,6 +54,8 @@ logs/
 *.db
 *.db-*
 *.sqlite3
+# 本机 SQLite 数据目录：含开发库、改号备份与新旧编号对照 CSV，不入库
+backend/data/
 
 # Configuration
 config.ini
@@ -65,6 +67,9 @@ knowledge_base/
 # Temporary files
 *.tmp
 *.temp
+
+# 本地设计工具状态（DESIGN.md 等产物按目录单独提交）
+.impeccable/
 
 # Local evaluation data and generated artifacts
 MDT-5*.csv

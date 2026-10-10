@@ -6,6 +6,7 @@ from io import BytesIO
 import app as app_module
 from services.auth import AuthService, ROLE_PATIENT
 from services.patient_uploads import PatientUploadStore
+from services.ocr_service import OcrService
 
 
 class PatientUploadStoreTest(unittest.TestCase):
@@ -32,12 +33,15 @@ class PatientUploadHttpTest(unittest.TestCase):
     def setUp(self):
         self.old_auth = app_module.auth_service
         self.old_uploads = getattr(app_module, 'patient_uploads', None)
+        self.old_ocr = app_module.ocr_service
         self.tmp = tempfile.TemporaryDirectory()
         app_module.auth_service = AuthService(accounts={
             'alice': {'password': 'alice-password', 'role': ROLE_PATIENT, 'label': '患者 A'},
             'doctor': {'password': 'doctor-password', 'role': 'doctor', 'label': '医生'},
         })
         app_module.patient_uploads = PatientUploadStore(self.tmp.name)
+        app_module.ocr_service = OcrService()
+        app_module.ocr_service.api_key = ''
         app_module.app.config.update(TESTING=True, MAX_CONTENT_LENGTH=16 * 1024 * 1024)
         self.client = app_module.app.test_client()
         response = self.client.post('/api/login', json={'username': 'alice', 'password': 'alice-password'})
@@ -45,6 +49,7 @@ class PatientUploadHttpTest(unittest.TestCase):
 
     def tearDown(self):
         app_module.auth_service = self.old_auth
+        app_module.ocr_service = self.old_ocr
         if self.old_uploads is not None:
             app_module.patient_uploads = self.old_uploads
         self.tmp.cleanup()
@@ -87,6 +92,36 @@ class PatientUploadHttpTest(unittest.TestCase):
         }, content_type='multipart/form-data')
         self.assertEqual(response.status_code, 400, response.get_json())
         self.assertEqual(response.get_json()['code'], 'unsupported_type')
+
+    def test_new_case_clears_persisted_uploads_only_for_current_patient(self):
+        upload_ids = []
+        for name in ('report.jpg', 'scan.png'):
+            response = self.client.post('/api/v2/patient/uploads', headers=self.headers, data={
+                'files': (BytesIO(b'image-data'), name),
+            }, content_type='multipart/form-data')
+            self.assertEqual(response.status_code, 201)
+            upload_ids.append(response.get_json()['uploads'][0]['upload_id'])
+        other = app_module.patient_uploads.save('other-patient', 'other.jpg', 'image/jpeg', b'other-image')
+
+        # A reload restores uploads until the patient explicitly starts a new case.
+        self.assertEqual(len(self.client.get('/api/v2/patient/uploads', headers=self.headers).get_json()['uploads']), 2)
+        cleared = self.client.delete('/api/v2/patient/uploads', headers=self.headers)
+        self.assertEqual(cleared.status_code, 200, cleared.get_json())
+        self.assertTrue(cleared.get_json()['ok'])
+        self.assertEqual(self.client.get('/api/v2/patient/uploads', headers=self.headers).get_json()['uploads'], [])
+        for upload_id in upload_ids:
+            self.assertEqual(self.client.get('/api/v2/patient/uploads/' + upload_id + '/file', headers=self.headers).status_code, 404)
+        self.assertEqual(len(app_module.patient_uploads.list_owned('other-patient')), 1)
+        self.assertEqual(app_module.patient_uploads.read_owned('other-patient', other['upload_id'])[1], b'other-image')
+        self.assertEqual(self.client.delete('/api/v2/patient/uploads', headers=self.headers).status_code, 200)
+
+    def test_clearing_uploads_requires_patient_authentication(self):
+        saved = app_module.patient_uploads.save('alice', 'report.jpg', 'image/jpeg', b'image-data')
+        self.assertEqual(self.client.delete('/api/v2/patient/uploads').status_code, 401)
+        login = self.client.post('/api/login', json={'username':'doctor', 'password':'doctor-password'})
+        doctor_headers = {'Authorization':'Bearer ' + login.get_json()['session']['token']}
+        self.assertEqual(self.client.delete('/api/v2/patient/uploads', headers=doctor_headers).status_code, 403)
+        self.assertIsNotNone(app_module.patient_uploads.read_owned('alice', saved['upload_id'])[1])
 
     def test_ocr_degrades_without_provider_configuration(self):
         response = self.client.post('/api/v2/patient/uploads', headers=self.headers, data={

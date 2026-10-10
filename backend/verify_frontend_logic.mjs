@@ -44,7 +44,9 @@ let fetchPayload = { status: 200, data: {} };
 globalThis.document = {
   getElementById: el,
   querySelector: selector => selector === '.doctor-case-main' ? el('doctor-case-main') : null,
-  querySelectorAll: () => [],
+  querySelectorAll: selector => selector === 'main > section'
+    ? ['stage1','stage2','stage3','stage4','records','update','changes','done'].map(id => el('s-'+id))
+    : [],
   addEventListener() { }, title: '', fonts: { ready: Promise.resolve() }, body: mkEl('body'),
 };
 globalThis.window = {
@@ -60,7 +62,12 @@ globalThis.alert = () => { };
 /* ------------------------------------------------------------- 抽取内联 JS */
 function inlineScript(file) {
   const src = fs.readFileSync(path.join(TPL, file), 'utf8');
-  const blocks = [...src.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+  // 本地 /static/js 共享脚本按页面中的顺序一并载入；外链脚本不允许出现。
+  const blocks = [...src.matchAll(/<script(?:\s+src="([^"]+)")?[^>]*>([\s\S]*?)<\/script>/g)].map(m => {
+    if (!m[1]) return m[2];
+    if (!m[1].startsWith('/static/js/')) throw new Error('unexpected external script: ' + m[1]);
+    return fs.readFileSync(path.join(HERE, m[1].slice(1)), 'utf8');
+  });
   return blocks.join('\n;\n');
 }
 
@@ -69,7 +76,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 
 /* -------------------------------------------------------------- 患者端断言 */
 {
-  eval(inlineScript('patient.html') + '\n;globalThis.__P = { S, renderSteps, renderContext, syncStagePanels, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner, sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, patientFullReportEntries, patientFullReportValue, patientTimelineValue, patientPathFlowValue, renderTriage, renderPath, renderMdt, doPreview, registerForm: typeof registerForm === "function" ? registerForm : null, loadDepartments: typeof loadDepartments === "function" ? loadDepartments : null, renderReviewSubmission: typeof renderReviewSubmission === "function" ? renderReviewSubmission : null, submitCaseForReview: typeof submitCaseForReview === "function" ? submitCaseForReview : null, autoSubmitCaseForReview: typeof autoSubmitCaseForReview === "function" ? autoSubmitCaseForReview : null };');
+  eval(inlineScript('patient.html') + '\n;globalThis.__caseFlow = {startNewCase, startCaseFlow, renderProfile, renderQuestions, go, loadPatientUploads, handlePatientImages, recognizePatientImage, goReport, openPatientCase, pollAnalysis, pollMdt, showPatientCaseHistory, showPatientReportVersion: typeof showPatientReportVersion === "function" ? showPatientReportVersion : null};' + '\n;globalThis.__P = { S, renderSteps, renderContext, syncStagePanels, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner, sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, patientFullReportEntries, patientFullReportValue, patientTimelineValue, patientPathFlowValue, renderTriage, renderPath, renderMdt, doPreview, registerForm: typeof registerForm === "function" ? registerForm : null, loadDepartments: typeof loadDepartments === "function" ? loadDepartments : null, renderReviewSubmission: typeof renderReviewSubmission === "function" ? renderReviewSubmission : null, submitCaseForReview: typeof submitCaseForReview === "function" ? submitCaseForReview : null, autoSubmitCaseForReview: typeof autoSubmitCaseForReview === "function" ? autoSubmitCaseForReview : null };');
   const { S, renderSteps, renderContext, STEPS, renderSectionValue, mdtProgressHtml, analysisBanner,
           syncStagePanels, sectionDigest, toggleAllReport, openAllForPrint, restoreAfterPrint, switchReport, patientFullReportEntries, patientFullReportValue, patientTimelineValue, patientPathFlowValue, renderTriage,
           renderPath, renderMdt, autoSubmitCaseForReview: pAutoSubmitCaseForReview,
@@ -92,7 +99,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   const h1 = el('steps').innerHTML;
   const count = (h1.match(/class="step[ "]/g) || []).length;
   check('左轨渲染出 4 个阶段项', count === 4, String(count));
-  check('左轨含阶段名与两位序号', h1.includes('填写情况') && h1.includes('04'), '');
+  check('左轨含阶段名、序号圆点和状态说明', h1.includes('填写情况') && h1.includes('class="step-n" aria-hidden="true">4<') && h1.includes('当前步骤') && h1.includes('待开始'), '');
   check('当前阶段高亮', h1.includes('class="step active"'), '');
   check('第 1 阶段进度 0%', el('steps-bar').style.width === '0%', el('steps-bar').style.width);
   check('第 1 阶段说明为「第 1 / 4 步」', el('steps-note').textContent.includes('第 1 / 4 步'),
@@ -115,7 +122,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
       && !el('s-mdt').classList.contains('hide'), '');
 
   // 就诊后更新 / 变化摘要不在首次准备的四个阶段内 → 主流程显示为已完成
-  renderSteps('update');
+  renderSteps('records');
   const hu = el('steps').innerHTML;
   check('附加环节：四个阶段全部完成', (hu.match(/class="step done"/g) || []).length === 4, '');
   check('附加环节：进度条 100%', el('steps-bar').style.width === '100%', el('steps-bar').style.width);
@@ -352,6 +359,250 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('失败时如实说明且不编造', failed.includes('未完成') && failed.includes('ReadTimeout')
     && failed.includes('不会因此编造结论'), failed.slice(0, 80));
 
+  /* 完成一轮后新建：空提交只提示填写，不请求接口、不显示上一病例。 */
+  const savedFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, opts) => {
+    requests.push({url, body: JSON.parse(opts.body || '{}')});
+    const data = opts.method === 'DELETE' ? {ok:true} : url === '/api/v2/preview'
+      ? {preview_token:'preview-new', blocked:false, blocking_hit_count:0}
+      : JSON.parse(opts.body).preview_token === 'preview-new' && el('history').value.trim()
+        ? {ok:true, passes_gate:true, case_id:'C-NEW', profile:{chief_complaint:el('history').value.trim()},
+           gaps:[], questions:[], analysis_mode:'rules_only'}
+        : {blocked:true, advice:'请填写病历正文或主要问题'};
+    return {ok:true, status:200, json:async () => data};
+  };
+  S.caseId='C-OLD'; S.profile={chief_complaint:'旧病历的视物模糊'};
+  S.questions=[{text:'旧病历的追问', why:'补充病情', affects:[]}];
+  S.report={summary:'旧病历报告'};
+  __caseFlow.renderProfile({profile:S.profile, gaps:['旧病历缺口']});
+  __caseFlow.renderQuestions();
+  el('report-body').innerHTML='旧病历报告';
+  el('f-sex').value='男';
+  __caseFlow.go('stage4');
+  await __caseFlow.startNewCase();
+  check('新建病例清空已渲染的旧画像、缺口、追问和报告',
+    ['profile-body','gap-body','ask-body','report-body'].every(id => el(id).innerHTML === ''),
+    el('profile-body').innerHTML);
+  check('新建病例清空病例状态和性别输入',
+    S.caseId === null && S.profile === null && S.report === null && !S.questions.length && el('f-sex').value === '', '');
+  for(const blank of ['', ' \n\t ']){
+    el('history').value=blank; el('main-issue').value=blank;
+    requests.length=0;
+    await __caseFlow.startCaseFlow();
+    check('空白新病例停留填写阶段：'+JSON.stringify(blank),
+      !el('s-stage1').classList.contains('hide') && el('s-stage2').classList.contains('hide'), '');
+    check('空白新病例只提示填写且不请求预览或创建：'+JSON.stringify(blank),
+      el('intake-msg').innerHTML.includes('请填写') && requests.length === 0 && S.caseId === null,
+      el('intake-msg').innerHTML);
+  }
+  el('history').value='新病历的膝关节疼痛两周';
+  await __caseFlow.startCaseFlow();
+  check('补充新内容后正常创建新病例并进入核对阶段',
+    S.caseId === 'C-NEW' && !el('s-stage2').classList.contains('hide')
+      && el('profile-body').innerHTML.includes('新病历的膝关节疼痛两周')
+      && !el('profile-body').innerHTML.includes('视物模糊') && requests.length === 2, '');
+  globalThis.fetch=savedFetch;
+
+  /* 上传草稿：刷新保留，新增清空；迟到的恢复、OCR 和上传结果不跨病例。 */
+  const {loadPatientUploads, handlePatientImages, recognizePatientImage} = __caseFlow;
+  const imageBlob = new Blob(['image-data'], {type:'image/png'});
+  let storedUploads=[{upload_id:'old-image', original_name:'old.png', file_url:'/test-image/old-image'}];
+  const uploadResponse = (data, status=200) => ({ok:status<400, status, json:async()=>data, blob:async()=>imageBlob});
+  const normalUploadFetch = async (url, opts={}) => {
+    if(url === '/api/v2/patient/uploads' && opts.method === 'DELETE'){
+      storedUploads=[]; return uploadResponse({ok:true});
+    }
+    if(url === '/api/v2/patient/uploads' && opts.method === 'POST'){
+      const item={upload_id:'next-image', original_name:'next.png', file_url:'/test-image/next-image'};
+      storedUploads.push(item); return uploadResponse({uploads:[item]},201);
+    }
+    if(url === '/api/v2/patient/uploads') return uploadResponse({uploads:[...storedUploads]});
+    if(url.startsWith('/test-image/')) return uploadResponse({});
+    if(url.endsWith('/ocr')) return uploadResponse({text:''});
+    if(opts.method === 'DELETE'){
+      storedUploads=storedUploads.filter(item=>!url.endsWith('/'+item.upload_id));
+      return uploadResponse({ok:true});
+    }
+    throw new Error('Unexpected upload request '+url);
+  };
+  globalThis.fetch=normalUploadFetch;
+  await loadPatientUploads(); await loadPatientUploads();
+  check('刷新恢复当前上传图片且不删除暂存文件',
+    S.imageUploads.length === 1 && storedUploads.length === 1
+      && el('patient-upload-grid').innerHTML.includes('old.png'), '');
+  el('patient-images').value='old.png'; el('patient-upload-msg').innerHTML='旧图片已识别';
+  await __caseFlow.startNewCase();
+  check('新增病例清空缩略图、文件选择和上传提示',
+    S.imageUploads.length === 0 && el('patient-upload-grid').innerHTML === ''
+      && el('patient-images').value === '' && el('patient-upload-msg').innerHTML === '', '');
+  await loadPatientUploads();
+  check('新增后刷新不会恢复上一份图片', storedUploads.length === 0 && S.imageUploads.length === 0, '');
+  await handlePatientImages({target:{files:[Object.assign(imageBlob,{name:'next.png'})],value:'next.png'}});
+  await loadPatientUploads();
+  check('新病例上传的新图片仍可在刷新后恢复',
+    S.imageUploads.length === 1 && el('patient-upload-grid').innerHTML.includes('next.png'), '');
+
+  let finishRestore;
+  globalThis.fetch=(url,opts={}) => url === '/api/v2/patient/uploads' && !opts.method
+    ? new Promise(resolve=>{finishRestore=resolve;}) : normalUploadFetch(url,opts);
+  const restoring=loadPatientUploads();
+  await __caseFlow.startNewCase();
+  finishRestore(uploadResponse({uploads:[{upload_id:'next-image',original_name:'next.png',file_url:'/test-image/next-image'}]}));
+  await restoring;
+  check('新增后迟到的图片恢复响应不能重新填回旧缩略图',
+    S.imageUploads.length === 0 && el('patient-upload-grid').innerHTML === '', '');
+
+  let finishOcr;
+  const oldItem={upload_id:'ocr-old', name:'ocr-old.png', url:URL.createObjectURL(imageBlob)};
+  S.imageUploads=[oldItem];
+  globalThis.fetch=(url,opts) => url.endsWith('/ocr')
+    ? new Promise(resolve=>{finishOcr=resolve;}) : normalUploadFetch(url,opts);
+  const recognizing=recognizePatientImage(oldItem);
+  await __caseFlow.startNewCase();
+  finishOcr(uploadResponse({text:'上一病例的识别文字'}));
+  await recognizing;
+  check('新增后迟到的 OCR 不写入新病例正文或上传提示',
+    el('history').value === '' && el('patient-upload-msg').innerHTML === '', el('history').value);
+
+  let finishUpload;
+  globalThis.fetch=(url,opts={}) => url === '/api/v2/patient/uploads' && opts.method === 'POST'
+    ? new Promise(resolve=>{finishUpload=resolve;}) : normalUploadFetch(url,opts);
+  const uploading=handlePatientImages({target:{files:[imageBlob],value:'next.png'}});
+  await __caseFlow.startNewCase();
+  storedUploads=[{upload_id:'late-image',original_name:'late.png',file_url:'/test-image/late-image'}];
+  finishUpload(uploadResponse({uploads:[...storedUploads]},201));
+  await uploading; await loadPatientUploads();
+  check('新增前发出的上传晚完成时清理后端文件且不恢复旧图片',
+    S.imageUploads.length === 0 && storedUploads.length === 0, '');
+
+  S.caseId='C-KEPT'; S.imageUploads=[{upload_id:'kept-image',name:'kept.png',url:URL.createObjectURL(imageBlob)}];
+  globalThis.fetch=async()=>uploadResponse({error:'暂存图片清理失败'},500);
+  await __caseFlow.startNewCase();
+  check('清理失败时提示重试并保留当前病例和图片',
+    S.caseId === 'C-KEPT' && S.imageUploads.length === 1 && el('patient-upload-msg').innerHTML.includes('失败'), '');
+  globalThis.fetch=normalUploadFetch;
+  await __caseFlow.startNewCase();
+  globalThis.fetch=savedFetch;
+
+  /* 医生发布后，已有报告和病例列表入口必须读取最新结果。 */
+  const resultRequests=[];
+  globalThis.fetch=async url=>{
+    resultRequests.push(url);
+    if(url.endsWith('/patient-record')) return {status:200,json:async()=>({record:{main_issue:'已保存的主要问题',answers:{symptom_duration:'已保存的追问回答'},submitted_material:{medical_history:'选中病例的原始资料'}}})};
+    if(url.endsWith('/analysis')) return {status:200,json:async()=>({profile:{age:58,chief_complaint:'选中病例的病情'},triage:{primary:{department:'眼科'}},path:{steps:[]},questions:[{id:'Q1',field:'symptom_duration',text:'不适持续多久？',why:'核对病程'}],analysis:{state:'done'}})};
+    return {status:200,json:async()=>({
+      summary:{doctor_confirmed:true,report_version:2,sections:{}},full:{sections:{}},
+      doctor_result:{published:true,final_advice:'医生新发布的复诊安排',published_by:'审核医生',published_at:'2026-10-07',report_version:2}
+    })};
+  };
+  S.caseId='C-RESULT'; S.routing={status:'submitted'};
+  S.report={summary:{doctor_confirmed:false,sections:{}},full:{sections:{}}};
+  await __caseFlow.goReport();
+  check('再次打开报告重新获取医生已发布结果，不使用旧缓存',
+    resultRequests.length === 1 && el('doctor-result-body').innerHTML.includes('医生新发布的复诊安排'), '');
+  S.report=null; S.analysisStatus=null; S.triage=null; S.path=null; S.mdt=null;
+  S.profile={age:99,chief_complaint:'另一条病例的病情'}; el('history').value='另一条病例的原文';
+  await __caseFlow.openPatientCase('C-HISTORY');
+  check('从病例列表打开已保存报告不受新建分析进度门禁阻挡',
+    resultRequests.includes('/api/v2/case/C-HISTORY/report') && S.report.summary.doctor_confirmed, '');
+  check('打开病例同步恢复选中病例资料和核对信息，不沿用上一条病例',
+    S.profile.age===58 && S.triage.primary.department==='眼科' && el('history').value==='选中病例的原始资料' && el('main-issue').value==='已保存的主要问题', '');
+  check('回看核对资料时恢复对应问题的已保存回答',el('ans-0').value==='已保存的追问回答',el('ans-0').value);
+  S.report={summary:{doctor_confirmed:false,sections:{}},full:{sections:{}},doctor_result:{published:false,final_advice:'未发布草稿'}};
+  switchReport('summary');
+  check('未发布时仅显示审核等待状态，不冒充医生最终建议',
+    el('doctor-result-body').innerHTML.includes('尚未发布') && !el('doctor-result-body').innerHTML.includes('未发布草稿'), '');
+  {
+    const finalReport={case_id:'C-FINAL',header:{报告名称:'多学科会诊意见报告',报告编号:'C-FINAL-v2',主责科室:'眼科',审核医生:'审核医生'},
+      section_order:['医生审核后的专科评估意见','医生最终建议','后续安排'],
+      sections:{医生审核后的专科评估意见:[{科室:'眼科',专科评估意见:['眼科要点<b>'],建议向医生确认:['是否需要复查眼底'],审核:'医生已确认'}],
+        医生最终建议:'两周后眼科复诊',后续安排:['会诊后续安排：携带检查资料']},disclaimer:'合成免责声明'};
+    S.report={summary:{doctor_confirmed:true,sections:{主要问题:'就诊前问题'}},full:{sections:{}},patient_final_report:finalReport,
+      doctor_result:{published:true,final_advice:'两周后眼科复诊',published_by:'审核医生',published_at:'2026-10-10T09:30:00',report_version:2}};
+    switchReport('summary');
+    const resultHtml=el('doctor-result-body').innerHTML;
+    check('医生发布后患者结果页展示会诊意见单样式的最终报告',
+      resultHtml.includes('final-report') && resultHtml.includes('多学科会诊意见报告') && resultHtml.includes('眼科要点&lt;b&gt;') && resultHtml.includes('两周后眼科复诊') && !resultHtml.includes('预览 · 尚未发布'), resultHtml.slice(0,200));
+    check('发布后结果页元信息时间去掉 ISO 分隔符',resultHtml.includes('2026-10-10 09:30'),'');
+    check('发布后原摘要区改称就诊前准备资料',el('report-prep-heading').textContent==='就诊前准备资料' && el('report-prep-note').hidden===false,'');
+    const printHtml=el('report-body').innerHTML;
+    check('发布后打印版改为最终报告，不再打印就诊前门诊病历',
+      printHtml.includes('print-final-report') && printHtml.includes('C-FINAL-v2') && !printHtml.includes('门诊病历'),'');
+    S.report={summary:{doctor_confirmed:false,sections:{主要问题:'就诊前问题'}},full:{sections:{}},patient_final_report:finalReport,doctor_result:{published:false}};
+    switchReport('summary');
+    check('未发布时即使带有最终报告字段也不展示，打印仍为就诊准备单',
+      !el('doctor-result-body').innerHTML.includes('final-report') && el('report-body').innerHTML.includes('门诊病历') && el('report-prep-heading').textContent==='重点摘要与就医详情','');
+  }
+  globalThis.fetch=savedFetch;
+
+  /* 历史记录只展示事件，报告必须来自已保存快照并与当前四步内容分离。 */
+  const __history=__caseFlow;
+  const historyRequests=[];
+  const historyRecord={title:'病例 #C-HISTORY · 视物模糊',submitted_material:{submitted_at:'2026-10-01 09:00',medical_history:'不应重复展示的原文',profile:{exams:[{item:'眼底',value:'旧结果'}]}},updates:[{kind:'检查结果',content:'新增检查资料',at:'2026-10-03 09:00'}]};
+  globalThis.fetch=async url=>{
+    historyRequests.push(url);
+    const data=url.endsWith('/patient-record')?{record:historyRecord}:url.endsWith('/versions')?{versions:[{version:2,published_at:'2026-10-02 10:00'}]}:{
+      version:2,published_at:'2026-10-02 10:00',report:{summary:{sections:{'主要问题':'当时的问题<script>unsafe</script>'}},full:{sections:{}},doctor_result:{published:true,final_advice:'旧版本的医生安排'}}};
+    return {status:200,json:async()=>data};
+  };
+  await __history.showPatientCaseHistory('C-HISTORY');
+  const historyHtml=el('records-body').innerHTML;
+  check('历史记录只保留提交补充发布事件，不重复原文或画像 JSON',
+    historyHtml.includes('首次提交') && historyHtml.includes('新增检查资料') && historyHtml.includes('查看此版本') && !historyHtml.includes('不应重复展示') && !historyHtml.includes('结构化资料摘要') && !historyHtml.includes('"item"'),historyHtml);
+  check('历史时间线按时间排序且不请求无关变化分析接口',
+    historyHtml.indexOf('2026-10-01')<historyHtml.indexOf('2026-10-02') && historyHtml.indexOf('2026-10-02')<historyHtml.indexOf('2026-10-03') && historyRequests.length===2, '');
+  const currentReport=S.report;
+  if(__history.showPatientReportVersion) await __history.showPatientReportVersion('C-HISTORY',2);
+  check('历史报告展示保存的建议并隔离当前病例报告状态',
+    !!__history.showPatientReportVersion && el('patient-history-report').innerHTML.includes('旧版本的医生安排') && S.report===currentReport, '');
+  globalThis.fetch=async url=>({status:200,json:async()=>({version:3,published_at:'2026-10-09 10:00',report:{
+    summary:{sections:{'主要问题':'当时的就诊前问题'}},full:{sections:{}},
+    patient_final_report:{header:{报告名称:'专科评估意见报告',报告编号:'C-HISTORY-v3'},section_order:['医生审核后的专科评估意见','医生最终建议','后续安排'],
+      sections:{医生审核后的专科评估意见:[{科室:'眼科',专科评估意见:['历史快照要点'],审核:'医生已修改'}],医生最终建议:'历史快照建议',后续安排:['按医生建议执行']}},
+    doctor_result:{published:true,final_advice:'历史快照建议'}}})});
+  if(__history.showPatientReportVersion) await __history.showPatientReportVersion('C-HISTORY',3);
+  {
+    const versionHtml=el('patient-history-report').innerHTML;
+    check('历史版本有最终报告快照时按会诊意见单展示，就诊前资料收进折叠区',
+      versionHtml.includes('final-report') && versionHtml.includes('C-HISTORY-v3') && versionHtml.includes('历史快照要点')
+        && versionHtml.includes('patient-history-prep') && versionHtml.indexOf('final-report')<versionHtml.indexOf('当时的就诊前问题'), '');
+  }
+  globalThis.fetch=async url=>({status:200,json:async()=>({version:2,published_at:'2026-10-02 10:00',report:{summary:{sections:{'主要问题':'当时的问题<script>unsafe</script>'}},full:{sections:{}},doctor_result:{published:true,final_advice:'旧版本的医生安排'}}})});
+  if(__history.showPatientReportVersion) await __history.showPatientReportVersion('C-HISTORY',2);
+  check('历史报告内容转义且提供返回历史操作',
+    el('patient-history-report').innerHTML.includes('&lt;script&gt;') && !el('patient-history-report').innerHTML.includes('<script>') && el('patient-history-report').innerHTML.includes('返回历史记录'), '');
+  globalThis.fetch=async url=>({status:200,json:async()=>url.endsWith('/patient-record')?{record:{title:'旧病例',updates:[]}}:{versions:[]}});
+  await __history.showPatientCaseHistory('C-EMPTY');
+  check('历史为空时不编造提交或发布记录',el('records-body').innerHTML.includes('暂无可显示的历史记录') && el('records-body').innerHTML.includes('暂无已保存的报告版本') && !el('records-body').innerHTML.includes('首次提交病情资料'), '');
+  const pendingHistory=[];
+  globalThis.fetch=url=>url.includes('/C-SLOW/')?new Promise(resolve=>pendingHistory.push(()=>resolve({status:200,json:async()=>url.endsWith('/patient-record')?{record:{title:'迟到的旧病例'}}:{versions:[]}}))):Promise.resolve({status:200,json:async()=>url.endsWith('/patient-record')?{record:{title:'最新选择的病例'}}:{versions:[]}});
+  const slowHistory=__history.showPatientCaseHistory('C-SLOW');
+  await __history.showPatientCaseHistory('C-NEW');
+  pendingHistory.forEach(finish=>finish()); await slowHistory;
+  check('迟到的历史请求不能覆盖新选择的病例',el('records-body').innerHTML.includes('最新选择的病例') && !el('records-body').innerHTML.includes('迟到的旧病例'), '');
+  globalThis.fetch=async()=>({status:404,json:async()=>({error:'该报告版本未保存'})});
+  if(__history.showPatientReportVersion) await __history.showPatientReportVersion('C-NEW',9);
+  check('历史版本加载失败提示真实原因且不回退当前报告',el('patient-history-report').innerHTML.includes('该报告版本未保存') && !el('patient-history-report').innerHTML.includes('医生新发布') && S.report===currentReport, '');
+  const activeProfile=S.profile;
+  S.caseId='C-OLD-POLL';
+  let finishAnalysis;
+  globalThis.fetch=()=>new Promise(resolve=>{finishAnalysis=resolve;});
+  const oldAnalysis=__caseFlow.pollAnalysis();
+  S.caseId='C-NEW-POLL';
+  finishAnalysis({ok:true,status:200,json:async()=>({case_id:'C-OLD-POLL',profile:{age:99},analysis:{state:'done'}})});
+  await oldAnalysis;
+  check('切换病例后迟到的旧分析不能覆盖新病例资料',S.profile===activeProfile,'');
+  S.caseId='C-OLD-MDT'; S.mdt={case:'new'}; const activeMdt=S.mdt;
+  let finishMdt;
+  globalThis.fetch=()=>new Promise(resolve=>{finishMdt=resolve;});
+  const oldMdt=__caseFlow.pollMdt();
+  S.caseId='C-NEW-MDT';
+  finishMdt({status:200,json:async()=>({ready:true,mdt:{case:'old'},status:{state:'done'}})});
+  await oldMdt;
+  check('切换病例后迟到的旧专科意见不能覆盖新病例报告',S.mdt===activeMdt && S.report===currentReport,'');
+  globalThis.fetch=savedFetch;
+
   /* API 失败时必须把服务端原因告诉患者，不能统一吞成“预览失败” */
   el('history').value = '2型糖尿病5年，视物模糊3个月。';
   el('main-issue').value = '该看哪个科';
@@ -363,7 +614,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 /* ----------------------------------------------------- 医生工作台断言 */
 {
   const doctorHtml = fs.readFileSync(path.join(TPL, 'doctor.html'), 'utf8');
-  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScreening, renderQueueFilters, setQueueFilter, goQueuePage, renderCaseContext, openHistoryDecision, openHistoryVersion, openReviewCategory: (...args) => window.openReviewCategory(...args) };');
+  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, go, openCase, doctorWorkflowNav, openModal, submitModal, decide, submitTriageConfirmation, startDoctorMdtSimulation: typeof startDoctorMdtSimulation === "function" ? startDoctorMdtSimulation : null, refreshDoctorMdtSimulation: typeof refreshDoctorMdtSimulation === "function" ? refreshDoctorMdtSimulation : null, renderPacket: typeof renderPacket === "function" ? renderPacket : null, submitDisagreement, submitMdtFormalRecord, publish, toggleQueueDetails: typeof toggleQueueDetails === "function" ? toggleQueueDetails : null, previewPublication, publicationPreviewHtml, finalReportDocumentHtml, updateFinalAdvice, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScope, renderQueueFilters, setQueueFilter, goQueuePage, renderCaseContext, openHistoryDecision, openHistoryVersion, openReviewCategory: (...args) => window.openReviewCategory(...args) };');
   const D = globalThis.__D;
   check('病例详情导航只突出主要任务',
     ['overview','triage','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`))
@@ -388,10 +639,9 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     && !doctorHtml.includes('function renderDoctorScope'), '');
 
   D.S.caseData = { payload: { triage: { selected: ['内分泌科', '眼科'] } } };
-  D.S.review = { mdt_screening: null };
-  const screeningPanel = D.renderMdtScreening();
-  check('医生端显示 MDT 启动判断表单', screeningPanel.includes('MDT 启动判断')
-    && screeningPanel.includes('recommend_mdt') && screeningPanel.includes('保存 MDT 启动判断'), screeningPanel);
+  D.S.review = { mdt_screening: null,triage_doctor_confirmation:{status:'confirmed',selected:['内分泌科']} };
+  const scopePanel = D.renderMdtScope();
+  check('未确认处理方向时只引导回分流，不重复选择科室',scopePanel.includes('先完成分流确认') && scopePanel.includes("go('triage')") && !scopePanel.includes('data-mdt-department'),scopePanel);
 
   fetchPayload = {
     status: 200,
@@ -412,33 +662,45 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   await D.loadList();
   const queue = el('list-body').innerHTML;
   check('医生主区渲染完整病例队列', queue.includes('CAAA1111') && queue.includes('CBBB2222'), '');
-  check('队列显示风险与待医生处理量', queue.includes('高风险') && queue.includes('必审 3'), '');
-  check('队列显示自动处理条数', queue.includes('免审 2'), '');
+  check('队列显示风险与待医生处理量', queue.includes('高风险') && queue.includes('<strong>3</strong>必审'), '');
+  check('队列显示自动处理条数', queue.includes('<strong>2</strong>免审'), '');
   check('病例队列使用服务端分页元数据', el('list-pager').innerHTML.includes('共 2 例'), '');
   check('左轨改为筛选入口而非病例堆叠', !el('rail-filters').innerHTML.includes('CAAA1111'), '');
   check('队列默认只显示五个核心字段',
     ['病例','主诉 / 牵头科室','风险','处理状态','更新'].every(x=>queue.includes(x))
     && !queue.includes('>可靠性</div>') && !queue.includes('>分析</div>'), queue);
   check('队列保留低频详情入口', queue.includes('data-queue-details') && queue.includes('查看详情') && queue.includes('可靠性'), queue);
+  check('队列详情改为行尾按钮 + 默认隐藏的整行面板', queue.includes('class="queue-detail-toggle"') && queue.includes('aria-expanded="false"') && queue.includes('data-queue-details hidden') && !queue.includes('<details class="queue-details"'), '');
+  {
+    const panel={hidden:true}, attrs={'aria-controls':'qd-TEST','aria-expanded':'false'};
+    const button={getAttribute:k=>attrs[k], setAttribute:(k,v)=>{attrs[k]=v;}};
+    const savedGet=document.getElementById; document.getElementById=id=>id==='qd-TEST'?panel:savedGet.call(document,id);
+    if(D.toggleQueueDetails) D.toggleQueueDetails(button);
+    const opened=panel.hidden===false && attrs['aria-expanded']==='true';
+    if(D.toggleQueueDetails) D.toggleQueueDetails(button);
+    document.getElementById=savedGet;
+    check('查看详情按钮切换面板显隐和 aria-expanded', !!D.toggleQueueDetails && opened && panel.hidden===true && attrs['aria-expanded']==='false', '');
+  }
+  fetchPayload = {status:200,data:{cases:[{case_id:'CCCC3333',sex:'女',age:35,case_state:'awaiting_doctor',case_state_label:'待医生审核',pending_items:2,
+    primary_department:'血液科',chief_complaint:'反复发热',risk_level:'高',updated_at:'2026-10-09T18:52:12'}],total:1,has_more:false,filters:{},sorts:{}}};
+  await D.loadList();
+  {
+    const zh = el('list-body').innerHTML;
+    check('后端中文风险等级“高”显示为红色高风险，不误用绿色', zh.includes('pill danger">高风险') && !zh.includes('pill ok">高'), zh);
+    check('队列更新时间去掉 ISO 的 T 与秒', zh.includes('2026-10-09 18:52') && !zh.includes('T18:52'), '');
+  }
   const railFilters = el('rail-filters').innerHTML;
-  const commonFilters = railFilters.split('<details')[0];
-  check('队列默认只显示三个常用入口', (commonFilters.match(/class="filter-link /g)||[]).length === 3
-    && commonFilters.includes('全部病例') && commonFilters.includes('待我处理')
-    && commonFilters.includes('资料更新待复核'), commonFilters);
-  check('二级问题筛选默认收起但仍可访问', /<details[^>]*id="queue-more-filters"[^>]*>/.test(railFilters)
-    && !/<details[^>]*\bopen\b/.test(railFilters)
-    && ['存在分歧','证据缺口','分析异常','可靠性较低','免审（自动）'].every(label=>railFilters.includes(label)), '');
-  D.S.queue.filter = 'analysis_failed';
-  D.S.queueMeta.filters = {all:2, analysis_failed:1};
+  check('队列左轨只保留四个按下一步工作划分的入口', (railFilters.match(/class="filter-link /g)||[]).length === 4
+    && ['待我处理','待复核','已发布','全部病例'].every(label=>railFilters.includes(label))
+    && !railFilters.includes('<details') && !railFilters.includes('存在分歧'), railFilters);
+  check('默认进入“待我处理”', D.S.queue.filter === 'doctor_pending'
+    && /aria-pressed="true" onclick="setQueueFilter\('doctor_pending'\);"/.test(railFilters), '');
+  D.S.queue.filter = 'published';
+  D.S.queueMeta.filters = {all:2, published:1, doctor_pending:1, recheck:0};
   D.renderQueueFilters();
-  check('选择二级筛选后保持可见并标明当前条件', /<details[^>]*\bopen\b/.test(el('rail-filters').innerHTML)
-    && el('rail-filters').innerHTML.includes('更多筛选 · 分析异常')
-    && /aria-pressed="true" onclick="setQueueFilter\('analysis_failed'\);"/.test(el('rail-filters').innerHTML), '');
-  D.S.queue.filter = '';
-  el('queue-more-filters').open = true;
-  D.renderQueueFilters();
-  check('刷新列表时保留手动展开状态', /<details[^>]*\bopen\b/.test(el('rail-filters').innerHTML), '');
-  el('queue-more-filters').open = false;
+  check('切换到已发布后高亮并显示计数', /aria-pressed="true" onclick="setQueueFilter\('published'\);"/.test(el('rail-filters').innerHTML)
+    && el('rail-filters').innerHTML.includes('class="filter-count">1<'), '');
+  D.S.queue.filter = 'doctor_pending';
   D.renderQueueFilters();
   check('列表计数文案', el('list-note').textContent.includes('第 1 页'), el('list-note').textContent);
   const queueSummary = el('queue-tier-summary').innerHTML;
@@ -455,36 +717,28 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     gaps:['缺少近期检查结果']
   }};
   D.S.review = { published:false, case_state_label:'待医生审核', summary:{pending:2}, mdt_screening:{status:'decided',decision:'recommend_mdt',decision_label:'建议 MDT',purpose:'明确共同处理重点',departments:['内分泌科','眼科']}, mdt_formal_record:null, mdt_preparation_packet:{
-    specialty_opinions:[{department:'内分泌科',status:'available',focus:'评估代谢异常',facts:['血糖偏高','血糖偏高','视物模糊','体重变化','家族史','血压记录'],inferences:[{text:'建议结合糖化血红蛋白',evidence_refs:['检验单']}],checks:[{content:'是否需要补充复查'}],information_gaps:['缺少近期检查结果','缺少近期检查结果','缺少用药记录','缺少复查时间']}]
+    specialty_opinions:[{department:'内分泌科',status:'available',focus:'评估代谢异常',facts:['血糖偏高','血糖偏高','视物模糊','体重变化','家族史','血压记录'],inferences:[{text:'建议结合糖化血红蛋白',evidence_refs:['检验单']}],checks:[{content:'是否需要补充复查'}],information_gaps:['缺少近期检查结果','缺少近期检查结果','缺少用药记录','缺少复查时间','缺少既往评估结果']}]
   } };
   D.renderOverview();
   const overview = el('ov-body').innerHTML;
-  check('总览默认只突出当前待办', overview.includes('当前待办') && overview.includes('下一步'), overview);
-  check('总览将完整资料折叠', /<details[^>]*>/.test(overview) && overview.includes('查看完整病历资料'), overview);
-  check('总览待办指向实际处理阶段', overview.includes("go('triage')") && overview.includes("go('mdt')"), overview);
+  check('摘要页按阅读顺序继续资料包，不提前跳到待办',!overview.includes('当前待办') && overview.includes("go('packet')") && !overview.includes("go('mdt')"),'');
+  check('摘要页保留主诉与诉求及原始病历入口',overview.includes('视物模糊3月') && overview.includes('患者本次诉求') && overview.includes('查看原始脱敏病历'),'');
+  check('摘要恢复完整结构化病历',overview.includes('查看完整病历资料') && overview.includes('症状持续情况') && overview.includes('检查异常') && overview.includes('缺少近期检查结果'),'');
   D.renderTriage();
   const triage = el('tri-body').innerHTML;
-  check('分诊默认突出牵头科室', triage.includes('内分泌科') && triage.includes('科室分诊结果'), triage);
-  check('分诊不重复展示内部过程', !triage.includes('triage-process') && !triage.includes('规则命中（确定性）'), triage);
-  check('分诊默认按科室列表展示依据', triage.includes('triage-department-list')
-    && triage.includes('triage-department-item') && triage.includes('triage-evidence-list')
-    && triage.includes('依据列表'), triage);
+  check('分流页只确认方向与科室，不重复展示推荐依据',triage.includes('内分泌科') && triage.includes('triage-routing-decision') && !triage.includes('triage-department-list'),triage);
+  D.renderPacket();
+  const packetHtml=el('packet-body').innerHTML;
+  check('分流前资料包直接展示推荐科室与依据',packetHtml.includes('AI 推荐科室与判断依据') && packetHtml.includes('规则命中'),packetHtml);
+  D.S.review.doctor_mdt_simulation={state:'done',result:D.S.caseData.payload.mdt};
   D.renderMdt();
-  const mdt = el('mdt-body').innerHTML;
-  const mdtOrderTokens = ['MDT 会前资料包','AI 预分析提示','正式 MDT 会诊记录'];
-  check('MDT 页面先显示初筛和会前资料包',
-    (mdt.indexOf('MDT 启动判断') >= 0 || mdt.indexOf('MDT 启动判断结果') >= 0)
-      && mdt.indexOf('MDT 会前资料包') >= 0
-      && mdt.indexOf('AI 预分析提示') > mdt.indexOf('MDT 会前资料包')
-      && mdt.indexOf('正式 MDT 会诊记录') > mdt.indexOf('AI 预分析提示'), mdtOrderTokens.filter(x=>!mdt.includes(x)).join(','));
-  const mdtGroupingTokens = ['mdt-specialty-card','mdt-specialty-facts','mdt-specialty-inferences','mdt-specialty-checks','mdt-specialty-gaps','已掌握事实','AI 参考判断','待医生判断','信息缺口','查看全部'];
-  check('MDT 专科资料按四类内容分组并可展开', mdtGroupingTokens.every(x=>mdt.includes(x)), mdtGroupingTokens.filter(x=>!mdt.includes(x)).join(','));
-  const packetHtml = mdt.slice(mdt.indexOf('MDT 会前资料包'), mdt.indexOf('AI 预分析提示'));
-  check('MDT 专科事实与缺口去重',
-    (packetHtml.match(/血糖偏高/g)||[]).length === 1 && (packetHtml.match(/缺少近期检查结果/g)||[]).length === 1, packetHtml);
-  check('AI 预分析提示与正式 MDT 记录职责分开',
-    ['AI 预分析提示','AI 识别的潜在分歧','建议讨论问题','正式 MDT 会诊记录','待记录'].every(x=>mdt.includes(x))
-      && !mdt.includes('MDT 过程'), mdt);
+  const mdt=el('mdt-body').innerHTML;
+  check('MDT 表单后只保留返回，不重复滚回同一表单的继续按钮',!mdt.includes('继续 → 记录实际会诊结果') && mdt.includes('完成会诊并进入报告审核') && mdt.includes('返回分流确认'),'');
+  check('MDT 范围、AI 模拟、正式记录按顺序排列',mdt.indexOf('已确认的会诊范围') < mdt.indexOf('AI 会诊模拟') && mdt.indexOf('AI 会诊模拟') < mdt.indexOf('正式 MDT 会诊记录') && !mdt.includes('data-mdt-department'),mdt);
+  const mdtGroupingTokens=['mdt-specialty-card','mdt-specialty-inferences','mdt-specialty-checks','mdt-specialty-gaps','AI 参考判断','待医生判断','信息缺口','查看全部'];
+  check('资料包专科参考内容按分析类型分组并可展开',mdtGroupingTokens.every(x=>packetHtml.includes(x)), '');
+  check('资料包只呈现 AI 分析，不重复病例事实',!packetHtml.includes('血糖偏高') && !packetHtml.includes('现有病例事实与检查') && !packetHtml.includes('已掌握事实') && packetHtml.includes('建议结合糖化血红蛋白') && (packetHtml.match(/缺少近期检查结果/g)||[]).length===1, '');
+  check('模拟分开展示独立研判、真实生成的质询和归纳', ['各科独立研判','质询与回应','模拟归纳与待确认事项'].every(x=>mdt.includes(x)) && !mdt.includes('不代表真实参会医生'),mdt);
   check('MDT 不重复展示患者画像和证据侧栏',
     !mdt.includes('左栏 · 患者画像') && !mdt.includes('右栏 · 证据与裁决'), mdt);
   check('MDT 不再使用播放过程交互',
@@ -520,10 +774,10 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   };
   D.renderReview();
   const inlinePub = el('rev-publish-inline').innerHTML;
-  check('发布与意见录入不再依赖右轨', !doctorHtml.includes('class="rail rail-right"') && inlinePub.includes('录入线下实际意见'), '');
+  check('主区发布面板包含患者可读的最终建议', inlinePub.includes('医生最终建议'), '');
   check('主区渲染发布面板',
-    inlinePub.includes('确认发布审核版') && inlinePub.includes('处理剩余必审并发布'), '');
-  check('仍有待审条目时发布按钮禁用', inlinePub.includes('disabled'), '');
+    inlinePub.includes('预览患者报告') && !inlinePub.includes('批量接受可批量必审项并发布'), '');
+  check('发布入口不因待办而静默禁用', !inlinePub.includes('disabled'), '');
   check('审核条目默认只显示摘要并可进入详情',
     el('rev-body').innerHTML.includes('查看本类')
     && doctorHtml.includes('id="rev-detail"')
@@ -533,8 +787,101 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   check('唯一发布入口使用一致的输入前缀',
     inlinePub.includes('id="inline-op-text"')
     && !inlinePub.includes('id="op-text"'), '');
-  check('镜像里的录入按钮带自己的前缀（不会写进另一处输入框）',
-    inlinePub.includes("submitOpinion('inline')"), '');
+  check('最终建议通过主区发布入口一起提交',
+    inlinePub.includes("previewPublication('inline')"), '');
+
+  const doctorFetch=globalThis.fetch;
+  const publications=[];
+  globalThis.fetch=async(url,opts)=>{
+    publications.push({url,data:JSON.parse(opts.body)});
+    return {status:400,json:async()=>({error:'还有待审核项目'})};
+  };
+  el('inline-op-text').value='  ';
+  await D.publish(false);
+  check('医生未填写最终建议时阻止发布并提示填写',
+    publications.length === 0 && el('inline-op-msg').textContent.includes('最终建议'), '');
+  el('inline-op-text').value='给患者的复诊安排';
+  D.S.publicationPreview={caseId:D.S.caseId,advice:'给患者的复诊安排',preview_revision:'fixture'};
+  await D.publish(false);
+  check('最终建议随发布请求提交并保留未通过的审核门禁提示',
+    publications.length === 1 && publications[0].url.endsWith('/publish')
+      && publications[0].data.final_advice === '给患者的复诊安排'
+      && el('inline-op-msg').textContent.includes('待审核'), '');
+  {
+    const attack={reports:{patient_final_report:{header:{报告名称:'<b>x</b>',主诉:'<script>attack()</script>'},
+      section_order:['医生审核后的专科评估意见','医生最终建议','后续安排'],
+      sections:{医生审核后的专科评估意见:[{科室:'<i>眼科</i>',专科评估意见:['<img onerror=attack()>'],建议向医生确认:['<svg onload=x>'],审核:'医生已确认'}],
+        医生最终建议:'<img onerror=attack()>',后续安排:['<a href=x>复诊</a>']}}}};
+    const html=D.publicationPreviewHtml(attack,'inline');
+    check('患者预览把报头、专科意见、建议和后续安排作为文本展示，转义 HTML',
+      html.includes('&lt;script&gt;') && !/<(img|svg|script|i>|b>|a )/.test(html.replace(/<(?:article|section|header|footer|div|span|strong|small|p|ol|li|dl|dt|dd|h3|h4|button)\b[^>]*>/g,'')),'');
+    const sample={reports:{patient_final_report:{case_id:'SYN-1',header:{报告名称:'多学科会诊意见报告',报告编号:'SYN-1-v2',病历编号:'SYN-1',性别:'女',年龄:'42 岁',主责科室:'眼科',会诊科室:['肾内科'],审核医生:'合成医生',报告日期:'发布时记录'},
+      section_order:['医生审核后的专科评估意见','多学科会诊结论','医生最终建议','后续安排'],
+      sections:{医生审核后的专科评估意见:[{科室:'眼科',专科评估意见:['意见甲','意见乙'],建议向医生确认:['是否需要检查丙'],审核:'医生已确认'},{科室:'肾内科',专科评估意见:'旧快照整段意见',来源:'AI 生成，医生已修改'}],
+        多学科会诊结论:'会诊结论丁',医生最终建议:'复诊安排戊',后续安排:['会诊后续安排：两周复诊',{未解决:'旧分歧',后续安排:'待补资料'}]}}}};
+    const doc=D.publicationPreviewHtml(sample,'inline');
+    const order=['专科评估意见','多学科会诊结论','医生建议','后续安排'].map(t=>doc.indexOf(t));
+    check('患者预览按会诊意见单单栏排序：专科意见 → 会诊结论 → 医生建议 → 后续安排',
+      order.every(i=>i>0) && order.every((v,i)=>i===0||v>order[i-1]) && doc.includes('一、') && doc.includes('四、'),'');
+    check('患者预览含报头、基本信息、预览印章和签发栏',
+      ['多学科会诊意见报告','SYN-1-v2','女 · 42 岁','肾内科','预览 · 尚未发布','合成医生','fr-sign'].every(t=>doc.includes(t)),'');
+    check('兼容旧快照：整段意见与对象式后续安排仍按文本显示',
+      doc.includes('旧快照整段意见') && doc.includes('未解决：旧分歧；后续安排：待补资料'),'');
+    check('历史版本渲染不显示预览印章',!D.finalReportDocumentHtml(sample.reports.patient_final_report).includes('预览 · 尚未发布'),'');
+  }
+  D.S.publicationPreview={caseId:D.S.caseId,advice:'旧建议',preview_revision:'old'};el('inline-publication-preview').innerHTML='旧预览';
+  D.updateFinalAdvice('新建议');
+  check('修改最终建议立即使旧预览失效',D.S.publicationPreview===null && el('inline-publication-preview').innerHTML==='','');
+  publications.length=0;el('inline-op-text').value='新建议';
+  await D.publish(false);
+  check('未经当前预览不能直接从 UI 发布',publications.length===0 && el('inline-op-msg').textContent.includes('先预览'),'');
+  let finishPreview;
+  globalThis.fetch=()=>new Promise(resolve=>{finishPreview=resolve;});
+  el('inline-op-text').value='请求时建议';D.S.review.publication_blockers=[];
+  const pendingPreview=D.previewPublication();D.updateFinalAdvice('修改后建议');
+  finishPreview({status:200,json:async()=>({ok:true,preview_revision:'old',reports:{}})});
+  await pendingPreview;
+  check('编辑建议后迟到的预览不能重新启用确认发布',D.S.publicationPreview===null,'');
+  const oldPreviewCase=D.S.caseId;el('inline-op-text').value='修改后建议';
+  const otherPreview=D.previewPublication();D.S.caseId='NEW-PREVIEW-CASE';
+  finishPreview({status:200,json:async()=>({ok:true,preview_revision:'old',reports:{}})});
+  await otherPreview;
+  check('切换病例后旧患者预览不覆盖新病例',D.S.publicationPreview===null,'');
+  D.S.caseId=oldPreviewCase;
+  globalThis.fetch=doctorFetch;
+
+  D.S.caseData = {case_id:'CAAA1111',payload:{triage:{primary:{department:'骨科'},selected:['骨科','眼科'],secondary:[{department:'眼科'}]}}};
+  D.S.review = {triage_doctor_confirmation:{status:'confirmed',primary_department:'骨科',secondary_departments:['眼科'],selected:['骨科','眼科']},mdt_screening:{status:'decided',decision:'recommend_mdt',departments:['骨科','眼科']}};
+  D.renderTriage();
+  check('分流确认后提供返回资料包与继续 MDT 协作入口',
+    el('tri-body').innerHTML.includes("go('packet')") && el('tri-body').innerHTML.includes("go('mdt')"), '');
+  D.S.review = {};
+  const beforeRouting = D.renderMdtScope();
+  check('未确认分流时 MDT 判断引导回前置步骤而不提供错误顺序表单',
+    beforeRouting.includes("go('triage')") && !beforeRouting.includes('id="mdt-screening-decision"'), '');
+  D.S.review = {mdt_screening:{status:'decided',decision:'single_specialty'},mdt_preparation_packet:{handling:{disagreements:[{'分歧编号':'X-01','分歧主题':'复查安排'}]}}};
+  D.renderMdt();
+  check('单专科分支仍可记录 AI 分歧处理且有报告审核下一步',
+    el('mdt-body').innerHTML.includes('submitDisagreement') && el('mdt-body').innerHTML.includes("go('review')"), '');
+  D.S.review = {
+    items:[{item_id:'IT-1',title:'安排',state:'confirmed',review_tier:'required'}],
+    summary:{total:1,pending:0},case_state:'awaiting_doctor',published:false,
+    publication_blockers:[{code:'triage',message:'请先确认主责和协同科室',screen:'triage'},
+      {code:'mdt_screening',message:'请保存是否需要正式 MDT 的判断',screen:'mdt'}]};
+  D.renderReview();
+  const blockedPanel=el('rev-publish-inline').innerHTML;
+  check('零待审时发布入口仍可点击以解释其他未完成事项',
+    (blockedPanel.match(/<button[^>]+onclick="previewPublication[^>]*>/g)||[]).length===1 &&
+    !(blockedPanel.match(/<button[^>]+onclick="previewPublication[^>]*>/g)||[]).some(tag=>tag.includes('disabled')), '');
+  let blockedRequests=0;
+  globalThis.fetch=async()=>{blockedRequests++;return {status:200,json:async()=>({})};};
+  el('inline-op-text').value='';
+  await D.publish(false);
+  check('点击发布一次列出分流、MDT 判断、最终建议并给出跳转入口',
+    blockedRequests===0 && el('inline-publish-blockers').innerHTML.includes("goDoctorTask('triage'") &&
+    el('inline-publish-blockers').innerHTML.includes("goDoctorTask('mdt'") &&
+    el('inline-publish-blockers').innerHTML.includes('最终建议'), '');
+  globalThis.fetch=doctorFetch;
 
   D.S.review = {
     items: [{ item_id: 'AUTO-1', title: '路径步骤：常规准备', target_type: 'path_step',
@@ -564,6 +911,124 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   window.openHistoryVersion(2);
   check('查看历史版本前将病例主区滚动到顶部', el('doctor-case-main').scrollTop === 0, String(el('doctor-case-main').scrollTop));
   check('缺少历史正文时明确显示空状态', el('hist-body').innerHTML.includes('该版本暂无报告正文'), '');
+
+  const initialFetch=globalThis.fetch;
+  const queued=[];
+  globalThis.fetch=(url)=>new Promise(resolve=>queued.push({url,resolve}));
+  const requestA=D.openCase('C-A'), requestB=D.openCase('C-B');
+  await D.publish(false);
+  check('病例加载期间不能用旧页面内容发布新病例',queued.length===6 && el('inline-op-msg').textContent.includes('加载'),'');
+  const response=id=>({status:200,json:async()=>({case:{case_id:id,payload:{}},case_id:id,items:[],summary:{total:0,pending:0}})});
+  queued.filter(req=>req.url.includes('C-B')).forEach(req=>req.resolve(response('C-B')));
+  await requestB;
+  queued.filter(req=>req.url.includes('C-A')).forEach(req=>req.resolve(response('C-A')));
+  await requestA;
+  check('较早病例请求晚返回时不覆盖新病例的报告与建议归属',
+    D.S.caseId==='C-B' && D.S.caseData.case_id==='C-B' && D.S.review.case_id==='C-B', '');
+  globalThis.fetch=async()=>({status:200,json:async()=>({ok:true,case:{case_id:'C-B',payload:{}},items:[],summary:{total:0,pending:0},mdt_screening:{status:'decided',decision:'single_specialty'}})});
+  D.S.screen='mdt';
+  await D.submitDisagreement('X-01','X01');
+  check('保存分歧后留在 MDT 页面继续处理', D.S.screen==='mdt', '');
+  const originalMatch=window.matchMedia,originalScroll=window.scrollTo;
+  let windowScrolled=false;
+  window.matchMedia=()=>({matches:true}); window.scrollTo=()=>{windowScrolled=true;};
+  D.S.screen='triage';D.go('mdt');
+  check('小屏跳转新步骤时重置实际窗口滚动位置',windowScrolled,'');
+  window.matchMedia=originalMatch;window.scrollTo=originalScroll;globalThis.fetch=initialFetch;
+
+  /* MDT 保存进度与完成操作应有持久反馈，并同步服务器的完成门槛。 */
+  D.S.caseId='C-MDT-SAVE'; D.S.caseRole='primary'; D.S.caseLoading=false;
+  const mdtCase={case_id:D.S.caseId,payload:{profile:{},triage:{primary:{department:'内分泌科'}}}};
+  const mdtReview={items:[{item_id:'path_step:S1',target_type:'path_step',state:'awaiting',review_tier:'required',content:'复诊安排'}],summary:{pending:1},mdt_screening:{status:'decided',decision:'recommend_mdt',purpose:'共同评估',departments:['内分泌科','眼科']},triage_doctor_confirmation:{status:'confirmed',selected:['内分泌科','眼科']}};
+  let savedMdt=null;
+  const mdtPosts=[];
+  globalThis.fetch=async(url,options={})=>{
+    if(url.endsWith('/mdt-formal-record')){
+      const body=JSON.parse(options.body);mdtPosts.push(body);
+      savedMdt={...body,status_label:body.status==='completed'?'已完成':'待开始'};
+      return {status:200,json:async()=>({ok:true,mdt_formal_record:savedMdt})};
+    }
+    const data=url.endsWith('/review')?{...mdtReview,mdt_formal_record:savedMdt,publication_blockers:savedMdt?.status==='completed'?[]:[{code:'mdt_record',message:'正式 MDT 尚未完成',screen:'mdt'}]}:url.endsWith('/audit')?{}:{case:mdtCase,case_role:'primary'};
+    return {status:200,json:async()=>data};
+  };
+  D.S.caseData=mdtCase;D.S.review=mdtReview;D.S.screen='mdt';
+  el('mdt-formal-status').value='planned';el('mdt-formal-conclusion').value='';
+  await D.submitMdtFormalRecord();
+  check('保存待开始进度后保留状态说明，并明确仍需完成会诊',D.S.screen==='mdt' && el('mdt-body').innerHTML.includes('会诊进度已保存') && D.S.review.publication_blockers.some(b=>b.code==='mdt_record'),'');
+  el('mdt-formal-conclusion').value='已实际共同讨论并确认安排';
+  await D.submitMdtFormalRecord('completed');
+  check('明确完成 MDT 后进入报告审核且刷新后不再显示未完成门槛',mdtPosts.at(-1).status==='completed' && D.S.screen==='review' && !D.S.review.publication_blockers.some(b=>b.code==='mdt_record') && el('rev-body').innerHTML.includes('正式 MDT 已完成并保存'),'');
+  const beforeInvalid=mdtPosts.length;
+  el('mdt-formal-conclusion').value='';
+  await D.submitMdtFormalRecord('completed');
+  check('完成会诊前结论为空时在表单提示，保留内容并不发出完成请求',mdtPosts.length===beforeInvalid && el('mdt-formal-msg').textContent.includes('结论'),'');
+  el('mdt-formal-conclusion').value='保留的会诊结论';
+  globalThis.fetch=async()=>{throw new Error('网络中断');};
+  await D.submitMdtFormalRecord('completed');
+  check('会诊保存网络失败有可见错误且不丢失输入',el('mdt-formal-msg').textContent.includes('保存失败') && el('mdt-formal-conclusion').value==='保留的会诊结论' && !el('mdt-formal-complete').disabled,'');
+  globalThis.fetch=async(url,options={})=>url.endsWith('/mdt-formal-record')?{status:200,json:async()=>({ok:true,mdt_formal_record:{status:'completed',conclusion:'已保存的结论'}})}:{status:500,json:async()=>({error:'读取审核状态失败'})};
+  await D.submitMdtFormalRecord('completed');
+  check('保存成功但刷新失败时明确区分并提供重试入口',el('mdt-body').innerHTML.includes('会诊记录已保存，但审核状态刷新失败') && el('mdt-body').innerHTML.includes('重新加载审核状态') && D.S.review.mdt_formal_record.status==='completed','');
+  globalThis.fetch=initialFetch;
+  check('摘要下一步先进入 AI 资料包',D.doctorWorkflowNav('overview').includes("go('packet')"),'');
+  check('独立 AI 资料包步骤位于摘要和分流之间',doctorHtml.indexOf('data-s="packet"')>doctorHtml.indexOf('data-s="overview"') && doctorHtml.indexOf('data-s="packet"')<doctorHtml.indexOf('data-s="triage"'),'');
+  D.S.caseId='C-ROUTING';D.S.caseData={case_id:'C-ROUTING',payload:{triage:{selected:['内分泌科','眼科']}}};D.S.caseRole='primary';D.S.review={items:[],summary:{},triage_doctor_confirmation:null,mdt_screening:null};
+  D.S.caseLoading=false;
+  const routingQuery=document.querySelectorAll;
+  document.querySelectorAll=selector=>selector==='[data-triage-secondary]:checked'?[{value:'眼科'}]:routingQuery(selector);
+  el('triage-primary-department').value='内分泌科';el('triage-confirmation-reason').value='共同判断';el('triage-routing-decision').value='recommend_mdt';el('triage-routing-purpose').value='确认共同安排';
+  let unifiedBody;
+  const confirmedRouting={triage_doctor_confirmation:{status:'confirmed',primary_department:'内分泌科',selected:['内分泌科','眼科']},mdt_screening:{status:'decided',decision:'recommend_mdt',purpose:'确认共同安排',departments:['内分泌科','眼科']},items:[],summary:{}};
+  globalThis.fetch=async(url,options={})=>{if(url.endsWith('/doctor-routing')){unifiedBody=JSON.parse(options.body);return {status:200,json:async()=>({ok:true})};}return {status:200,json:async()=>url.endsWith('/review')?confirmedRouting:url.endsWith('/audit')?{}:{case:D.S.caseData,case_role:'primary'}};};
+  await D.submitTriageConfirmation();
+  check('分流一次提交科室、MDT 方向和目标，保存后进入协作',unifiedBody?.decision==='recommend_mdt' && unifiedBody?.purpose==='确认共同安排' && unifiedBody?.secondary_departments.join('、')==='眼科' && D.S.screen==='mdt','');
+  document.querySelectorAll=routingQuery;
+  if(D.startDoctorMdtSimulation){
+    el('mdt-formal-conclusion').value='正在填写的真实医生结论';
+    globalThis.fetch=async()=>{throw new Error('测试网络失败');};
+    await D.startDoctorMdtSimulation();
+    check('模拟网络失败有提示，并保留真实记录输入',el('mdt-simulation-msg').textContent.includes('失败') && el('mdt-formal-conclusion').value==='正在填写的真实医生结论','');
+    const completedSimulation={state:'done',result:{analyses:[{department:'眼科',status:'ok'}],aggregation:{}}};
+    const completedReview={...confirmedRouting,doctor_mdt_simulation:completedSimulation,mdt_disagreements:[]};
+    globalThis.fetch=async url=>({status:200,json:async()=>url.endsWith('/review')?completedReview:{ok:true,simulation:completedSimulation}});
+    await D.refreshDoctorMdtSimulation();
+    check('模拟完成刷新审核状态时保留正在填写的正式结论',D.S.review.doctor_mdt_simulation.state==='done' && el('mdt-formal-conclusion').value==='正在填写的真实医生结论' && el('mdt-simulation-body').innerHTML.includes('已保存'),'');
+    globalThis.fetch=async url=>({status:url.endsWith('/review')?500:200,json:async()=>url.endsWith('/review')?{error:'测试刷新失败'}:{ok:true,simulation:completedSimulation}});
+    await D.refreshDoctorMdtSimulation();
+    check('模拟完成但审核加载失败提供就地重试并保留输入',el('mdt-simulation-msg').innerHTML.includes('重新加载模拟与审核状态') && el('mdt-formal-conclusion').value==='正在填写的真实医生结论','');
+    let lateSimulation;
+    globalThis.fetch=()=>new Promise(resolve=>{lateSimulation=resolve;});
+    const oldPoll=D.refreshDoctorMdtSimulation();
+    const newCaseId='C-NEW-SIMULATION';
+    D.S.caseId=newCaseId;D.S.review={doctor_mdt_simulation:{state:'none'}};
+    el('mdt-simulation-body').innerHTML='新病例模拟区';
+    lateSimulation({status:200,json:async()=>({ok:true,simulation:completedSimulation})});
+    await oldPoll;
+    check('旧病例模拟请求晚返回不会覆盖新病例状态与模拟区',D.S.caseId===newCaseId && D.S.review.doctor_mdt_simulation.state==='none' && el('mdt-simulation-body').innerHTML==='新病例模拟区','');
+    D.S.review={items:[{item_id:'consensus_item:C-01',content_revision:2}]};
+    D.openModal('modify','consensus_item:C-01');
+    D.S.review.items[0].content_revision=3;
+    el('m-after').value='针对旧内容的修改';el('m-reason').value='旧依据';
+    let reviewSubmission;
+    globalThis.fetch=async(url,options={})=>{reviewSubmission=JSON.parse(options.body);return {status:400,json:async()=>({ok:false,error:'审核内容已变化，请重新核对'})};};
+    await D.submitModal();
+    check('修改弹窗提交绑定打开时所见修订，过期失败保留输入',reviewSubmission.expected_content_revision===2 && el('m-after').value==='针对旧内容的修改' && D.S.modal?.contentRevision===2,'');
+    el('dis-revision-X01').value='4';
+    await D.submitDisagreement('X-01','X01');
+    check('分歧处理提交绑定表单所见修订，过期失败给出提示',reviewSubmission.expected_content_revision===4 && el('dis-msg-X01').textContent.includes('已变化'),'');
+    D.S.screen='mdt';D.S.caseId='C-REENTER';D.S.caseData={case_id:'C-REENTER',payload:{}};
+    D.S.review={...confirmedRouting,doctor_mdt_simulation:{state:'none'}};
+    const reads=[];
+    globalThis.fetch=async url=>{reads.push(url);return {status:200,json:async()=>url.endsWith('/review')?completedReview:{ok:true,simulation:{...completedSimulation,finished_at:'2026-10-08T12:00:00'}}};};
+    D.renderMdt();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    check('重新进入 MDT 时读取已保存结果，不依赖页面缓存的未生成状态',reads.some(url=>url.endsWith('/doctor-mdt-simulation')) && D.S.review.doctor_mdt_simulation.state==='done' && el('mdt-simulation-body').innerHTML.includes('已保存'),'');
+    D.S.review={...confirmedRouting,doctor_mdt_simulation:{state:'none'}};
+    globalThis.fetch=async()=>({status:500,json:async()=>({error:'测试读取失败'})});
+    await D.refreshDoctorMdtSimulation();
+    check('读取失败不会误显示未生成，并提供读取重试',!el('mdt-simulation-body').innerHTML.includes('生成本次 AI 会诊模拟') && el('mdt-simulation-msg').textContent.includes('尚不能确认') && el('mdt-simulation-msg').innerHTML.includes('重新读取已保存模拟'),'');
+  }else check('模拟网络失败有提示，并保留真实记录输入',false,'缺少医生确认后生成模拟入口');
+  globalThis.fetch=initialFetch;
 }
 
 /* ------------------------------------------------------------------ 输出 */

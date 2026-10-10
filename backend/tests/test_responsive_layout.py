@@ -37,10 +37,10 @@ CRITICAL_ACTIONS = {
         ("录入与提交（表单区）", "#history", None),
         ("结构画像", "#profile-body", None),
         ("报告摘要与打印", "#report-body", None),
-        ("就诊后资料更新", "#upd-content", None),
+        ("查看与刷新医生结果", "#refresh-report-btn", None),
     ],
     "/doctor": [
-        ("发布审核版 + 录入线下意见", "#rev-publish-inline", None),
+        ("填写最终建议并发布", "#rev-publish-inline", None),
         ("逐条审核条目与操作按钮", "#rev-body", None),
         ("病例列表（切病例）", "#list-body", None),
         ("审阅视图导航", ".view-nav", None),
@@ -341,11 +341,13 @@ class ResponsiveLayoutTest(unittest.TestCase):
                 self.assertGreaterEqual(int(decls.get("min-height", "0").replace("px", "")), 44)
                 self.assertGreaterEqual(int(decls.get("min-width", "0").replace("px", "")), 44)
 
-    def test_home_value_canvas_and_role_entries_are_responsive(self):
-        """首页的价值画布和角色入口在桌面、平板、手机宽度都保留可见触达。"""
+    def test_home_brand_image_flow_and_role_entries_are_responsive(self):
+        """品牌插画适应容器，流程在手机上竖排，角色入口可触达。"""
         html, rules = self.page("/")
-        self.assertEqual(declarations_at(rules, ".evidence-canvas", 390).get("overflow"), "hidden")
-        self.assertEqual(declarations_at(rules, ".evidence-cards", 390).get("display"), "grid")
+        self.assertEqual(declarations_at(rules, ".hero-art img", 390).get("width"), "100%")
+        self.assertEqual(declarations_at(rules, ".hero-art img", 390).get("height"), "auto")
+        self.assertEqual(declarations_at(rules, ".product-steps", 390).get("grid-template-columns"), "1fr")
+        self.assertIn("repeat(3", declarations_at(rules, ".product-steps", 1440).get("grid-template-columns", ""))
         self.assertGreaterEqual(
             int(declarations_at(rules, ".role-entry", 390).get("min-height", "0").replace("px", "")),
             44,
@@ -359,7 +361,11 @@ class ResponsiveLayoutTest(unittest.TestCase):
         self.assertEqual(declarations_at(rules, ".home-entry .btn", 390).get("white-space"), "nowrap")
         self.assertEqual(declarations_at(rules, ".nav-right", 390).get("min-width"), "0")
         self.assertIn('href="#flow"', html)
-        self.assertIn("minmax(0,5fr)", declarations_at(rules, ".hero", 1440).get("grid-template-columns", ""))
+        self.assertEqual(
+            declarations_at(rules, ".hero", 1440).get("grid-template-columns"),
+            "minmax(0,1fr)",
+            "首页标题与插画应按单列排列，避免重新挤成左右分栏",
+        )
 
     # ---------------------------------------------------- 打印
     def test_print_hides_shell_and_expands_report(self):
