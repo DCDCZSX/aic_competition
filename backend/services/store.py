@@ -51,6 +51,8 @@ class Store:
             parent = os.path.dirname(os.path.abspath(self.db_path))
             os.makedirs(parent, exist_ok=True)
         self._lock = threading.RLock()
+        # 本进程已分配但可能尚未落库的病例号（建档前的画像抽取可能耗时），防止并发重号。
+        self._reserved_case_ids: set = set()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         # 多线程后台分析与 HTTP 请求会并发访问 SQLite；显式设置忙等待，
@@ -179,6 +181,29 @@ class Store:
             self._conn.commit()
 
     # ------------------------------------------------------------------ 病例
+    def next_case_id(self, prefix: str = "YX", day: Optional[str] = None) -> str:
+        """分配按日期编号的病例号：``{prefix}{YYYYMMDD}-{当日 4 位流水}``。
+
+        在存储锁内取“库内当日最大流水”和“本进程已预留流水”的较大者再加一，
+        保证同一进程内并发建档不会拿到相同编号；单进程 demo 边界与会话、令牌一致。
+        """
+        day = day or datetime.now().strftime("%Y%m%d")
+        stem = f"{prefix}{day}-"
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT case_id FROM cases WHERE case_id LIKE ?", (stem + "%",)
+            ).fetchall()
+            used = {str(row[0]) for row in rows} | {
+                cid for cid in self._reserved_case_ids if cid.startswith(stem)}
+            highest = 0
+            for cid in used:
+                tail = cid[len(stem):]
+                if tail.isdigit():
+                    highest = max(highest, int(tail))
+            case_id = f"{stem}{highest + 1:04d}"
+            self._reserved_case_ids.add(case_id)
+            return case_id
+
     def save_case(
         self,
         case_id: str,
