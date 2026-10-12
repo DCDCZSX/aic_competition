@@ -210,7 +210,6 @@ backend/
 ├── verify_update_http.py     # 患者端端到端断言
 ├── verify_doctor_http.py     # 医生工作台端到端断言
 └── requirements.txt
-_legacy/                      # 历史版本归档（只读，不参与运行）
 ```
 
 ## 8. 许可与声明

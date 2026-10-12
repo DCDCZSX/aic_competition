@@ -453,7 +453,7 @@
 | S1 规则库 | `rule_engine.py` |
 | S3 编排/校验 | `orchestrator.py`（decision_path、校验器、conflict_log） |
 | 画像抽取 + 校验 | `portrait_extractor.py`（G4 门禁） |
-| 专科视角 Agent | `mdt_agents.py`（改造现有 controller/specialist/coordinator） |
+| 专科视角分析 | `mdt_analyst.py`（独立意见卡、聚合与分歧检测） |
 | 分歧检测 v0 | `disagreement_detector.py` |
 | 增量更新/依赖矩阵 | `dependency_matrix.py` + `update_service.py` |
 | Action Center | `task_service.py`（状态机） |
