@@ -7,7 +7,6 @@
 | `frontend_react_abandoned/` | `CHAIS/frontend/` | React 前端只有 4 个源文件、**没有 `package.json`（不可构建）**，且调用后端不存在的 `/api/conduct_discussion` | ❌ 不可用。参赛前端 = `backend/templates/index.html`（现行）或按 UI 设计说明新建 |
 | `root_templates_websocket/` | `CHAIS/templates/` | 更老的 WebSocket 版前端，路由与当前后端不匹配 | ❌ 不可用，仅留档对比 |
 | `app_websocket_legacy/` | `CHAIS/app/` | 上述 WebSocket 版配套的 `config.py` / `session.py` | ❌ 不可用，仅留档 |
-| `tempCodeRunnerFile.py` | `CHAIS/` | 编辑器临时文件（16 字节） | ❌ 垃圾文件 |
 
 ## 注意
 
