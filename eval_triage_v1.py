@@ -28,6 +28,8 @@ import sys
 import time
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from eval_paths import data_path, output_root
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(BASE_DIR, "backend"))
 
@@ -35,8 +37,8 @@ from services.department_domain import resolve  # noqa: E402
 from services.rule_engine import evaluate  # noqa: E402
 from services.triage import orchestrate  # noqa: E402
 
-GOLD_CSV = os.path.join(BASE_DIR, "MDT-5.csv")
-OUT_DIR = os.path.join(BASE_DIR, "eval_out")
+GOLD_CSV = str(data_path("MDT-5.csv"))
+OUT_DIR = str(output_root())
 
 # ---------------------------------------------------------------------------
 # 规格书 §12 跨病种验收集（金标准由文档给定）

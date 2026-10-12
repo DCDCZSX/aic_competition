@@ -23,6 +23,8 @@ import sys
 import time
 from typing import Dict, List, Sequence
 
+from eval_paths import output_root
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
@@ -45,7 +47,7 @@ from eval_triage_v1 import (  # noqa: E402
 )
 
 SELF_JSON = os.path.join(BASE_DIR, "eval_cases_selfbuilt.json")
-OUT_DIR = os.path.join(BASE_DIR, "eval_out")
+OUT_DIR = str(output_root())
 
 SUBSETS = ("真实会诊记录", "规格书§12", "自建用例")
 
