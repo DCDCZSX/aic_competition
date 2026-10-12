@@ -344,6 +344,13 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     && !bannerRun.includes('正在整理眼科的参考意见'), '');
   check('横幅不泄漏内部阶段术语', !bannerRun.includes('模型发言')
     && !bannerRun.includes('独立意见'), '');
+  check('整理进度卡显示大号百分比、当前步骤一句话、等待秒数与三步状态',
+    bannerRun.includes('data-analysis-pct') && bannerRun.includes('正在判断就医方向') && bannerRun.includes('data-analysis-elapsed')
+      && (bannerRun.match(/class="apc-step /g)||[]).length===3 && bannerRun.includes('apc-step is-running'), '');
+  {
+    const doneCard = analysisBanner({ state: 'done', phases: { profile:{state:'done'}, triage:{state:'done'}, mdt:{state:'done'} }, mdt:{state:'done'} });
+    check('整理完成后进度卡为 100% 且不再显示进行中动画', doneCard.includes('is-done') && doneCard.includes('width:100%') && !doneCard.includes('apc-bar is-running'), '');
+  }
   const single = analysisBanner({ state: 'done',
     phases: { mdt: { state: 'skipped' } },
     mdt: { state: 'skipped', step: '仅 1 个就医方向，无需多学科会诊' } });
@@ -533,6 +540,8 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
     switchReport('summary');
     check('未发布时即使带有最终报告字段也不展示，打印仍为就诊准备单',
       !el('doctor-result-body').innerHTML.includes('final-report') && el('report-body').innerHTML.includes('门诊病历') && el('report-prep-heading').textContent==='重点摘要与就医详情','');
+    check('就诊准备单打印版末尾不再附免责声明与“本系统不能做什么”两行',
+      el('report-body').innerHTML.includes('门诊病历') && !el('report-body').innerHTML.includes('print-disclaimer') && !el('report-body').innerHTML.includes('本系统不能做什么'), '');
   }
   globalThis.fetch=savedFetch;
 
@@ -614,7 +623,7 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
 /* ----------------------------------------------------- 医生工作台断言 */
 {
   const doctorHtml = fs.readFileSync(path.join(TPL, 'doctor.html'), 'utf8');
-  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, go, openCase, doctorWorkflowNav, openModal, submitModal, decide, submitTriageConfirmation, startDoctorMdtSimulation: typeof startDoctorMdtSimulation === "function" ? startDoctorMdtSimulation : null, refreshDoctorMdtSimulation: typeof refreshDoctorMdtSimulation === "function" ? refreshDoctorMdtSimulation : null, renderPacket: typeof renderPacket === "function" ? renderPacket : null, submitDisagreement, submitMdtFormalRecord, publish, toggleQueueDetails: typeof toggleQueueDetails === "function" ? toggleQueueDetails : null, previewPublication, publicationPreviewHtml, finalReportDocumentHtml, updateFinalAdvice, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScope, renderQueueFilters, setQueueFilter, goQueuePage, renderCaseContext, openHistoryDecision, openHistoryVersion, openReviewCategory: (...args) => window.openReviewCategory(...args) };');
+  eval(inlineScript('doctor.html') + '\n;globalThis.__D = { S, go, openCase, doctorWorkflowNav, openModal, submitModal, decide, submitTriageConfirmation, startDoctorMdtSimulation: typeof startDoctorMdtSimulation === "function" ? startDoctorMdtSimulation : null, refreshDoctorMdtSimulation: typeof refreshDoctorMdtSimulation === "function" ? refreshDoctorMdtSimulation : null, renderPacket: typeof renderPacket === "function" ? renderPacket : null, submitDisagreement, submitMdtFormalRecord, publish, toggleQueueDetails: typeof toggleQueueDetails === "function" ? toggleQueueDetails : null, goPendingReviewItem: typeof goPendingReviewItem === "function" ? goPendingReviewItem : null, previewPublication, publicationPreviewHtml, finalReportDocumentHtml, updateFinalAdvice, loadList, renderOverview, renderTriage, renderEvidence, renderMdt, renderReview, renderHistory, renderMdtScope, renderQueueFilters, setQueueFilter, goQueuePage, renderCaseContext, openHistoryDecision, openHistoryVersion, openReviewCategory: (...args) => window.openReviewCategory(...args) };');
   const D = globalThis.__D;
   check('病例详情导航只突出主要任务',
     ['overview','triage','mdt','review'].every(key=>doctorHtml.includes(`data-s="${key}"`))
@@ -884,6 +893,65 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   globalThis.fetch=doctorFetch;
 
   D.S.review = {
+    items: [
+      { item_id: 'ai_analysis:血液科', target_type: 'ai_analysis', title: 'AI 专科意见：血液科', ai_content: '血液科意见',
+        state: 'awaiting', state_label: '待审', review_tier: 'required', department: '血液科' },
+      { item_id: 'ai_analysis:眼科', target_type: 'ai_analysis', title: 'AI 专科意见：眼科', ai_content: '眼科意见',
+        state: 'confirmed', state_label: '已接受', review_tier: 'required', department: '眼科', decision_id: 'D1' }],
+    published: false, case_state: 'awaiting_doctor', review: {}, doctor_opinions: [],
+    summary: { total: 2, pending: 1, doctor_reviewed: 1, auto_processed: 0, by_state: { awaiting: 1, confirmed: 1 } },
+  };
+  D.renderReview();
+  {
+    const body = el('rev-body').innerHTML;
+    check('专科意见待确认数用醒目计数块显示（数量 + 已确认进度）',
+      body.includes('specialty-review-counter is-pending') && body.includes('<strong>1</strong>') && body.includes('已确认 1 科'), '');
+    check('报告审核页不再显示“返回 / 继续 → 填写最终建议”导航',
+      !el('rev-publish-inline').innerHTML.includes('继续 → 填写最终建议') && !el('rev-publish-inline').innerHTML.includes('doctor-workflow-nav'), '');
+  }
+  {
+    // 发布门槛上下文已审完、专科意见还没审完：“去逐条审核”应回到专科意见，而不是打开必审上下文清单。
+    D.S.review.items.push({ item_id: 'path_step:S2', target_type: 'path_step', title: '路径', ai_content: '安排',
+      state: 'confirmed', state_label: '已接受', review_tier: 'required', decision_id: 'D2' });
+    D.renderReview();
+    el('rev-category').innerHTML=''; el('rev-category').classList.add('hide');
+    D.goPendingReviewItem();
+    check('专科意见未审完时“去逐条审核”回到专科意见卡，不打开发布门槛清单',
+      el('rev-category').classList.contains('hide') && !el('rev-category').innerHTML.includes('发布门槛：必审上下文'), el('rev-category').innerHTML.slice(0,80));
+    D.S.review.items[0].state='confirmed'; D.S.review.items[0].decision_id='D3';
+    D.S.review.items[2].state='awaiting'; delete D.S.review.items[2].decision_id;
+    D.renderReview();
+    D.goPendingReviewItem();
+    check('专科意见都确认后“去逐条审核”打开发布门槛必审清单',
+      el('rev-category').innerHTML.includes('发布门槛：必审上下文'), '');
+    D.openReviewCategory && el('rev-category').classList.add('hide');
+  }
+
+  D.S.review = {
+    items: [
+      { item_id: 'consensus_item:X-01', target_type: 'consensus_item', title: '分歧待裁决：先查眼底 vs 先查肾功',
+        ai_content: '眼科：先查眼底', state: 'handled_in_mdt', state_label: '已在 MDT 处理', review_tier: 'required',
+        handled_in_mdt: true, handled_note: '医生已在 MDT 页记录：已解决——先查眼底', conflict: true },
+      { item_id: 'consensus_item:X-02', target_type: 'consensus_item', title: '分歧待裁决：是否住院',
+        ai_content: '肾内科：建议住院', state: 'awaiting', state_label: '待审', review_tier: 'required', conflict: true }],
+    published: false, case_state: 'awaiting_doctor', review: {}, doctor_opinions: [],
+    summary: { total: 2, pending: 1, doctor_reviewed: 0, auto_processed: 0, by_state: { awaiting: 1, handled_in_mdt: 1 } },
+  };
+  D.renderReview();
+  D.openReviewCategory('processed');
+  {
+    const processed = el('rev-category').innerHTML;
+    check('已在 MDT 记录的分歧归入已完成，显示处理结果且不再提供接受/修改',
+      processed.includes('已在 MDT 处理') && processed.includes('先查眼底') && !processed.includes("decide('consensus_item:X-01'"), '');
+  }
+  D.openReviewCategory('required');
+  {
+    const required = el('rev-category').innerHTML;
+    check('未记录的分歧只引导去 MDT 页处理，不在审核卡上重复裁决',
+      required.includes("goDoctorTask('mdt','disagreements')") && !required.includes("decide('consensus_item:X-02'"), '');
+  }
+
+  D.S.review = {
     items: [{ item_id: 'AUTO-1', title: '路径步骤：常规准备', target_type: 'path_step',
               ai_content: '准备资料', state: 'auto_processed', state_label: '免审（自动）',
               needs_doctor_review: false, auto_reason: '规则判定免审' }],
@@ -934,6 +1002,12 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   window.matchMedia=()=>({matches:true}); window.scrollTo=()=>{windowScrolled=true;};
   D.S.screen='triage';D.go('mdt');
   check('小屏跳转新步骤时重置实际窗口滚动位置',windowScrolled,'');
+  windowScrolled=false;
+  window.matchMedia=()=>({matches:false});
+  el('doctor-case-main').scrollTop=320;
+  D.S.screen='overview';D.go('packet');
+  check('桌面端从病例摘要进入 AI 资料包时回到页面顶部（窗口与主区都复位）',
+    windowScrolled && el('doctor-case-main').scrollTop===0,'');
   window.matchMedia=originalMatch;window.scrollTo=originalScroll;globalThis.fetch=initialFetch;
 
   /* MDT 保存进度与完成操作应有持久反馈，并同步服务器的完成门槛。 */
@@ -972,6 +1046,16 @@ const check = (name, cond, detail = '') => results.push([!!cond, name, detail]);
   globalThis.fetch=initialFetch;
   check('摘要下一步先进入 AI 资料包',D.doctorWorkflowNav('overview').includes("go('packet')"),'');
   check('独立 AI 资料包步骤位于摘要和分流之间',doctorHtml.indexOf('data-s="packet"')>doctorHtml.indexOf('data-s="overview"') && doctorHtml.indexOf('data-s="packet"')<doctorHtml.indexOf('data-s="triage"'),'');
+  {
+    D.S.caseId='C-SAVED';D.S.caseData={case_id:'C-SAVED',payload:{triage:{selected:['血液科','肿瘤科']}}};D.S.caseRole='primary';D.S.editTriage=false;
+    D.S.review={items:[],summary:{},triage_doctor_confirmation:{status:'confirmed',primary_department:'血液科',secondary_departments:['肿瘤科'],reason:'合成理由',confirmed_at:'2026-10-10T19:29:28'},
+      mdt_screening:{status:'decided',decision:'recommend_mdt',decision_label:'建议 MDT',departments:['血液科','肿瘤科'],purpose:'合成目标'}};
+    D.renderTriage();
+    const saved=el('tri-body').innerHTML;
+    check('已确认分流按字段表展示：会诊目标、确认理由各占一行，确认时间单独放在底部且去掉 T 与秒',
+      saved.includes('<dt>会诊目标</dt>') && saved.includes('<dt>确认理由</dt>') && saved.includes('确认时间　2026-10-10 19:29')
+        && !saved.includes('确认理由：合成理由 ·') && saved.includes('triage-dept-chip is-primary'), '');
+  }
   D.S.caseId='C-ROUTING';D.S.caseData={case_id:'C-ROUTING',payload:{triage:{selected:['内分泌科','眼科']}}};D.S.caseRole='primary';D.S.review={items:[],summary:{},triage_doctor_confirmation:null,mdt_screening:null};
   D.S.caseLoading=false;
   const routingQuery=document.querySelectorAll;

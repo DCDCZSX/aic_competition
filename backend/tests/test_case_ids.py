@@ -62,7 +62,7 @@ class CaseIdTest(unittest.TestCase):
             store.close()
             result = subprocess.run(
                 [sys.executable, os.path.join(BACKEND, "tools", "renumber_case_ids.py"), "--db", db],
-                capture_output=True, text=True, encoding="utf-8")
+                capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(result.returncode, 0, result.stderr)
             conn = sqlite3.connect(db)
             try:

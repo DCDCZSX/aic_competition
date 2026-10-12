@@ -244,6 +244,29 @@ class TestBuildItems(unittest.TestCase):
         self.assertTrue(step.analysis_failed)
         self.assertFalse(step.batch_eligible)
 
+    def test_partial_failure_only_marks_the_failed_specialty_card(self):
+        case = sample_case()
+        case["payload"]["gaps"] = []
+        case["payload"]["analysis"] = {"state": "partial_failed",
+                                       "mdt": {"state": "partial_failed", "failed": ["心血管内科"]}}
+        case["payload"]["mdt"]["analyses"] = [
+            {"department": "血液科", "status": "ok", "inferences": [{"text": "合成血液科意见"}]},
+            {"department": "心血管内科", "status": "failed"},
+        ]
+        by_id = {item.item_id: item for item in rs.build_items(case)}
+        self.assertFalse(by_id["ai_analysis:血液科"].analysis_failed)
+        self.assertTrue(by_id["ai_analysis:心血管内科"].analysis_failed)
+        # 路径步骤仍保持保守口径。
+        self.assertTrue(by_id["path_step:S1"].analysis_failed)
+
+    def test_whole_analysis_failure_still_marks_every_specialty_card(self):
+        case = sample_case()
+        case["payload"]["analysis"] = {"state": "failed"}
+        case["payload"]["mdt"]["analyses"] = [
+            {"department": "血液科", "status": "ok", "inferences": [{"text": "合成血液科意见"}]}]
+        by_id = {item.item_id: item for item in rs.build_items(case)}
+        self.assertTrue(by_id["ai_analysis:血液科"].analysis_failed)
+
     def test_matching_information_gap_keeps_path_step_in_required_tier(self):
         case = sample_case()
         case["payload"]["path"]["steps"][0]["title"] = "整理眼底检查资料"
@@ -261,6 +284,68 @@ class TestBuildItems(unittest.TestCase):
         items = rs.build_items(case)
         step = next(item for item in items if item.item_id == "path_step:S1")
         self.assertEqual(step.review_tier, rs.AUTOMATIC)
+
+
+class TestConsensusAndDisagreementTiers(unittest.TestCase):
+    """共识只抽查；分歧只在 MDT 页裁决一次。"""
+
+    def test_case_level_high_risk_does_not_force_consensus_to_required(self):
+        case = sample_case()
+        case["payload"]["gaps"] = []
+        case["payload"]["triage"]["risk_level"] = "高"
+        by_id = {i.item_id: i for i in rs.apply_decisions(rs.build_items(case), [])}
+        self.assertEqual(by_id["consensus_item:C-01"].review_tier, rs.SAMPLE)
+        self.assertFalse(by_id["consensus_item:C-01"].high_risk)
+        self.assertEqual(by_id["consensus_item:X-01"].review_tier, rs.REQUIRED)
+        self.assertEqual(by_id["path_step:S2"].review_tier, rs.REQUIRED)
+        self.assertTrue(by_id["path_step:S2"].high_risk)
+
+    def test_failed_specialty_analysis_does_not_force_consensus_to_required(self):
+        case = sample_case()
+        case["payload"]["gaps"] = []
+        case["payload"]["analysis"] = {"state": "partial_failed"}
+        by_id = {i.item_id: i for i in rs.build_items(case)}
+        self.assertEqual(by_id["consensus_item:C-01"].review_tier, rs.SAMPLE)
+        self.assertFalse(by_id["consensus_item:C-01"].analysis_failed)
+
+    def test_consensus_matching_a_data_gap_is_still_required(self):
+        by_id = {i.item_id: i for i in rs.build_items(sample_case())}
+        self.assertEqual(by_id["consensus_item:C-01"].review_tier, rs.REQUIRED)
+        self.assertIn("资料缺口", by_id["consensus_item:C-01"].tier_reason)
+
+    def test_disagreement_recorded_in_mdt_is_not_reviewed_again(self):
+        case = sample_case()
+        record = rs.make_disagreement_decision(
+            disagreement_id="X-01", topic="先查眼底 vs 先查肾功", status="resolved",
+            choice="先查眼底，同期抽血查肾功", reason="合成理由", reviewer_name="合成医生")
+        case["payload"]["disagreement_decisions"] = [record]
+        items = rs.apply_decisions(rs.build_items(case), [])
+        item = next(i for i in items if i.item_id == "consensus_item:X-01")
+        self.assertEqual(item.state, rs.HANDLED_IN_MDT)
+        self.assertIn("先查眼底，同期抽血查肾功", item.handled_in_mdt)
+        data = item.to_dict()
+        self.assertEqual(data["state_label"], "已在 MDT 处理")
+        self.assertTrue(data["handled_in_mdt"])
+        summary = rs.summarize(items)
+        self.assertNotIn(item.item_id, [i.item_id for i in items
+                                        if i.review_tier == rs.REQUIRED and i.state == rs.AWAITING])
+        self.assertEqual(summary["by_state"][rs.HANDLED_IN_MDT], 1)
+        # 不算作医生在审核卡上的确认，也不算作规则免审。
+        self.assertEqual(summary["doctor_reviewed"], 0)
+        self.assertNotEqual(item.state, rs.AUTO_PROCESSED)
+
+    def test_stale_or_missing_mdt_record_keeps_disagreement_required(self):
+        case = sample_case()
+        record = rs.make_disagreement_decision(
+            disagreement_id="X-01", topic="先查眼底 vs 先查肾功", status="resolved",
+            choice="合成决定", reason="合成理由", reviewer_name="合成医生", content_revision=1)
+        case["payload"]["disagreement_decisions"] = [record]
+        case["payload"]["review_item_revisions"] = {"consensus_item:X-01": 2}
+        item = next(i for i in rs.apply_decisions(rs.build_items(case), [])
+                    if i.item_id == "consensus_item:X-01")
+        self.assertEqual(item.state, rs.AWAITING)
+        self.assertEqual(item.review_tier, rs.REQUIRED)
+        self.assertIn("分歧的医生处理", item.tier_reason)
 
 
 class TestDecisions(unittest.TestCase):
