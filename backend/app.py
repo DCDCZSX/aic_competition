@@ -9,19 +9,13 @@ import sys
 import os
 import tempfile
 import tempfile
-
-# 加载 .env（python-dotenv 为可选依赖：未安装时仅使用系统环境变量）
-try:
-    from dotenv import load_dotenv, find_dotenv
-
-    load_dotenv(find_dotenv(usecwd=True))
-except ImportError:
-    pass
+from pathlib import Path
 
 # 添加当前目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 修改为绝对导入
+from services.env_loader import load_project_environment
 from services.ai_service import AIService
 from services.auth import (AuthService, AuthError, AuthRateLimitError, ROLE_DOCTOR, ROLE_GUEST, ROLE_PATIENT,
                            auth_required, extract_token)
@@ -43,6 +37,9 @@ from services.request_validation import (
     string_field,
     string_list,
 )
+
+# 加载源码目录、backend/.env 或同级 competition-materials 中的本地配置。
+load_project_environment(Path(__file__).resolve().parents[1])
 import time
 from collections import defaultdict, deque
 

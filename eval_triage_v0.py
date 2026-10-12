@@ -23,12 +23,13 @@ import os
 import re
 import pandas as pd
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(ROOT, 'eval_out')
-os.makedirs(OUT, exist_ok=True)
+from eval_paths import data_path, output_root
 
-GOLD_FILE = os.path.join(ROOT, 'MDT-5.csv')
-PRED_FILES = ['MDT-5-test.csv', 'MDT-5-test1.csv']
+ROOT = os.path.dirname(os.path.abspath(__file__))
+OUT = str(output_root())
+
+GOLD_FILE = str(data_path('MDT-5.csv'))
+PRED_FILES = [str(data_path(name)) for name in ('MDT-5-test.csv', 'MDT-5-test1.csv')]
 
 # 系统建模的 36 个专科（canonical 名称，与 mdt_agents.specialists 中文名一致）
 SYSTEM_SPECIALTIES = set([
@@ -108,7 +109,7 @@ def main():
 
     summaries = []
     for pfile in PRED_FILES:
-        fp = os.path.join(ROOT, pfile)
+        fp = pfile
         if not os.path.exists(fp):
             print('跳过（不存在）:', pfile)
             continue
@@ -136,7 +137,7 @@ def main():
         report = pd.DataFrame(rows)[['case', 'gold', 'pred', 'gold_total', 'gold_modeled',
                                      'unmodeled_gold', 'pred_total', 'pred_valid', 'tp',
                                      'recall', 'precision', 'f1', 'missed', 'extra', 'all_hit']]
-        tag = os.path.splitext(pfile)[0]
+        tag = os.path.splitext(os.path.basename(pfile))[0]
         report.to_csv(os.path.join(OUT, 'triage_v0_report_%s.csv' % tag),
                       index=False, encoding='utf-8-sig')
         # 汇总

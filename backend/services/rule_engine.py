@@ -1,13 +1,13 @@
 """S1 规则引擎（确定性分诊第一段）。
 
-对应《产品开发规格书-比赛版v-competition.md》§4.3 决策链第一段。
+对应同级 `competition-materials/docs/产品开发规格书-比赛版v-competition.md` §4.3 决策链第一段。
 
 职责：
 1. `evaluate(text)` —— 命中规则 → 每科带 `score_R`（strong=3 / medium=2 / weak=1）与**命中信号文本**（可解释）；
 2. `behave(text, hits)` —— 判定行为类型 A-E（D 型由手术/介入词表判定；E 型由 Guardrail G1 拦截）；
 3. 规则表**只依赖科室域标准名**（`department_domain`），新增科室必须同步这里。
 
-设计依据：`CHAIS/评测v0结果与改进方向.md` 指出的四类系统性漏科（手术决策 / 康复 / 风湿 / 神外 / 麻醉超声介入）已纳入规则表。
+设计依据：同级 `competition-materials/evaluation/评测v0结果与改进方向.md` 指出的四类系统性漏科（手术决策 / 康复 / 风湿 / 神外 / 麻醉超声介入）已纳入规则表。
 """
 
 from __future__ import annotations

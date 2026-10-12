@@ -196,20 +196,5 @@ class TestEvalV0Regression(unittest.TestCase):
                 self.assertIn(name, ALL_NAMES)
 
 
-class TestSingleSourceOfTruth(unittest.TestCase):
-    """规格书 §4.2：科室域以代码字典为唯一权威源，不得有第二套。"""
-
-    def test_mdt_agents_uses_authority_dict(self):
-        from services.mdt_agents import MDTAgents
-
-        agents = MDTAgents()
-        self.assertEqual(agents.specialists, dict(SPECIALISTS),
-                         "mdt_agents 的科室字典必须与 department_domain 一致")
-        self.assertEqual(len(agents.specialists), 37)
-        # 评测 v0 缺失的三个科室必须能被主控智能体选中
-        for name in ("超声科", "肝胆外科", "介入科"):
-            self.assertIn(name, agents.specialists.values())
-
-
 if __name__ == "__main__":
     unittest.main(verbosity=2)

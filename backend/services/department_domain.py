@@ -94,7 +94,7 @@ DEPARTMENTS: Tuple[Department, ...] = (
     Department("anesthesiology", "麻醉科", GROUP_AUXILIARY),
 )
 
-# 兼容旧代码的 {code: 中文名} 字典（mdt_agents.py 等既有引用）
+# 对外提供稳定的 {code: 中文名} 字典，供分诊与报告模块复用
 SPECIALISTS: Dict[str, str] = {d.code: d.name for d in DEPARTMENTS}
 
 # 标准名 → 科室对象
