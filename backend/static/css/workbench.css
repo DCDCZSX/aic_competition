@@ -299,6 +299,39 @@
   #app .mdt-prep-question { border-left-color: var(--workbench-line); }
   #app .queue-head { padding-right: 124px; }
 
+  /* 分流确认：已保存决定的展示卡 */
+  #app .triage-saved-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  #app .triage-saved-head > button { flex: none; white-space: nowrap; }
+  #app .triage-saved-title { display: flex; align-items: center; gap: 10px; }
+  #app .triage-saved-title h3 { margin: 0; }
+  #app .triage-saved-list { margin: 0; }
+  #app .triage-saved-list > div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 16px; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--workbench-line); }
+  #app .triage-saved-list > div:last-child { border-bottom: 0; }
+  #app .triage-saved-list dt { color: var(--workbench-muted); font-size: 14px; }
+  #app .triage-saved-list dd { margin: 0; min-width: 0; color: var(--workbench-ink); font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+  #app .triage-route-label { display: inline-block; padding: 2px 12px; border-radius: 999px; background: var(--workbench-soft); }
+  #app .triage-dept-chips { display: flex; flex-wrap: wrap; gap: 6px 8px; }
+  #app .triage-dept-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px; border: 1px solid var(--workbench-line); border-radius: 999px; background: #fff; font-size: 14px; }
+  #app .triage-dept-chip.is-primary { border-color: var(--workbench-ink); font-weight: 700; }
+  #app .triage-dept-chip small { padding: 0 6px; border-radius: 999px; background: var(--workbench-ink); color: #fff; font-size: 11px; font-weight: 500; }
+  #app .triage-saved-meta { margin: 12px 0 0; padding-top: 12px; border-top: 1px dashed var(--workbench-line); color: var(--workbench-muted); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* 报告审核：专科意见待确认计数块 */
+  #app .review-focus-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 16px; }
+  #app .review-focus-header h3 { margin: 0 0 6px; }
+  #app .review-focus-header p { margin: 0; }
+  #app .specialty-review-counter { display: flex; flex: none; align-items: center; gap: 12px; padding: 12px 18px; border: 1px solid; border-radius: 12px; }
+  #app .specialty-review-counter strong { font-size: 36px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  #app .specialty-review-counter span { display: flex; flex-direction: column; gap: 2px; }
+  #app .specialty-review-counter b { font-size: 16px; font-weight: 700; }
+  #app .specialty-review-counter small { color: var(--workbench-muted); font-size: 13px; }
+  #app .specialty-review-counter.is-pending { border-color: rgba(179,64,46,.28); background: rgba(179,64,46,.06); color: var(--danger); }
+  #app .specialty-review-counter.is-done { border-color: rgba(47,125,85,.28); background: rgba(47,125,85,.07); color: var(--ok); }
+  #app .review-card-handled { color: var(--ok); }
+  /* “去逐条审核”跳转时卡片标题不被顶部导航栏遮住 */
+  #app .review-decision-card, #app #specialty-review-title { scroll-margin-top: 96px; }
+  #app .review-decision-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
   @media (max-width: 760px) {
     #app .ab-right .ident { max-width: 34vw; font-size: 13px; }
     #app .prof-block { padding: 16px; }
@@ -317,6 +350,13 @@
     #app #triage-doctor-confirmation .field > textarea,
     #app #triage-doctor-confirmation .field > div:last-child { width: 100%; }
     #app .review-card-actions .review-card-detail { margin-left: 0; }
+    #app .review-focus-header { flex-direction: column; align-items: stretch; }
+    #app .triage-saved-list > div { grid-template-columns: 1fr; gap: 4px; }
+    #app .triage-saved-meta { text-align: left; }
+    #app .triage-saved-head { flex-wrap: wrap; }
+    #app .triage-saved-title h3 { white-space: nowrap; }
+    #app .triage-saved-head > button { white-space: nowrap; }
+    #app .specialty-review-counter strong { font-size: 30px; }
     #app #s-report > .col { padding: 16px; }
     #app .doctor-result-report .final-report { padding: 20px 14px 16px; }
   }

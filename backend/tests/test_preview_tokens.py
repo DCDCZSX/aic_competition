@@ -33,6 +33,7 @@ class PreviewTokenServiceTest(unittest.TestCase):
         environment.update({
             "APP_PREVIEW_MAX_PER_USER": "",
             "APP_PREVIEW_MAX_TOTAL": "not-a-number",
+            "APP_DB_PATH": ":memory:",
         })
         result = subprocess.run(
             [sys.executable, "-c",
@@ -42,6 +43,7 @@ class PreviewTokenServiceTest(unittest.TestCase):
             env=environment,
             capture_output=True,
             text=True,
+            errors="replace",
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -53,6 +55,7 @@ class PreviewTokenServiceTest(unittest.TestCase):
         environment.update({
             "APP_PREVIEW_MAX_PER_USER": "7",
             "APP_PREVIEW_MAX_TOTAL": "13",
+            "APP_DB_PATH": ":memory:",
         })
         result = subprocess.run(
             [sys.executable, "-c",
@@ -62,6 +65,7 @@ class PreviewTokenServiceTest(unittest.TestCase):
             env=environment,
             capture_output=True,
             text=True,
+            errors="replace",
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)

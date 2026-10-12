@@ -65,6 +65,35 @@
   .stage3-actions{display:flex;gap:var(--sp-12);justify-content:flex-end;margin-top:var(--sp-20);flex-wrap:wrap;}
   @media (max-width:720px){.stage3-link-list{grid-template-columns:1fr;}.stage3-actions button{flex:1;min-width:0;}}
   .progress i{transition:width 1.2s ease;position:relative;overflow:hidden;}
+  /* 就医建议整理进度卡：大号百分比 + 粗进度条 + 三步状态，进行中持续前进 */
+  .analysis-progress-card{margin-bottom:var(--sp-16);padding:20px 22px;border:1px solid var(--line);border-radius:14px;background:var(--gray-000);}
+  .apc-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:14px;}
+  .apc-title{font-size:18px;font-weight:700;color:var(--ink);}
+  .apc-sub{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px;color:var(--ink2);font-size:var(--body-3);}
+  .apc-elapsed{color:var(--ink3);font-variant-numeric:tabular-nums;}
+  .apc-elapsed b{font-weight:600;color:var(--ink2);}
+  .apc-pct{flex:none;color:var(--accent);font-weight:800;line-height:1;font-variant-numeric:tabular-nums;}
+  .apc-pct span{font-size:40px;letter-spacing:-.02em;}
+  .apc-pct small{margin-left:2px;font-size:18px;font-weight:700;}
+  .analysis-progress-card.is-done .apc-pct{color:var(--ok);}
+  .progress.apc-bar{height:12px;border-radius:999px;background:var(--surface-subtle);}
+  .progress.apc-bar i{border-radius:999px;background:linear-gradient(90deg,#d98a6a,var(--accent));transition:width .45s ease;}
+  .analysis-progress-card.is-done .progress.apc-bar i{background:var(--ok);}
+  .apc-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:16px 0 0;padding:0;list-style:none;}
+  .apc-step{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;column-gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-subtle);}
+  .apc-dot{grid-row:1 / span 2;position:relative;width:20px;height:20px;border:2px solid var(--gray-300);border-radius:50%;background:var(--gray-000);}
+  .apc-step-name{font-size:var(--body-3);font-weight:600;color:var(--ink);}
+  .apc-step-state{font-size:var(--caption);color:var(--ink3);}
+  .apc-step.is-done .apc-dot,.apc-step.is-skipped .apc-dot{border-color:var(--ok);background:var(--ok);}
+  .apc-step.is-done .apc-dot::after,.apc-step.is-skipped .apc-dot::after{content:'';position:absolute;left:5px;top:2px;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg);}
+  .apc-step.is-done .apc-step-state{color:var(--ok);}
+  .apc-step.is-running{border-color:rgba(196,104,73,.45);background:rgba(196,104,73,.06);}
+  .apc-step.is-running .apc-dot{border-color:rgba(196,104,73,.25);border-top-color:var(--accent);animation:apc-spin .9s linear infinite;}
+  .apc-step.is-running .apc-step-state{color:var(--accent);font-weight:600;}
+  .apc-step.is-failed .apc-dot,.apc-step.is-partial .apc-dot{border-color:var(--warn);background:var(--warn);}
+  @keyframes apc-spin{to{transform:rotate(360deg);}}
+  @media (max-width:720px){.apc-steps{grid-template-columns:1fr;gap:8px;}.apc-pct span{font-size:32px;}.analysis-progress-card{padding:16px;}}
+  @media (prefers-reduced-motion:reduce){.apc-step.is-running .apc-dot{animation:none;}.progress.apc-bar i{transition:none;}}
   .progress.is-running{background:linear-gradient(90deg,var(--surface-subtle),rgba(196,104,73,.18),var(--surface-subtle));background-size:200% 100%;animation:progress-track 1.2s linear infinite;}
   .progress.is-running i::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);animation:progress-sweep 1.6s linear infinite;}
   .stage3-secondary{padding:10px 14px!important;margin-top:8px!important;}
@@ -1177,6 +1206,19 @@ function phaseContent(name, entry){
              : '<span class="pill gray">排队中</span>';
   return `<div style="flex:1;">${esc(name)}</div>${pill}`;
 }
+/* 整理进度卡里的单个步骤：圆点状态 + 名称 + 状态文字；data-phase 供增量刷新。 */
+const PHASE_STATE_TEXT = {done:'已完成', running:'进行中', partial:'部分完成', failed:'未完成', skipped:'已跳过', pending:'排队中'};
+function phaseStepInner(name, entry, extra){
+  const state = (entry||{}).state || 'pending';
+  return `<span class="apc-dot" aria-hidden="true"></span><span class="apc-step-name">${esc(name)}</span>`+
+         `<span class="apc-step-state">${esc(PHASE_STATE_TEXT[state]||PHASE_STATE_TEXT.pending)}${extra?` · ${esc(extra)}`:''}</span>`;
+}
+function phaseStepClass(entry){ return 'apc-step is-' + (((entry||{}).state) || 'pending'); }
+function mdtStepExtra(analysis){
+  const mdt = (analysis||{}).mdt || {};
+  const total = Number(mdt.total)||0;
+  return mdt.state==='running' && total ? `${Math.min(Number(mdt.done)||0, total)}/${total} 科` : '';
+}
 function phaseRow(name, entry, key){
   return `<div class="field"${key?` data-phase="${esc(key)}"`:''}>${phaseContent(name, entry)}</div>`;
 }
@@ -1255,8 +1297,86 @@ function updateAnalysisStage3Dom(box, analysis){
   [['profile', PHASE_LABELS.profile], ['triage', PHASE_LABELS.triage], ['mdt', PHASE_LABELS.mdt]]
     .forEach(([key, label])=>{
     const row = box.querySelector(`[data-phase="${key}"]`);
-    if(row) row.innerHTML = phaseContent(label, phases[key]);
+    if(!row) return;
+    if(row.classList && row.classList.contains('apc-step')){
+      row.className = phaseStepClass(phases[key]);
+      row.innerHTML = phaseStepInner(label, phases[key], key==='mdt' ? mdtStepExtra(a) : '');
+    }else row.innerHTML = phaseContent(label, phases[key]);
   });
+  const status = box.querySelector('[data-analysis-status]');
+  if(status) status.textContent = analysisStatusLine(a);
+}
+/* 当前在做哪一步（给患者看的一句话）。 */
+function analysisStatusLine(analysis){
+  const a = analysis || {};
+  const phases = a.phases || {};
+  if(a.state === 'done') return '已完成，可以查看下方的就医方向和建议';
+  const running = ['profile','triage','mdt'].find(key => (phases[key]||{}).state === 'running');
+  if(running === 'mdt' || (!running && (a.mdt||{}).state === 'running')){
+    const extra = mdtStepExtra(a);
+    return `正在${PHASE_LABELS.mdt}${extra ? `（${extra}）` : ''}`;
+  }
+  if(running) return `正在${PHASE_LABELS[running]}`;
+  return '正在准备分析…';
+}
+/* 进度条“实时”前进：后台每完成一步才回报一次真实进度，两次回报之间
+   前端在当前步骤的区间内缓慢前进（永远不越过下一步的里程碑、不超过 97%），
+   收到新进度立即追上；完成时才走到 100%。 */
+function analysisSoftCap(analysis, real){
+  const a = analysis || {};
+  if(a.state !== 'running') return real;
+  const total = Number((a.mdt||{}).total)||0;
+  const next = real < 30 ? 30 : real < 42 ? 42 : real < 55 ? 55 : real + (total ? Math.max(4, Math.round(39/total)) : 10);
+  return Math.min(Math.max(next - 1, real), 97);
+}
+function paintAnalysisProgress(){
+  const anim = S.analysisAnim; if(!anim) return;
+  const box = document.getElementById('stage3-analysis-progress');
+  if(!box || !box.querySelector) return;
+  const shown = Math.max(0, Math.min(100, anim.shown));
+  const bar = box.querySelector('[data-analysis-progress]');
+  if(bar){
+    bar.setAttribute('aria-valuenow', String(Math.floor(shown)));
+    const fill = bar.querySelector('i'); if(fill) fill.style.width = shown.toFixed(1) + '%';
+  }
+  const pct = box.querySelector('[data-analysis-pct]'); if(pct) pct.textContent = String(Math.floor(shown));
+  const elapsed = box.querySelector('[data-analysis-elapsed]');
+  if(elapsed && anim.startedAt) elapsed.textContent = String(Math.max(0, Math.round((Date.now()-anim.startedAt)/1000)));
+}
+function syncAnalysisTicker(analysis){
+  const a = analysis || {};
+  const running = a.state === 'running';
+  let anim = S.analysisAnim;
+  if(!anim || anim.caseId !== S.caseId){
+    if(anim && anim.timer) clearInterval(anim.timer);
+    anim = S.analysisAnim = {caseId:S.caseId, shown:0, startedAt:0, timer:null};
+  }
+  const real = analysisProgressPercent(a);
+  anim.real = real;
+  anim.cap = analysisSoftCap(a, real);
+  if(running){
+    // 新一轮分析（含“重新分析”）从真实进度起步；同一轮内只前进不后退。
+    if(!anim.startedAt){ anim.startedAt = Date.now(); anim.shown = real; }
+    anim.shown = Math.max(anim.shown, real);
+  }else{
+    anim.shown = real;
+    anim.startedAt = 0;
+  }
+  paintAnalysisProgress();
+  if(running && !anim.timer){
+    anim.timer = setInterval(()=>{
+      const box = document.getElementById('stage3-analysis-progress');
+      if(!S.analysisAnim || S.analysisAnim !== anim || !box){
+        clearInterval(anim.timer); anim.timer = null; return;
+      }
+      const gap = anim.cap - anim.shown;
+      if(gap > 0.05) anim.shown = Math.min(anim.cap, anim.shown + Math.max(0.12, gap * 0.035));
+      paintAnalysisProgress();
+    }, 250);
+    if(anim.timer && anim.timer.unref) anim.timer.unref();
+  }else if(!running && anim.timer){
+    clearInterval(anim.timer); anim.timer = null;
+  }
 }
 function showStage3Overview(){
   S.stage3View = 'overview';
@@ -1300,6 +1420,7 @@ function renderStage3Analysis(){
       updateAnalysisStage3Dom(box, a);
     }
     box.classList.remove('hide');
+    syncAnalysisTicker(a);
   }
   const ready = analysisIsTerminal(a);
   const links = document.getElementById('stage3-link-list');
@@ -1321,14 +1442,23 @@ function analysisBanner(analysis){
   const pct = analysisProgressPercent(a);
   const progress = `<div class="progress${state==='running'?' is-running':''}" data-analysis-progress role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
       `;
-  if(state === 'running'){
-    return `<div class="col" style="margin-bottom:var(--sp-12);">
-      <div class="rt">正在整理你的就医建议</div>
-      ${progress}
-      ${phaseRow(PHASE_LABELS.profile, phases.profile, 'profile')}
-      ${phaseRow(PHASE_LABELS.triage, phases.triage, 'triage')}
-      ${phaseRow(PHASE_LABELS.mdt, phases.mdt, 'mdt')}
-    </div>`;
+  const steps = `<ol class="apc-steps">
+      ${[['profile', PHASE_LABELS.profile], ['triage', PHASE_LABELS.triage], ['mdt', PHASE_LABELS.mdt]].map(([key, label])=>
+        `<li class="${phaseStepClass(phases[key])}" data-phase="${key}">${phaseStepInner(label, phases[key], key==='mdt' ? mdtStepExtra(a) : '')}</li>`).join('')}
+    </ol>`;
+  if(state === 'running' || state === 'done'){
+    const done = state === 'done';
+    return `<section class="analysis-progress-card ${done?'is-done':'is-running'}" aria-live="polite">
+      <div class="apc-head">
+        <div class="apc-heading">
+          <div class="apc-title">${done ? '就医建议已整理完成' : '正在整理你的就医建议'}</div>
+          <div class="apc-sub"><span data-analysis-status>${esc(analysisStatusLine(a))}</span>${done ? '' : '<span class="apc-elapsed">已等待 <b data-analysis-elapsed>0</b> 秒</span>'}</div>
+        </div>
+        <div class="apc-pct" aria-hidden="true"><span data-analysis-pct>${pct}</span><small>%</small></div>
+      </div>
+      <div class="progress apc-bar${done?'':' is-running'}" data-analysis-progress role="progressbar" aria-label="就医建议整理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
+      ${steps}
+    </section>`;
   }
   if(state === 'failed' || state === 'partial_failed'){
     const failedList = Object.entries(phases)
@@ -1342,15 +1472,6 @@ function analysisBanner(analysis){
       ${progress}
       ${failedList.map(x=>`<div class="tiny">· ${esc(x)}</div>`).join('')}
       <div style="margin-top:var(--sp-8);"><button class="ghost btn-sm" onclick="retryAnalysis()">重新分析</button></div>
-    </div>`;
-  }
-  if(state === 'done'){
-    return `<div class="col" style="margin-bottom:var(--sp-12);">
-      <div class="rt">就医建议已整理完成</div>
-      ${progress}
-      ${phaseRow(PHASE_LABELS.profile, phases.profile, 'profile')}
-      ${phaseRow(PHASE_LABELS.triage, phases.triage, 'triage')}
-      ${phaseRow(PHASE_LABELS.mdt, phases.mdt, 'mdt')}
     </div>`;
   }
   return '';
@@ -2053,7 +2174,6 @@ function buildPrintReportHtml(){
     </div>
     <p class="print-intro">以下内容按门诊病历结构整理，供接诊医生快速了解情况并进一步判断。</p>
     ${sectionsHtml}
-    <div class="print-disclaimer">${esc(summary.disclaimer||'')}<br>${esc(summary.capability_boundary||'')}</div>
   </div>`;
 }
 

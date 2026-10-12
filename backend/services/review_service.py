@@ -43,6 +43,9 @@ UNCERTAIN = "uncertain"
 # 派生态（**不落库**）：规则判定"不需要医生确认"的条目（如未要求医生决定的路径步骤）。
 # 与"医生已接受"必须严格区分 —— 报告、审计都不能把它写成医生确认过（红线）。
 AUTO_PROCESSED = "auto_processed"
+# 派生态（**不落库**）：分歧已由医生在 MDT 页“分歧的医生处理”中记录结果，报告审核里不再重复裁决。
+# 与 AUTO_PROCESSED 不同：这是医生本人处理过的，只是记录在分歧处理表单而不是审核卡上。
+HANDLED_IN_MDT = "handled_in_mdt"
 
 # 审核责任分级：只有明确不需要医生决定的内容才自动归档；普通摘要可抽查，
 # 分歧、风险、资料缺口和医疗安排仍保持必审，并可在后续标记中自动升级。
@@ -58,7 +61,7 @@ REVIEW_TIER_LABELS: Dict[str, str] = {
 UNKNOWN_TIER_REASON = "未匹配已审核的分级规则，默认必审"
 REQUIRED_GENERIC_REASON = "该条目需要医生确认"
 
-ITEM_STATES = (AWAITING, CONFIRMED, MODIFIED, REJECTED, UNCERTAIN, AUTO_PROCESSED)
+ITEM_STATES = (AWAITING, CONFIRMED, MODIFIED, REJECTED, UNCERTAIN, AUTO_PROCESSED, HANDLED_IN_MDT)
 ITEM_STATE_LABELS: Dict[str, str] = {
     AWAITING: "待审",
     CONFIRMED: "已接受",
@@ -66,6 +69,7 @@ ITEM_STATE_LABELS: Dict[str, str] = {
     REJECTED: "已驳回",
     UNCERTAIN: "暂不确定",
     AUTO_PROCESSED: "免审（自动）",
+    HANDLED_IN_MDT: "已在 MDT 处理",
 }
 AUTO_PROCESSED_REASON = "规则判定免审：该路径步骤未要求医生决定（医生可随时接管）"
 TERMINAL_STATES = (CONFIRMED, MODIFIED, REJECTED, UNCERTAIN)
@@ -266,6 +270,8 @@ class ReviewItem:
     content_revision: int = 1
     department: str = ""
     source_label: str = ""
+    # 分歧已在 MDT 页记录医生处理结果时，这里是处理摘要；非空表示报告审核不再重复裁决。
+    handled_in_mdt: str = ""
 
     def __post_init__(self) -> None:
         """规范化分级；未知值必须回到必审，避免静默放行。"""
@@ -363,6 +369,8 @@ class ReviewItem:
             "content_revision": self.content_revision,
             "batch_eligible": self.batch_eligible,
             "batch_block_reason": _clean(self.batch_block_reason),
+            "handled_in_mdt": bool(self.handled_in_mdt),
+            "handled_note": _clean(self.handled_in_mdt),
         }
 
 
@@ -497,7 +505,7 @@ def build_items(case: Any) -> List[ReviewItem]:
             evidence_refs=["证据状态：conflict"],
             needs_doctor_review=True,
             review_tier=REQUIRED,
-            tier_reason="存在未解决分歧，必须由医生裁决",
+            tier_reason="存在未解决分歧：请在“MDT 协作与会诊记录”页的“分歧的医生处理”中记录处理结果",
             conflict=True,
         ))
     _annotate_item_flags(items, payload)
@@ -510,7 +518,37 @@ def build_items(case: Any) -> List[ReviewItem]:
         if item.target_type == "consensus_item" and analysis_source(payload) == "simulation":
             item.content_revision = max(item.content_revision,
                 int((payload.get("doctor_mdt_simulation") or {}).get("content_revision") or 1))
+    _mark_disagreements_handled_in_mdt(items, payload)
     return items
+
+
+def _is_disagreement_item(item: "ReviewItem") -> bool:
+    return item.target_type == "consensus_item" and str(item.target_id).startswith("X-")
+
+
+def _mark_disagreements_handled_in_mdt(items: Sequence["ReviewItem"], payload: Dict[str, Any]) -> None:
+    """分歧只在 MDT 页“分歧的医生处理”中裁决一次。
+
+    当前修订已有医生处理记录的分歧，在报告审核里标为“已在 MDT 处理”，不再要求重复点一次
+    接受/修改；处理记录过期（分歧内容变化）或尚未记录时，仍保持必审并提示去 MDT 页记录。
+    """
+    records = latest_disagreement_decisions(
+        current_disagreement_decisions(items, payload.get("disagreement_decisions") or []))
+    for item in items:
+        if not _is_disagreement_item(item):
+            continue
+        record = records.get(item.target_id) or {}
+        status = str(record.get("status") or "")
+        if status not in DISAGREEMENT_STATUSES:
+            continue
+        detail = str(record.get("resolution") or record.get("choice") or record.get("next_step") or "").strip()
+        who = str(record.get("reviewer_name") or "").strip()
+        note = f"医生已在 MDT 页记录：{disagreement_status_label(status)}"
+        if detail:
+            note += f"——{detail}"
+        if who:
+            note += f"（{who}）"
+        item.handled_in_mdt = note
 
 
 def _is_failed_state(value: Any) -> bool:
@@ -548,9 +586,7 @@ def _annotate_item_flags(items: Sequence[ReviewItem], payload: Dict[str, Any]) -
         (phase or {}).get("state")
         for phase in (analysis.get("phases") or {}).values()
     ]
-    global_analysis_failed = _is_failed_state(analysis.get("state")) or any(
-        _is_failed_state(state) for state in phase_states
-    ) or _is_failed_state(analysis_mdt.get("state")) or _is_failed_state(mdt.get("state"))
+    states = [analysis.get("state"), *phase_states, analysis_mdt.get("state"), mdt.get("state")]
     failed_departments = {
         str(entry.get("department") or "")
         for entry in (mdt.get("analyses") or [])
@@ -559,18 +595,34 @@ def _annotate_item_flags(items: Sequence[ReviewItem], payload: Dict[str, Any]) -
     failed_departments.update(
         str(department) for department in (analysis_mdt.get("failed") or []) if str(department).strip()
     )
-    global_analysis_failed = bool(global_analysis_failed or failed_departments)
+    failed_departments.update(
+        item.department for item in items
+        if item.target_type == "ai_analysis" and item.analysis_failed and item.department
+    )
+    # “部分失败”只说明有科室没跑完：能定位到具体科室时只标记那几个科室的卡片，
+    # 其余科室已生成的意见不再显示“分析失败”。整体失败、或部分失败却定位不到科室时，
+    # 仍按整体失败处理（保守）。
+    whole_analysis_failed = any(str(state or "").strip().lower() in {"failed", "error"} for state in states) or (
+        any(str(state or "").strip().lower() == "partial_failed" for state in states) and not failed_departments
+    )
 
     for item in items:
-        item.high_risk = bool(item.high_risk or high_risk)
+        # 共识条目是各科一致的内容，病例整体高风险或某科分析未完成都不改变“建议抽查”；
+        # 只有这条共识本身对应到资料缺口（见下方 gap_match）时才升级为必审。
+        is_consensus = item.target_type == "consensus_item" and not _is_disagreement_item(item)
+        item.high_risk = bool(item.high_risk or (high_risk and not is_consensus))
         item.conflict = bool(
             item.conflict or
             (item.target_type == "consensus_item" and "分歧" in item.title)
         )
-        item.analysis_failed = bool(
-            item.analysis_failed or
-            (global_analysis_failed and item.target_type in ("ai_analysis", "path_step", "consensus_item"))
-        )
+        # 专科卡片只看本科室是否失败；就医路径步骤沿用原来的保守口径：任何科室未完成都需逐条处理。
+        if item.target_type == "ai_analysis":
+            failed_here = item.department in failed_departments or whole_analysis_failed
+        elif item.target_type == "path_step":
+            failed_here = whole_analysis_failed or bool(failed_departments)
+        else:
+            failed_here = whole_analysis_failed and not is_consensus and item.target_type == "consensus_item"
+        item.analysis_failed = bool(item.analysis_failed or failed_here)
 
         item_text = " ".join((item.title, item.ai_content, item.reason_hint))
         gap_match = False
@@ -744,7 +796,9 @@ def apply_decisions(items: Sequence[ReviewItem],
         item.decision_id = str(decision.get("decision_id") or "")
     for item in items:
         has_decision = item.item_id in by_id
-        if item.review_tier == AUTOMATIC and not has_decision:
+        if item.handled_in_mdt and not has_decision:
+            item.state = HANDLED_IN_MDT
+        elif item.review_tier == AUTOMATIC and not has_decision:
             item.state = AUTO_PROCESSED
             item.auto_reason = item.tier_reason or AUTO_PROCESSED_REASON
         elif item.review_tier in (REQUIRED, SAMPLE) and not has_decision:

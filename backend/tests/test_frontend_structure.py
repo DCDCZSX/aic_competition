@@ -425,8 +425,9 @@ class FrontendStructureTest(unittest.TestCase):
     def test_doctor_review_template_exposes_auto_processed_group(self):
         _, html = self.get("/doctor")
         self.assertIn("auto_processed", html)
-        self.assertIn("doctor_reviewed", html)
-        self.assertIn("免审（自动）", html)
+        self.assertIn("handled_in_mdt", html)
+        self.assertIn("已自动处理的辅助内容", html)
+        self.assertIn("自动处理，不阻塞发布", html)
 
     def test_doctor_review_template_exposes_review_tiers_and_risk_counts(self):
         _, html = self.get("/doctor")
@@ -820,12 +821,12 @@ class FrontendStructureTest(unittest.TestCase):
     def test_doctor_review_uses_decision_level_groups_and_compact_cards(self):
         """审核页应按责任分组，默认卡片只显示决策摘要，详情折叠。"""
         _, html = self.get("/doctor")
-        for label in ("必须医生决定", "建议抽查", "已自动处理"):
+        for label in ("发布门槛：必审上下文", "发布门槛：建议抽查", "已自动处理的辅助内容"):
             self.assertIn(label, html)
         self.assertIn("review-decision-card", html)
         self.assertIn("review-card-summary", html)
         self.assertIn("查看审核详情", html)
-        self.assertIn("自动处理，不阻塞发布", html)
+        self.assertIn("系统自动处理，不阻塞发布", html)
 
     def test_doctor_review_has_a_dedicated_detail_view_for_each_item(self):
         """审核列表只放摘要，单条内容在工作台详情视图中展开。"""

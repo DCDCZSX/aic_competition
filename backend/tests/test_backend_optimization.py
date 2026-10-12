@@ -51,15 +51,17 @@ class BackendOptimizationTest(unittest.TestCase):
         self.store.close()
 
     def test_doctor_modification_changes_effective_report(self):
-        review = self.flow.get_review(self.case_id)
-        primary = next(item for item in review["items"]
-                       if item["target_type"] == "department_selection")
-        result = self.flow.submit_decision(
-            self.case_id, primary["item_id"], "modify",
-            after="牵头建议：眼科", reason="结合症状调整首诊方向",
-            reviewer_name="审核医生", reviewer_id="doctor-1",
+        result = self.flow.submit_doctor_routing(
+            self.case_id,
+            primary_department="眼科",
+            secondary_departments=[],
+            decision="single_specialty",
+            reason="结合症状调整首诊方向",
+            reviewer_id="doctor-1",
         )
         self.assertTrue(result["ok"], result)
+        confirmation = self.flow.get_case(self.case_id)["payload"]["triage_doctor_confirmation"]
+        self.assertEqual(confirmation["primary_department"], "眼科")
         report = self.flow.build_reports(self.case_id)["full"]["sections"]
         self.assertEqual(report["分诊结果"]["牵头方向"], "眼科")
 
@@ -98,6 +100,16 @@ class BackendOptimizationTest(unittest.TestCase):
         self.assertTrue(result["blocked"])
         after = self.flow.get_case(self.case_id)["payload"]
         self.assertEqual(before.get("answers"), after.get("answers"))
+
+    def test_update_crisis_is_blocked_before_case_mutation(self):
+        before = self.flow.get_case(self.case_id)["payload"]
+        result = self.flow.add_update(
+            self.case_id, kind="症状变化", content="持续胸痛伴大汗，越来越重"
+        )
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["blocked"])
+        after = self.flow.get_case(self.case_id)["payload"]
+        self.assertEqual(before, after)
 
     def test_main_issue_participates_in_rule_triage(self):
         result = self.flow.create_case(
@@ -139,8 +151,10 @@ class BackendOptimizationTest(unittest.TestCase):
         )
         self.assertTrue(result["ok"], result)
         payload = self.flow.get_case(self.case_id)["payload"]
-        self.assertIsNone(payload["mdt"])
-        self.assertEqual(payload["analysis"]["mdt"]["state"], "skipped")
+        self.assertTrue(payload["mdt"])
+        self.assertTrue(all(item["status"] == "stale"
+                            for item in payload["mdt"]["analyses"]))
+        self.assertFalse(self.flow.get_analysis(self.case_id)["mdt_ready"])
 
     def test_unknown_answer_field_is_rejected_before_mutation(self):
         before = self.flow.get_case(self.case_id)["payload"]

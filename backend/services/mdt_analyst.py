@@ -24,6 +24,11 @@ from services.json_recovery import (  # noqa: E402
     loads_lenient,
     result_is_repaired,
 )
+from services.model_output_guard import (  # noqa: E402
+    assert_safe_generated_fact,
+    assert_safe_generated_text,
+    UnsafeModelOutput,
+)
 
 SPECIALTY_SYSTEM_PROMPT = (
     "你是一位{dept}的 AI 分析视角（不是真实医生，也不构成会诊意见）。"
@@ -244,6 +249,20 @@ def _parse_card(dept: str, raw: str) -> Tuple[SpecialistOpinionCard, str]:
         information_gaps=[str(x) for x in (data.get("information_gaps") or [])][:8],
         referral=referral,
     )
+    # Prompt 只是约束，服务端仍要拒绝模型自行生成的诊断/治疗越界。
+    # facts 是从病例中摘取的客观资料，允许保留既往诊疗事实；其余字段必须通过
+    # 生成内容安全边界，任何一项越界都让整张意见卡失败。
+    card.focus = assert_safe_generated_text(card.focus, field_name="专科关注点")
+    card.facts = [assert_safe_generated_fact(value, field_name="专科事实")
+                  for value in card.facts]
+    for inference in card.inferences:
+        inference.text = assert_safe_generated_text(inference.text, field_name="专科推断")
+    for check in card.checks:
+        check.content = assert_safe_generated_text(check.content, field_name="专科追问")
+    card.information_gaps = [
+        assert_safe_generated_text(value, field_name="专科信息缺口")
+        for value in card.information_gaps
+    ]
     if strategy == STRATEGY_SALVAGE and not (card.focus or card.facts or card.inferences
                                              or card.checks or card.information_gaps):
         # 抢救出来的东西一个字段都没有（例如只剩 "facts": []）→ 视为失败，不塞空卡
@@ -315,6 +334,9 @@ def analyze_specialty(
 
     if card is None:
         hint = "（输出被长度截断）" if truncated else ""
+        if isinstance(last_error, UnsafeModelOutput):
+            return SpecialtyAnalysis(department=department, method=METHOD_FAILED,
+                                     error=f"安全限制：{last_error}")
         return SpecialtyAnalysis(department=department, method=METHOD_FAILED,
                                  error=f"意见卡解析失败{hint}：模型输出无法解析")
 

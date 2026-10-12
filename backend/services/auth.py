@@ -210,6 +210,10 @@ class AuthService:
             "APP_LOGIN_COOLDOWN_SECONDS", 60,
             minimum=5, maximum=3600
         )
+        self._max_login_failure_keys = read_int_env(
+            "APP_MAX_LOGIN_FAILURE_KEYS", 1000,
+            minimum=1, maximum=100000
+        )
         self._max_sessions_per_account = read_int_env(
             "APP_MAX_SESSIONS_PER_ACCOUNT", 5,
             minimum=1, maximum=1000
@@ -519,11 +523,27 @@ class AuthService:
     def _record_login_failure(self, keys: List[str]) -> None:
         now = time.time()
         with self._lock:
+            self._prune_login_failures_locked(now)
             for key in keys:
+                if key not in self._login_failures and len(self._login_failures) >= self._max_login_failure_keys:
+                    oldest_key = min(
+                        self._login_failures,
+                        key=lambda item: self._login_failures[item][-1]
+                        if self._login_failures[item] else float("inf"),
+                    )
+                    self._login_failures.pop(oldest_key, None)
                 attempts = self._login_failures.setdefault(key, deque())
                 while attempts and attempts[0] <= now - self._login_window_seconds:
                     attempts.popleft()
                 attempts.append(now)
+
+    def _prune_login_failures_locked(self, now: Optional[float] = None) -> None:
+        cutoff = (time.time() if now is None else now) - self._login_window_seconds
+        for key, attempts in list(self._login_failures.items()):
+            while attempts and attempts[0] <= cutoff:
+                attempts.popleft()
+            if not attempts:
+                self._login_failures.pop(key, None)
 
     def _clear_login_failures(self, keys: List[str]) -> None:
         with self._lock:

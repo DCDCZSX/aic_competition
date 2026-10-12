@@ -44,7 +44,12 @@ class ReviewScopeTest(unittest.TestCase):
                 risky = copy.deepcopy(case)
                 risky['payload'][field] = value
                 items = rs.build_items(risky)
-                self.assertTrue(all(x.review_tier == rs.REQUIRED and not x.batch_eligible for x in items))
+                # 病例级风险 / 分析失败让其余条目逐条必审；各科一致的共识仍只建议抽查。
+                consensus = [x for x in items if x.item_id.startswith('consensus_item:C-')]
+                others = [x for x in items if not x.item_id.startswith('consensus_item:C-')]
+                self.assertTrue(consensus)
+                self.assertTrue(all(x.review_tier == rs.SAMPLE for x in consensus))
+                self.assertTrue(all(x.review_tier == rs.REQUIRED and not x.batch_eligible for x in others))
 
     def test_mdt_consensus_uses_current_simulation_revision(self):
         case = self.case()
