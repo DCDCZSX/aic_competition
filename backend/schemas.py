@@ -224,6 +224,7 @@ class PatientProfile:
             _require_enum(self.behavior_type, BEHAVIOR_TYPES, "behavior_type")
         if self.age is not None:
             _require(0 < int(self.age) < 130, f"age 超出合理范围: {self.age}")
+        _require_enum(self.sex, ("", "男", "女", "其他", "未知"), "sex")
         _require(0.0 <= self.completeness <= 1.0, "completeness 必须在 [0,1]")
         _require(0.0 <= self.direct_quote_coverage <= 1.0, "direct_quote_coverage 必须在 [0,1]")
         for d in self.diseases:

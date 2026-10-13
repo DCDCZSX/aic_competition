@@ -23,7 +23,7 @@ from services.case_flow import CaseFlow, patient_safe_mdt_screening
 from services.ask_service import MAX_ANSWER_ITEMS, MAX_ANSWER_KEY_LENGTH
 from services.config import read_int_env
 from services import department_domain
-from services.intake import MAX_MAIN_ISSUE_LENGTH, MAX_TEXT_LENGTH, sanitized_payload
+from services.intake import MAX_MAIN_ISSUE_LENGTH, MAX_TEXT_LENGTH, sanitized_payload, normalize_sex
 from services.preview_tokens import PreviewTokenService
 from services.patient_uploads import PatientUploadStore, MAX_UPLOAD_COUNT, MAX_UPLOAD_BYTES
 from services.ocr_service import OcrService
@@ -647,10 +647,12 @@ def create_case():
         preview_token = string_field(data, 'preview_token', default='')
         goals = string_list(data, 'goals', default=(), max_items=8)
         age = optional_int(data, 'age')
-        gender = string_field(data, 'gender', default='')
-        sex = string_field(data, 'sex', default='')
+        gender = normalize_sex(string_field(data, 'gender', default='', max_length=8))
+        sex = normalize_sex(string_field(data, 'sex', default='', max_length=8))
+        if gender and sex and gender != sex:
+            raise InputValidationError('gender 与 sex 必须一致')
         name = string_field(data, 'name', default='', max_length=120)
-    except InputValidationError as exc:
+    except ValueError as exc:
         return _invalid_input(exc)
     preview_payload = preview_tokens.consume(preview_token, session.username)
     if preview_payload is None:
@@ -916,7 +918,7 @@ def manage_case_access(case_id):
         )
     else:
         changed = _shared_store.grant_case_access(
-            case_id, reviewer_id, granted_by=session.username
+            case_id, reviewer_id, granted_by=session.username, case_role='collaborator'
         )
     return jsonify({'ok': True, 'changed': changed, 'reviewer_id': reviewer_id})
 
@@ -1316,8 +1318,10 @@ def submit_decision(case_id):
         action=action,
         after=after,
         reason=reason,
-        reviewer_name=reviewer or (session.label if session else '模拟审核员'),
-        reviewer_dept=reviewer_dept,
+        reviewer_name=session.label,
+        reviewer_dept=session.department_name,
+        actor_username=session.username, actor_role=session.role,
+        actor_department_code=session.department_code,
         expected_content_revision=expected_revision,
         require_content_revision=True,
     )
@@ -1349,8 +1353,10 @@ def submit_disagreement_decision(case_id):
     result = case_flow.submit_disagreement_decision(
         case_id, disagreement_id, status, choice=choice, resolution=resolution,
         reason=reason, next_step=next_step,
-        reviewer_name=reviewer or (session.label if session else '模拟审核员'),
-        reviewer_dept=reviewer_dept,
+        reviewer_name=session.label,
+        reviewer_dept=session.department_name,
+        actor_username=session.username, actor_role=session.role,
+        actor_department_code=session.department_code,
         expected_content_revision=expected_revision,
         require_content_revision=True,
     )
@@ -1390,7 +1396,9 @@ def publish_review(case_id):
         return _invalid_input(exc)
     result = case_flow.publish_review(
         case_id,
-        reviewer_name=session.label if preview_revision else reviewer or session.label,
+        reviewer_name=session.label,
+        actor_username=session.username, actor_role=session.role,
+        actor_department_code=session.department_code,
         accept_all=data.get('accept_all') is True,
         final_advice=final_advice,
         expected_preview_revision=preview_revision or None,

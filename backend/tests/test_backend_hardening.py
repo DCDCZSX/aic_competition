@@ -97,6 +97,8 @@ class CaseFlowHardeningTest(unittest.TestCase):
         row = next(item for item in queue["rows"] if item["case_id"] == "OLD-FAILED")
         self.assertEqual(row["analysis_state"], "partial_failed")
         self.assertEqual(row["risk_level"], "高")
+        self.flow.use_llm = True
+        self.flow.ai_service = mock.Mock(api_key="test")
         with mock.patch.object(self.flow, "start_analysis_job", return_value=True):
             self.assertIn("OLD-FAILED", self.flow.analyze_pending_cases(limit=1)["started"])
 

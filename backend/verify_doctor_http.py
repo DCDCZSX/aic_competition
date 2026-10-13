@@ -1,24 +1,20 @@
-"""医生端审核台真实 HTTP 端到端验证（阶段 4.1-4.5）。
+"""医生端真实 HTTP 验证：分流、会诊记录、逐项审核、预览发布与资料复核。
 
-前置：服务已启动（`cd CHAIS/backend && python app.py`），且库中已有至少一个病例
-（本脚本会自己用患者账号建一个病例，全程走真实 HTTP）。
-
-运行：
-    python verify_doctor_http.py
+先启动应用，再运行 python verify_doctor_http.py。账号从项目 .env 或环境变量读取。
+全部使用本脚本创建的合成病例；既检查成功流程，也检查权限和发布阻断。
 """
-
 import json
 import os
 import sys
+import time
 
 import requests
 from verify_http_helpers import login, preview_token
 
-BASE = "http://127.0.0.1:5000"
-
-CASE = ("患者：王*，女，62岁。主诉：视物模糊3月，双下肢浮肿1周。"
-        "既往2型糖尿病5年，高血压10年。检查：尿蛋白++，空腹血糖9.2mmol/L。")
-
+BASE = os.getenv("APP_BASE_URL", "http://127.0.0.1:5000").rstrip("/")
+CASE = ("女，62岁。视物模糊3月，双下肢浮肿1周。既往2型糖尿病5年，高血压10年。"
+        "尿蛋白++，空腹血糖9.2mmol/L。")
+ADVICE = "请携带已有资料复诊，向接诊医生确认后续评估安排。"
 ok_count = 0
 fail_count = 0
 
@@ -33,294 +29,241 @@ def check(name, cond, detail=""):
         print(f"  [FAIL] {name} — {detail}")
 
 
+def api(session, method, path, body=None, expected=200):
+    response = session.request(method, BASE + path, json=body, timeout=120)
+    data = response.json()
+    if response.status_code != expected:
+        raise RuntimeError(f"{path} 返回 HTTP {response.status_code}，预期 {expected}：{data.get('error', '')}")
+    return data
+
+
 def main():
-    doctor_username = os.getenv("APP_DOCTOR_USERNAME", "doctor").strip()
-
-    print("[0] 患者端建病例（用于审核）")
-    patient = requests.Session()
+    patient, doctor, anon = requests.Session(), requests.Session(), requests.Session()
+    print("[1] 建立合成病例并检查身份边界")
     login(patient, BASE, "patient")
-    r = patient.post(f"{BASE}/api/v2/case", json={
-        "preview_token": preview_token(patient, BASE, CASE, "该看哪个科"),
-        "age": 62, "sex": "女"}, timeout=300)
-    check("建病例", r.status_code == 200, str(r.status_code))
-    case_id = r.json().get("case_id")
-    print(f"       case_id={case_id}")
-    if r.status_code != 200 or not case_id:
-        print("无法继续：病例创建失败或未返回 case_id")
-        return 1
-
-    access = patient.post(
-        f"{BASE}/api/v2/case/{case_id}/access",
-        json={"reviewer_id": doctor_username},
-        timeout=30,
-    )
-    try:
-        access_body = access.json()
-    except ValueError:
-        access_body = {"error": access.text[:160]}
-    check("患者显式授权医生", access.status_code == 200 and access_body.get("ok") is True,
-          json.dumps(access_body, ensure_ascii=False))
-    if access.status_code != 200 or access_body.get("ok") is not True:
-        print("无法继续：病例未授权给审核医生")
-        return 1
-
-    print("\n[1] 未登录访问医生端接口必须被拒（后台鉴权，不是前端跳转）")
-    anon = requests.Session()
-    r = anon.get(f"{BASE}/api/v2/cases", timeout=30)
-    check("未登录 /api/v2/cases → 401", r.status_code == 401, str(r.status_code))
-    r = anon.get(f"{BASE}/api/v2/case/{case_id}/review", timeout=30)
-    check("未登录 /review → 401", r.status_code == 401, str(r.status_code))
-    r = patient.get(f"{BASE}/api/v2/cases", timeout=30)
-    check("患者角色访问医生端 → 403", r.status_code == 403, str(r.status_code))
-    r = patient.post(f"{BASE}/api/v2/case/{case_id}/updates",
-                     json={"kind": "医生意见", "content": "患者替医生写的意见",
-                           "source": "医生上传", "department": "眼科"}, timeout=30)
-    check("患者角色不能以「医生上传」来源录入意见 → 403", r.status_code == 403, str(r.status_code))
-
-    print("\n[2] 医生登录")
-    doctor = requests.Session()
+    created = api(patient, "POST", "/api/v2/case", {
+        "preview_token": preview_token(patient, BASE, CASE, "就诊前资料准备"),
+        "age": 62, "sex": "女",
+    })
+    case_id = created["case_id"]
+    check("建病例并返回编号", created.get("ok") is True and bool(case_id))
+    base = f"/api/v2/case/{case_id}"
+    access = api(patient, "POST", f"/api/v2/case/{case_id}/access", {
+        "reviewer_id": os.getenv("APP_DOCTOR_USERNAME", "doctor").strip(),
+    })
+    check("患者显式授权医生", access.get("ok") is True)
+    submitted = api(patient, "POST", base + "/submit-review", {
+        "department_code": os.getenv("APP_DOCTOR_DEPARTMENT", "endocrinology"),
+    })
+    check("正式提交主责科室后医生获得主责身份", submitted.get("ok") is True)
+    for path in ("/api/v2/cases", base + "/review"):
+        check("未登录访问医生接口被拒", anon.get(BASE + path, timeout=30).status_code == 401)
+    check("患者不能读取医生队列", patient.get(BASE + "/api/v2/cases", timeout=30).status_code == 403)
+    denied = api(patient, "POST", base + "/updates", {
+        "kind": "医生意见", "content": "患者转述意见", "source": "医生上传", "department": "眼科",
+    }, expected=403)
+    check("患者不能冒充医生上传意见", bool(denied.get("error")))
     body = login(doctor, BASE, "doctor")
-    check("doctor 登录", True)
-    session = body["session"]
-    check("角色=doctor", session["role"] == "doctor", session["role"])
-    r = doctor.get(f"{BASE}/api/me", timeout=30)
-    check("scopes 含 review/decision", {"review", "decision"} <= set(r.json().get("scopes") or []),
-          json.dumps(r.json().get("scopes"), ensure_ascii=False))
+    check("医生身份正确", body["session"]["role"] == "doctor")
+    me = api(doctor, "GET", "/api/me")
+    check("医生具有审核与决策权限", {"review", "decision"} <= set(me.get("scopes") or []))
 
-    r = doctor.post(
-        f"{BASE}/api/v2/case/{case_id}/mdt-screening",
-        json={"decision": "recommend_mdt", "reason": "资料提示需要共同评估",
-              "purpose": "明确眼底和代谢问题的就医重点",
-              "departments": ["内分泌科", "眼科"]}, timeout=30)
-    check("医生提交 MDT 初筛", r.status_code == 200 and r.json().get("ok") is True,
-          json.dumps(r.json(), ensure_ascii=False)[:240])
+    print("\n[2] 按当前流程确认方向并记录实际会诊")
+    blocked = api(doctor, "POST", base + "/publish", {"final_advice": ADVICE}, expected=400)
+    check("分流未确认时禁止发布",
+          {"triage", "mdt_screening"} <= {b["code"] for b in blocked.get("publication_blockers", [])})
+    routing = api(doctor, "POST", base + "/doctor-routing", {
+        "primary_department": "内分泌科", "secondary_departments": ["眼科"],
+        "decision": "recommend_mdt", "reason": "合成病例需要两个专业共同核对资料",
+        "purpose": "共同确认已有资料与下一步准备事项",
+    })
+    check("一次保存科室与MDT分流", routing.get("ok") is True)
+    if os.getenv("AI_API_KEY", "").strip():
+        api(doctor, "POST", base + "/doctor-mdt-simulation", {})
+        deadline = time.monotonic() + 180
+        while True:
+            simulation = api(doctor, "GET", base + "/doctor-mdt-simulation")["simulation"]
+            if simulation["state"] != "running" or time.monotonic() >= deadline:
+                break
+            time.sleep(0.2)
+        check("医生确认范围后生成本次独立AI模拟", simulation["state"] == "done",
+              simulation.get("message", ""))
+    else:
+        unavailable = api(doctor, "POST", base + "/doctor-mdt-simulation", {}, expected=400)
+        check("无模型时明确拒绝AI模拟", unavailable.get("code") == "model_not_configured")
+        simulation = api(doctor, "GET", base + "/doctor-mdt-simulation")["simulation"]
+        check("无模型拒绝后不留下虚假的模拟任务", simulation["state"] == "none")
+    blocked = api(doctor, "POST", base + "/publish", {"final_advice": ADVICE}, expected=400)
+    check("未记录完成实际MDT时禁止发布",
+          "mdt_record" in {b["code"] for b in blocked.get("publication_blockers", [])})
+    formal = api(doctor, "POST", base + "/mdt-formal-record", {
+        "status": "completed", "participants": ["模拟主责医生", "模拟眼科医生"],
+        "conclusion": "合成会诊已核对资料，后续评估由接诊医生确认。",
+        "next_step": "携带已有检查资料复诊。",
+    })
+    check("保存独立会诊结论", formal.get("ok") is True)
 
-    print("\n[3] 屏 A 病例列表")
-    r = doctor.get(f"{BASE}/api/v2/cases?limit=100", timeout=60)
-    check("列表 200", r.status_code == 200, str(r.status_code))
-    queue = r.json()
-    cases = queue.get("cases") or []
-    check("列表非空", bool(cases), f"{len(cases)} 例")
-    check("列表带服务端分页元数据",
-          isinstance(queue.get("total"), int) and isinstance(queue.get("has_more"), bool),
-          json.dumps({"total": queue.get("total"), "has_more": queue.get("has_more")}, ensure_ascii=False))
-    row = next((c for c in cases if c["case_id"] == case_id), None)
-    check("能找到刚建的病例", row is not None)
-    if row:
-        check("带待审条数", int(row["pending_items"]) > 0, str(row["pending_items"]))
-        check("带行为类型/可靠性", bool(row["behavior_type"]) and bool(row["reliability"]),
-              f"{row['behavior_type']} / {row['reliability']}")
-        check("带牵头方向", bool(row["primary_department"]), str(row["primary_department"]))
-    r = doctor.get(f"{BASE}/api/v2/cases?state=doctor_confirmed", timeout=30)
-    check("状态筛选可用", r.status_code == 200 and isinstance(r.json().get("cases"), list))
-    check("风险优先排序", all(
-        int(cases[i].get("risk_rank", 0)) >= int(cases[i + 1].get("risk_rank", 0))
-        for i in range(len(cases) - 1)) if len(cases) > 1 else True)
-    r = doctor.get(f"{BASE}/api/v2/cases?limit=1&offset=1", timeout=30)
-    page = r.json()
-    check("offset 分页返回单页",
-          r.status_code == 200 and len(page.get("cases") or []) <= 1
-          and isinstance(page.get("total"), int), json.dumps(page, ensure_ascii=False)[:120])
+    print("\n[3] 队列、条目类型与审核责任")
+    queue = api(doctor, "GET", "/api/v2/cases?limit=100")
+    rows = queue.get("cases") or []
+    check("队列含当前病例", any(row["case_id"] == case_id for row in rows))
+    check("队列有分页信息", isinstance(queue.get("total"), int) and isinstance(queue.get("has_more"), bool))
+    page = api(doctor, "GET", "/api/v2/cases?limit=1&offset=1")
+    check("分页最多一条", len(page.get("cases") or []) <= 1)
+    filtered = api(doctor, "GET", "/api/v2/cases?state=doctor_confirmed")
+    check("状态筛选准确", all(row["case_state"] == "doctor_confirmed" for row in filtered.get("cases", [])))
+    check("队列按风险优先", all(rows[i].get("risk_rank", 0) >= rows[i + 1].get("risk_rank", 0)
+                              for i in range(len(rows) - 1)))
+    review = api(doctor, "GET", base + "/review")
+    items = review["items"]
+    check("分流与正式记录分别保存",
+          review["mdt_screening"]["decision"] == "recommend_mdt"
+          and review["mdt_formal_record"]["status"] == "completed")
+    types = {item["target_type"] for item in items}
+    check("存在就医路径条目", "path_step" in types)
+    check("科室选择和患者最终建议不重复进入审核清单",
+          not ({"department_selection", "patient_advice"} & types))
+    specialty = [item for item in items if item["target_type"] == "ai_analysis"]
+    if os.getenv("AI_API_KEY", "").strip():
+        check("配置模型时专科意见逐科必审", bool(specialty)
+              and all(item["review_tier"] == "required" for item in specialty))
+    else:
+        check("无模型时不伪造专科AI意见", not specialty)
+    required = [item for item in items if item["review_tier"] == "required"]
+    automatic = [item for item in items if item["review_tier"] == "automatic"]
+    check("待审只统计必审未处理项", review["summary"]["pending"] == len(required))
+    check("自动项单独记录", bool(automatic) and all(item["state"] == "auto_processed" for item in automatic))
+    check("未发布状态明确", review["published"] is False)
+    # 模拟原始数据中的 high/medium/low 是内部证据元数据；核验展示给医生的审核条目和资料包。
+    public_review = {key: review.get(key) for key in
+                     ("items", "pending_questions", "mdt_preparation_packet", "disagreements")}
+    text = json.dumps(public_review, ensure_ascii=False)
+    check("可读审核条目和资料包不展示概率或模型置信度",
+          not any(t in text for t in ("概率", "置信度", "confidence")))
+    blocked = api(doctor, "POST", base + "/publish", {"accept_all": True, "final_advice": ADVICE}, expected=400)
+    check("批量发布不能跳过关键必审项",
+          "batch_items" in {b["code"] for b in blocked.get("publication_blockers", [])})
+    untouched = api(doctor, "GET", base + "/review")
+    check("被拒的批量操作不写入审核决定", untouched["decisions"] == review["decisions"])
 
-    print("\n[4] 屏 F 审核条目")
-    r = doctor.get(f"{BASE}/api/v2/case/{case_id}/review", timeout=60)
-    check("review 200", r.status_code == 200, str(r.status_code))
-    review = r.json()
-    items = review.get("items") or []
-    check("审核数据带 MDT 初筛结果",
-          (review.get("mdt_screening") or {}).get("decision") == "recommend_mdt",
-          json.dumps(review.get("mdt_screening"), ensure_ascii=False))
-    check("条目非空", bool(items), f"{len(items)} 条")
-    types = {i["target_type"] for i in items}
-    check("含科室入选条目", "department_selection" in types, json.dumps(sorted(types), ensure_ascii=False))
-    check("含路径步骤条目", "path_step" in types)
-    check("含患者建议条目", "patient_advice" in types)
-    # 待审只算"必审"条目：未要求医生决定的路径步骤是免审（auto_processed），不计入待审
-    exempt = [i for i in items if not i["needs_doctor_review"]]
-    check("免审条目不计入待审（修过的真缺陷）",
-          review["summary"]["pending"] == len(items) - len(exempt)
-          and review["summary"]["auto_processed"] == len(exempt)
-          and len(exempt) > 0,
-          f"待审 {review['summary']['pending']} / 总 {len(items)} / 免审 {review['summary']['auto_processed']}")
-    check("未发布时不能直接发布标记", review["published"] is False)
-    text = json.dumps(review, ensure_ascii=False)
-    check("无概率/置信度泄露", not any(t in text for t in ("概率", "置信度", "confidence")))
+    print("\n[4] 接受、修改、驳回和暂不确定")
+    chosen = (required + [item for item in items if item["review_tier"] != "required"])[:4]
+    if len(chosen) != 4:
+        raise RuntimeError("合成验收病例没有提供四项可审核内容")
+    chosen_ids = [item["item_id"] for item in chosen]
 
-    ids = [i["item_id"] for i in items]
+    def decide(item_id, action, expected=200, **fields):
+        current = api(doctor, "GET", base + "/review")
+        item = next(item for item in current["items"] if item["item_id"] == item_id)
+        return api(doctor, "POST", base + "/decisions", {
+            "item_id": item_id, "action": action,
+            "expected_content_revision": item["content_revision"], **fields,
+        }, expected=expected)
 
-    print("\n[5] 逐条审核：接受 / 修改（原因必填）/ 驳回（原因必填）/ 暂不确定")
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/decisions",
-                    json={"item_id": ids[0], "action": "accept", "reviewer": "审核医生"}, timeout=30)
-    check("接受成功", r.status_code == 200 and r.json().get("ok"), json.dumps(r.json(), ensure_ascii=False)[:120])
+    check("接受成功", decide(chosen_ids[0], "accept")["ok"] is True)
+    invalid = decide(chosen_ids[1], "modify", expected=400, after="合成修改内容")
+    check("修改缺少原因被拒", "原因" in invalid["error"])
+    invalid = decide(chosen_ids[1], "modify", expected=400, after="", reason="说明修改依据")
+    check("修改缺少内容被拒", "内容" in invalid["error"])
+    modified = decide(chosen_ids[1], "modify", after="建议向接诊医生确认后续资料核对安排。",
+                      reason="合成验证：记录医生修订内容")
+    card = next(item for item in modified["items"] if item["item_id"] == chosen_ids[1])
+    check("修改后保留原稿与修订标识", card["state"] == "modified"
+          and bool(card["ai_content"]) and card["changed_by_doctor"])
+    invalid = decide(chosen_ids[2], "reject", expected=400)
+    check("驳回缺少原因被拒", "原因" in invalid["error"])
+    check("驳回成功", decide(chosen_ids[2], "reject", reason="合成验证：该条不适用")["ok"] is True)
+    uncertain = decide(chosen_ids[3], "uncertain", reason="证据不足，待线下确认")
+    check("暂不确定形成待确认事项",
+          any("证据不足" in q for q in uncertain.get("pending_questions", [])))
+    required_touched = sum(item["review_tier"] == "required" for item in chosen)
+    check("待审按实际处理的必审项减少",
+          uncertain["summary"]["pending"] == review["summary"]["pending"] - required_touched)
+    check("人工动作单独计数", uncertain["summary"]["doctor_reviewed"] == 4)
+    api(doctor, "POST", base + "/decisions", {"item_id": "path_step:不存在", "action": "accept"}, expected=400)
+    check("未知审核条目被拒", True)
 
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/decisions",
-                    json={"item_id": ids[1], "action": "modify", "after": "改一下"}, timeout=30)
-    check("修改缺原因被拒", r.status_code == 400 and not r.json().get("ok"),
-          str(r.json().get("error"))[:60])
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/decisions",
-                    json={"item_id": ids[1], "action": "modify", "after": ""}, timeout=30)
-    check("修改缺内容被拒", r.status_code == 400, str(r.json().get("error"))[:60])
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/decisions",
-                    json={"item_id": ids[1], "action": "modify",
-                          "after": "建议向医生确认是否需要优先评估眼部情况",
-                          "reason": "改写为中性表述并调整优先级", "reviewer": "审核医生"}, timeout=30)
-    check("修改成功且记录 before/after", r.status_code == 200 and r.json().get("ok"))
-    modified = next(i for i in r.json()["items"] if i["item_id"] == ids[1])
-    check("条目状态=已修改", modified["state"] == "modified", modified["state"])
-    check("保留 AI 原稿", bool(modified["ai_content"]) and modified["changed_by_doctor"] is True)
+    for item in api(doctor, "GET", base + "/review")["items"]:
+        if item["review_tier"] == "required" and item["state"] == "awaiting":
+            decide(item["item_id"], "accept")
+    current = api(doctor, "GET", base + "/review")
+    revisions = {item["item_id"]: item["content_revision"] for item in current["items"]}
+    for disagreement in current.get("disagreements") or []:
+        identifier = disagreement["分歧编号"]
+        api(doctor, "POST", base + "/disagreement-decisions", {
+            "disagreement_id": identifier, "status": "unresolved_with_followup",
+            "reason": "合成验证：保留差异并安排进一步核对",
+            "next_step": "由接诊医生核对原始检查资料。",
+            "expected_content_revision": revisions["consensus_item:" + identifier],
+        })
+    current = api(doctor, "GET", base + "/review")
+    check("必审事项均已处理", current["summary"]["pending"] == 0)
+    automatic_untouched = {item["item_id"] for item in automatic} - set(chosen_ids)
+    original_version = api(doctor, "GET", base)["case"]["report_version"]
 
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/decisions",
-                    json={"item_id": ids[2], "action": "reject"}, timeout=30)
-    check("驳回缺原因被拒", r.status_code == 400, str(r.json().get("error"))[:60])
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/decisions",
-                    json={"item_id": ids[2], "action": "reject", "reason": "与既往线下意见不符"}, timeout=30)
-    check("驳回成功", r.status_code == 200 and r.json().get("ok"))
+    print("\n[5] 预览发布、患者读取与历史版本")
+    preview = api(doctor, "POST", base + "/publication-preview", {"final_advice": ADVICE})
+    check("发布预览有修订标识", bool(preview.get("preview_revision")))
+    published = api(doctor, "POST", base + "/publish", {
+        "final_advice": ADVICE, "preview_revision": preview["preview_revision"],
+    })
+    check("发布状态正确", published["case_state"] == "doctor_confirmed")
+    check("发布后版本递增", published["report_version"] == original_version + 1)
+    after = api(doctor, "GET", base + "/review")
+    check("发布成功并保留自动处理状态", after["published"] is True
+          and all(item["state"] == "auto_processed" for item in after["items"]
+                  if item["item_id"] in automatic_untouched))
+    reports = api(doctor, "GET", base + "/report")
+    check("内部完整报告结构完整", reports["full"]["complete"] is True)
+    patient_report = api(patient, "GET", base + "/report")
+    check("患者读取相同建议与版本",
+          patient_report["doctor_result"]["published"]
+          and patient_report["doctor_result"]["final_advice"] == ADVICE
+          and patient_report["doctor_result"]["report_version"] == published["report_version"])
+    history = api(doctor, "GET", base + "/audit")
+    events = {event["event"] for event in history["timeline"]}
+    check("创建、审核与发布都有留痕", {"case_created", "decision_recorded", "report_published"} <= events)
+    check("医生动作有中文标签", all(item["action_label"] for item in history["decisions"]))
+    check("医生动作与自动项分开统计",
+          after["summary"]["doctor_reviewed"] >= 4 and after["summary"]["auto_processed"] == len(automatic_untouched))
 
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/decisions",
-                    json={"item_id": ids[3], "action": "uncertain", "reason": "证据不足，待线下确认"}, timeout=30)
-    check("暂不确定成功", r.status_code == 200 and r.json().get("ok"))
-    review_after = r.json()
-    check("待审数下降（只对必审条目计数）",
-          review_after["summary"]["pending"] == review["summary"]["pending"] - 4,
-          json.dumps(review_after["summary"], ensure_ascii=False))
-    check("医生处理数=4（免审不算医生处理）",
-          review_after["summary"].get("doctor_reviewed") == 4,
-          json.dumps(review_after["summary"], ensure_ascii=False)[:160])
-    check("暂不确定进入待确认问题清单",
-          bool(review_after.get("pending_questions"))
-          and any("证据不足" in q for q in review_after["pending_questions"]),
-          json.dumps(review_after.get("pending_questions"), ensure_ascii=False)[:140])
+    print("\n[6] 医生意见、资料复核与补资料")
+    updated = api(doctor, "POST", base + "/updates", {
+        "kind": "医生意见", "content": "建议结合眼底报告核对下一步资料准备。",
+        "source": "医生上传", "department": "眼科",
+    })
+    check("医生意见来源经过确认",
+          "眼科" in updated["change_summary"]["doctor_opinion_comparison"]["agree"])
+    after_update = api(doctor, "GET", base + "/review")
+    check("医生意见标记为已验证", after_update["doctor_opinions"][-1]["is_verified"] is True)
+    check("已发布病例更新后进入复核", api(patient, "GET", base)["case"]["case_state"] == "awaiting_recheck")
+    versions = api(patient, "GET", base + "/versions")["versions"]
+    check("上一发布版本仍保留", any(v["version"] == published["report_version"] for v in versions))
+    item = after_update["items"][0]
+    requested = decide(item["item_id"], "request_more_info", reason="请补充眼底检查结果")
+    check("请求补资料转入对应状态", requested.get("state_changed") == "need_more_info")
+    check("补资料状态已持久化", api(patient, "GET", base)["case"]["case_state"] == "need_more_info")
 
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/decisions",
-                    json={"item_id": "department_selection:不存在的科", "action": "accept"}, timeout=30)
-    check("未知条目被拒", r.status_code == 400, str(r.json().get("error"))[:60])
-
-    print("\n[6] 发布审核版（免审条目不阻塞发布，且不得被写成医生接受）")
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/publish", json={"reviewer": "审核医生", "final_advice": "请携带已有资料向接诊医生确认后续安排。"}, timeout=60)
-    check("仍有必审条目时发布被拒", r.status_code == 400, str(r.json().get("error"))[:70])
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/publish",
-                    json={"reviewer": "审核医生", "accept_all": True, "final_advice": "请携带已有资料向接诊医生确认后续安排。"}, timeout=120)
-    check("全部接受必审条目并发布成功", r.status_code == 200 and r.json().get("ok"),
-          json.dumps(r.json(), ensure_ascii=False)[:140])
-    pub = r.json()
-    check("状态→doctor_confirmed", pub.get("case_state") == "doctor_confirmed", str(pub.get("case_state")))
-    check("版本 +1", pub.get("report_version") == 2, str(pub.get("report_version")))
-    check("批量接受逐条留痕", bool(pub.get("batch_accepted")), f"{len(pub.get('batch_accepted') or [])} 条")
-    check("批量接受只覆盖必审条目（免审不被写成医生接受）",
-          all(i in {x["item_id"] for x in items if x["needs_doctor_review"]}
-              for i in pub.get("batch_accepted") or []),
-          f"{len(pub.get('batch_accepted') or [])} 条")
-
-    r = doctor.get(f"{BASE}/api/v2/case/{case_id}/review", timeout=30)
-    check("发布后无待审条目", r.json()["summary"]["pending"] == 0)
-    check("published=True", r.json()["published"] is True)
-    check("发布后免审条目仍标为自动处理（没被写成医生接受）",
-          all(i["state"] == "auto_processed" for i in r.json()["items"] if not i["needs_doctor_review"]),
-          json.dumps(r.json()["summary"], ensure_ascii=False)[:140])
-    audit_text = json.dumps(doctor.get(f"{BASE}/api/v2/case/{case_id}/audit", timeout=30).json(),
-                            ensure_ascii=False)
-    check("审计区分医生处理与免审自动处理",
-          "医生处理=" in audit_text and "免审自动处理=" in audit_text, "")
-
-    print("\n[7] 报告角标转绿")
-    r = doctor.get(f"{BASE}/api/v2/case/{case_id}/report", timeout=60)
-    check("报告 200", r.status_code == 200, str(r.status_code))
-    reports = r.json()
-    check("摘要 doctor_confirmed", reports["summary"]["doctor_confirmed"] is True)
-    check("完整报告 doctor_confirmed", reports["full"]["doctor_confirmed"] is True)
-    check("完整报告 13 段齐全", reports["full"].get("complete") is True,
-          json.dumps(reports["full"].get("missing_sections"), ensure_ascii=False))
-
-    print("\n[8] 屏 G 审核记录与版本")
-    r = doctor.get(f"{BASE}/api/v2/case/{case_id}/audit", timeout=30)
-    check("audit 200", r.status_code == 200, str(r.status_code))
-    hist = r.json()
-    check("有决策记录", len(hist["decisions"]) >= 4, f"{len(hist['decisions'])} 条")
-    check("决策带中文动作标签", all(d["action_label"] for d in hist["decisions"]))
-    check("有审计时间线", bool(hist["timeline"]), f"{len(hist['timeline'])} 条")
-    events = {t["event"] for t in hist["timeline"]}
-    check("留痕 decision_recorded", "decision_recorded" in events)
-    check("留痕 report_published", "report_published" in events)
-    check("留痕 case_created", "case_created" in events)
-
-    print("\n[9] 屏 F 录入线下实际意见（医生上传）→ AI vs 医生对照")
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/updates",
-                    json={"kind": "医生意见", "content": "建议眼科评估后行眼底激光，同步内分泌科控糖",
-                          "source": "医生上传", "department": "眼科"}, timeout=60)
-    check("医生端录入成功", r.status_code == 200 and r.json().get("ok"),
-          json.dumps(r.json(), ensure_ascii=False)[:140])
-    cmp_ = ((r.json().get("change_summary") or {}).get("doctor_opinion_comparison") or {})
-    check("医生意见进入 agree（眼科在建议科室中）", "眼科" in (cmp_.get("agree") or []),
-          json.dumps(cmp_, ensure_ascii=False)[:160])
-    r = doctor.get(f"{BASE}/api/v2/case/{case_id}/review", timeout=30)
-    ops = r.json().get("doctor_opinions") or []
-    check("线下意见已登记且已验证", bool(ops) and ops[-1]["is_verified"] is True,
-          json.dumps(ops[-1:] if ops else [], ensure_ascii=False)[:140])
-
-    print("\n[10] 请求补资料 → 病例退回补资料")
-    r = doctor.get(f"{BASE}/api/v2/case/{case_id}/review", timeout=30)
-    item0 = (r.json().get("items") or [])[0]
-    r = doctor.post(f"{BASE}/api/v2/case/{case_id}/decisions",
-                    json={"item_id": item0["item_id"], "action": "request_more_info",
-                          "reason": "缺少眼底检查结果"}, timeout=30)
-    check("请求补资料成功", r.status_code == 200 and r.json().get("ok"))
-    check("状态→need_more_info", r.json().get("state_changed") == "need_more_info",
-          str(r.json().get("state_changed")))
-    r = doctor.get(f"{BASE}/api/v2/case/{case_id}", timeout=30)
-    check("病例状态已退回补资料",
-          (r.json().get("case") or {}).get("case_state") == "need_more_info",
-          str((r.json().get("case") or {}).get("case_state")))
-
-    print("\n[12] 医生端批处理：补齐未完成的分析 + 列表分析状态")
-    r = doctor.get(f"{BASE}/api/v2/cases", timeout=60)
-    rows = r.json().get("cases") or []
-    check("列表带分析状态字段", bool(rows) and all("analysis_state" in c for c in rows),
-          json.dumps(rows[0].get("analysis_state") if rows else None, ensure_ascii=False))
-    check("分析状态取值合法",
-          all(c.get("analysis_state") in ("running", "done", "partial_failed", "failed", "none")
-              for c in rows),
-          json.dumps(sorted({c.get("analysis_state") for c in rows}), ensure_ascii=False))
-    r = doctor.post(f"{BASE}/api/v2/cases/analyze", json={"limit": 3}, timeout=60)
-    body = r.json() or {}
-    check("批处理接口 200", r.status_code == 200 and body.get("ok"),
-          json.dumps(body, ensure_ascii=False)[:160])
-    check("返回已排入与已跳过清单",
-          isinstance(body.get("started"), list) and isinstance(body.get("skipped"), list),
-          json.dumps(body, ensure_ascii=False)[:160])
-    check("同一条病例不会既排入又跳过",
-          not (set(body.get("started") or []) & set(body.get("skipped") or [])),
-          json.dumps(body, ensure_ascii=False)[:160])
-    # 逐科失败口径：医生端要能看到"哪一科没跑出来"，并且这类病例必须能被批处理捡起来
-    r = doctor.get(f"{BASE}/api/v2/case/{case_id}/analysis", timeout=60)
-    ana = (r.json() or {}).get("analysis") or {}
-    check("医生端可查分析明细（含 mdt.failed）",
-          r.status_code == 200 and isinstance((ana.get("mdt") or {}).get("failed"), list),
-          json.dumps(ana.get("mdt"), ensure_ascii=False)[:160])
-    # 逐科失败口径：医生端要能看到"哪一科没跑出来"，并且这类病例必须能被批处理捡起来。
-    # 注意：排入的病例**不一定** analysis_state != done —— 老病例就是"相位都算完成、
-    # 但里面有 unavailable 的科室"，所以这里断言的不变量是"确实还有没分析完的东西"。
-    if body.get("started"):
-        cid = body["started"][0]
-        r2 = doctor.get(f"{BASE}/api/v2/case/{cid}/analysis", timeout=60)
-        st2 = (r2.json() or {}).get("analysis") or {}
-        pending = [p for p, v in (st2.get("phases") or {}).items()
-                   if (v or {}).get("state") != "done"]
-        failed_depts = (st2.get("mdt") or {}).get("failed") or []
-        check("排入的病例确实还没分析完（有未完成相位或未完成科室）",
-              bool(pending) or bool(failed_depts),
-              json.dumps({"pending": pending, "failed": failed_depts}, ensure_ascii=False))
-
-    print("\n[13] 页面可达性")
-    r = requests.get(f"{BASE}/doctor", timeout=30)
-    check("/doctor 200", r.status_code == 200, str(r.status_code))
-    for token in ("s-list", "s-overview", "s-triage", "s-evidence", "s-mdt", "s-review", "s-history",
-                  "playMdt", "submitOpinion", "publish(", "openModal", "analyzePending", "analysisBadge",
-                  "rev-publish-inline", "publishPanelHtml"):
-        check(f"页面含 {token}", token in r.text)
-
-    print(f"\n===== 结果：{ok_count} 通过 / {fail_count} 失败 =====")
-    return 1 if fail_count else 0
+    print("\n[7] 分析恢复与当前医生页面")
+    queued = api(doctor, "POST", "/api/v2/cases/analyze", {"limit": 3})
+    check("批处理返回排入与跳过列表",
+          isinstance(queued.get("started"), list) and isinstance(queued.get("skipped"), list))
+    check("同一病例不会同时排入与跳过", not (set(queued["started"]) & set(queued["skipped"])))
+    if not os.getenv("AI_API_KEY", "").strip():
+        check("无模型时不排入后台模型任务", queued["started"] == []
+              and all("未配置模型" in reason for reason in queued.get("skipped_reasons", {}).values()))
+    page = anon.get(BASE + "/doctor", timeout=30)
+    check("医生页面可访问", page.status_code == 200)
+    for token in ("s-list", "s-overview", "s-packet", "s-triage", "s-mdt", "s-review", "s-history",
+                  "submitTriageConfirmation", "submitMdtFormalRecord", "startDoctorMdtSimulation",
+                  "publication-preview", "expected_content_revision", "publishPanelHtml"):
+        check(f"医生页面包含当前流程入口 {token}", token in page.text)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        main()
+    except (requests.RequestException, ValueError, KeyError, StopIteration, RuntimeError) as exc:
+        check("HTTP验收流程执行", False, str(exc))
+    print(f"\n===== 结果：{ok_count} 通过 / {fail_count} 失败 =====")
+    sys.exit(1 if fail_count else 0)

@@ -224,23 +224,14 @@ _NEGATION_OPS: Tuple[str, ...] = (
 )
 
 
-def _mentioned_positively(text: str, keywords: Tuple[str, ...]) -> bool:
+def _mentioned_positively(text: str, keywords: Tuple[str, ...], *, require_result: bool = False) -> bool:
     """关键词是否以"肯定"方式出现。
 
     "未做眼底检查" → 视为**未提供**（进缺口）；
     "眼底检查未见异常" → 视为**已提供**（阴性结果也是资料）。
     """
-    for kw in keywords:
-        start = 0
-        while True:
-            idx = text.find(kw, start)
-            if idx < 0:
-                break
-            window = text[max(0, idx - 8): idx]
-            if not any(op in window for op in _NEGATION_OPS):
-                return True
-            start = idx + len(kw)
-    return False
+    from services.clinical_evidence import information_provided
+    return information_provided(text, keywords, require_result=require_result)
 
 
 def _detect_gaps(text: str) -> List[str]:
@@ -254,7 +245,8 @@ def _detect_gaps(text: str) -> List[str]:
 
     gaps: List[str] = []
     for keywords, field in _GAP_CHECKS:
-        if _mentioned_positively(text, keywords):
+        if _mentioned_positively(text, keywords, require_result=field in (
+                "blood_glucose_control", "urine_protein", "fundus_exam", "cardiac_exam", "blood_count", "imaging")):
             continue
         dep = depends_on(field)
         label = dep.label if dep else field

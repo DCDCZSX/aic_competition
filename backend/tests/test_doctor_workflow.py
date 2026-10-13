@@ -19,6 +19,8 @@ class DoctorWorkflowTest(unittest.TestCase):
         self.store = Store(':memory:')
         self.flow = CaseFlow(store=self.store)
         self.case_id = self.flow.create_case(medical_history=CASE_TEXT).case_id
+        self.flow.use_llm = True
+        self.flow.ai_service = mock.Mock(api_key='local-test-key')
 
     def tearDown(self):
         self.store.close()
@@ -271,7 +273,11 @@ class DoctorWorkflowTest(unittest.TestCase):
 
 
 class DoctorWorkflowHttpTest(unittest.TestCase):
-    setUp = screening_tests.MdtScreeningHttpTest.setUp
+    def setUp(self):
+        screening_tests.MdtScreeningHttpTest.setUp(self)
+        flow = screening_tests.app_module.case_flow
+        flow.use_llm = True
+        flow.ai_service = mock.Mock(api_key='local-test-key')
     tearDown = screening_tests.MdtScreeningHttpTest.tearDown
     _token = screening_tests.MdtScreeningHttpTest._token
     _headers = staticmethod(screening_tests.MdtScreeningHttpTest._headers)

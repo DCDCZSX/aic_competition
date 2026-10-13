@@ -219,7 +219,7 @@
       </form>
 
       <div id="login-msg" class="banner danger hide" role="alert" aria-live="assertive"></div>
-      <p class="auth-note"><span>启用 AI 分析时，资料脱敏后会发送至外部模型。</span><span>请勿在就医资料中填写姓名、身份证号、手机号或住址。</span></p>
+      <p class="auth-note"><span>启用 AI 文本分析时，脱敏文本会发送至外部模型。</span><span>请勿在就医资料中填写姓名、身份证号、手机号或住址。</span></p>
       <a class="auth-switch" href="/doctor">
         <span>医生身份？进入医生工作台</span>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -324,7 +324,7 @@
       <div id="pane-upload" class="hide">
         <label class="muted" for="patient-images">上传病历、检查单或处方照片</label>
         <input id="patient-images" type="file" accept="image/jpeg,image/png,image/webp" multiple>
-        <p class="tiny">支持 JPG、PNG、WEBP；每张不超过 10MB，最多 5 张。图片会先暂存，当前不会自动识别文字，请确认后再手动填写病情。</p>
+        <p class="tiny">支持 JPG、PNG、WEBP；每张不超过 10MB，最多 5 张。开启图片识别时，图片会发送至外部服务；请先遮盖姓名、电话等身份信息。识别后请核对文字，识别不可用时可手动填写。</p>
         <div id="patient-upload-grid" class="patient-upload-grid" aria-live="polite"></div>
         <div id="patient-upload-msg"></div>
       </div>
@@ -2445,7 +2445,7 @@ function finishFlow(){
   const t=S.triage||{}, rel=t.reliability||{};
   document.getElementById('done-title').textContent='本次小结';
   document.getElementById('done-body').innerHTML =
-    `<div class="banner ok">病例 <code>${esc(S.caseId)}</code> 已完成「录入 → 脱敏 → 画像 → 追问 → 就医方向 → 路径与任务 → 多学科分析」全流程，并已落库。</div>
+    `<div class="banner ok">病例 <code>${esc(S.caseId)}</code> 的资料已保存，可继续查看就医准备结果和医生审核进度。</div>
      <div class="ai-block">
        <div><strong>建议方向</strong>：${esc((t.primary||{}).department||'—')}${(t.secondary||[]).length?'（协同 '+t.secondary.map(d=>esc(d.department)).join('、')+'）':''}</div>
        <div><strong>可靠性</strong>：${esc(rel.level||'—')}</div>

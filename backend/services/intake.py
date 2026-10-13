@@ -30,6 +30,13 @@ MAX_MAIN_ISSUE_LENGTH = 2000
 
 # 年龄合理区间
 MIN_AGE, MAX_AGE = 1, 129
+VALID_SEX = ("", "男", "女", "其他", "未知")
+
+
+def normalize_sex(value: str) -> str:
+    if not isinstance(value, str) or value.strip() not in VALID_SEX:
+        raise ValueError("性别必须为男、女、其他、未知或留空")
+    return value.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +168,10 @@ def validate_intake(
         except (TypeError, ValueError):
             result.errors.append(f"年龄格式不正确：{age!r}")
 
-    if sex and _clean(sex) not in ("男", "女", "其他", "未知"):
-        result.warnings.append(f"性别取值不常见：{sex}（将按「未知」处理）")
+    try:
+        normalize_sex(sex)
+    except ValueError as exc:
+        result.errors.append(str(exc))
 
     # ---- G3：PII 检测（阻断分析，提示清除）----
     pii = desensitize(combined)

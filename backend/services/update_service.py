@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.privacy import desensitize  # noqa: E402
+from services.clinical_evidence import information_provided  # noqa: E402
 from services.dependency_matrix import BY_LABEL, departments_for_field  # noqa: E402
 
 # 来源分级（主文档 §14）
@@ -75,7 +76,9 @@ def gaps_filled_by(content: str) -> List[str]:
     text = str(content or "").lower()
     filled: List[str] = []
     for label, keywords in GAP_FILL_KEYWORDS.items():
-        if any(k.lower() in text for k in keywords):
+        if information_provided(text, keywords, require_result=label in (
+                "眼底检查", "血常规（三系）", "心脏/冠脉检查", "影像检查（CT/MRI）",
+                "尿蛋白 / 肾功能", "血糖控制水平", "甲状腺功能", "肝功能")):
             filled.append(label)
     return filled
 

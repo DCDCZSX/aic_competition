@@ -396,6 +396,24 @@ class Store:
             ).fetchone()
         return str(row[0]) if row and row[0] else None
 
+    def assign_case_role(self, case_id: str, reviewer_id: str, *, case_role: str,
+                         actor: str, reason: str) -> bool:
+        """Explicit business assignment; sharing alone never calls this method."""
+        if case_role not in {"primary", "collaborator", "coordinator"}:
+            raise ValueError("病例职责不受支持")
+        with self._lock:
+            previous = self.get_case_access_role(case_id, reviewer_id)
+            if previous is None:
+                return self.grant_case_access(case_id, reviewer_id, granted_by=actor, case_role=case_role)
+            if previous == case_role:
+                return False
+            self._conn.execute("UPDATE case_access SET case_role=? WHERE case_id=? AND reviewer_id=?",
+                               (case_role, case_id, reviewer_id))
+            self._conn.commit()
+            self.add_audit(case_id, "case_role_changed",
+                           f"reviewer={reviewer_id}; {previous} → {case_role}; actor={actor}; reason={reason}")
+            return True
+
     def revoke_case_access(self, case_id: str, reviewer_id: str, *, revoked_by: str) -> bool:
         with self._lock:
             cursor = self._conn.execute(

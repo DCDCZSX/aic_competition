@@ -79,10 +79,10 @@ class TestLengthAndRange(unittest.TestCase):
         r = validate_intake(medical_history=VALID_TEXT, age=58)
         self.assertTrue(r.ok, r.errors)
 
-    def test_unusual_sex_is_warning_not_error(self):
+    def test_unusual_sex_is_rejected_before_analysis(self):
         r = validate_intake(medical_history=VALID_TEXT, sex="M")
-        self.assertTrue(r.ok)
-        self.assertTrue(any("性别" in w for w in r.warnings))
+        self.assertFalse(r.ok)
+        self.assertTrue(any("性别" in error for error in r.errors))
 
 
 class TestG3(unittest.TestCase):

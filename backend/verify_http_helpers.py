@@ -5,6 +5,11 @@ from typing import Dict
 
 import requests
 
+from services.env_loader import load_project_environment
+
+
+load_project_environment()
+
 
 def login(session: requests.Session, base: str, role: str) -> Dict[str, str]:
     prefix = "APP_DOCTOR" if role == "doctor" else "APP_PATIENT"

@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional, Tuple
 import requests
 
 from services.config import read_int_env
+from services.privacy import desensitize
 from services.model_errors import (  # noqa: E402
     classify_model_exception,
     error_for_code,
@@ -124,6 +125,13 @@ class AIService:
             logger.error("[AIService] 错误：缺少 AI_API_KEY，已跳过本次调用。")
             return {"ok": False, "content": "", "finish_reason": "", "truncated": False,
                     "error": "模型服务未配置", "error_code": "ai_missing_api_key"}
+        safe_prompt = desensitize(str(prompt or ""))
+        safe_role = desensitize(str(role_description or ""))
+        if safe_prompt.blocked or safe_role.blocked:
+            return {"ok": False, "content": "", "finish_reason": "", "truncated": False,
+                    "error": "模型输入包含未清除的敏感身份信息，已阻止发送", "error_code": "ai_sensitive_input"}
+        prompt = safe_prompt.masked_text
+        role_description = safe_role.masked_text
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"

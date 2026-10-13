@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import os
 import sys
+from copy import deepcopy
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
@@ -92,6 +94,56 @@ def find_task(tasks: Sequence[Dict[str, Any]], task_id: str) -> Dict[str, Any]:
         if str(task.get("task_id")) == str(task_id):
             return task
     raise TaskError(f"任务不存在：{task_id}")
+
+
+def merge_progress(old_tasks: Sequence[Dict[str, Any]], new_tasks: Sequence[Dict[str, Any]],
+                   *, reason: str) -> List[Dict[str, Any]]:
+    """Preserve task identity/history; reopen a uniquely matched changed completed task."""
+    old = [deepcopy(task) for task in old_tasks if isinstance(task, dict)]
+    new = [deepcopy(task) for task in new_tasks if isinstance(task, dict)]
+    def signature(task):
+        return tuple(str(task.get(key) or "") for key in ("type", "source", "content"))
+    def origin(task):
+        return signature(task)[:2]
+    origins = Counter(origin(task) for task in new)
+    matched = set()
+    reserved = {str(task.get("task_id")) for task in old if task.get("task_id")}
+    used = set()
+    next_id = 1
+    # Match every unchanged task first, so changed cards cannot steal their identity.
+    matches = {}
+    for index, task in enumerate(new):
+        for old_index, previous in enumerate(old):
+            if old_index not in matched and signature(task) == signature(previous):
+                matches[index] = (previous, False)
+                matched.add(old_index)
+                break
+    for index, task in enumerate(new):
+        if index not in matches and origins[origin(task)] == 1:
+            candidates = [(i, value) for i, value in enumerate(old)
+                          if i not in matched and origin(value) == origin(task)]
+            if len(candidates) == 1:
+                old_index, previous = candidates[0]
+                matches[index] = (previous, True)
+                matched.add(old_index)
+        if index in matches:
+            previous, changed = matches[index]
+            task["task_id"] = previous.get("task_id")
+            task["state"] = previous.get("state") or TODO
+            task["history"] = deepcopy(previous.get("history") or [])
+            if changed:
+                task["previous_content"] = previous.get("content")
+                if task["state"] in (DONE, CANCELLED):
+                    update_state([task], task["task_id"], REOPENED if task["state"] == DONE else TODO,
+                                 actor="system", reason=reason)
+        candidate = str(task.get("task_id") or "")
+        if not candidate or candidate in used or (index not in matches and candidate in reserved):
+            while f"T-{next_id:03d}" in reserved or f"T-{next_id:03d}" in used:
+                next_id += 1
+            candidate = f"T-{next_id:03d}"
+        task["task_id"] = candidate
+        used.add(candidate)
+    return new
 
 
 def can_transition(from_state: str, to_state: str) -> bool:

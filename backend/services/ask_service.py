@@ -21,6 +21,7 @@ from typing import Dict, Iterable, List, Optional, Sequence
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services import dependency_matrix as dm  # noqa: E402
+from services.clinical_evidence import information_provided  # noqa: E402
 
 # 比赛版限制：≤1 轮、≤3 问
 MAX_QUESTIONS = 3
@@ -143,7 +144,11 @@ def apply_answers(
 
         if matched_field and matched_field in answers:
             answer = str(answers[matched_field]).strip()
-            if answer and answer not in (UNKNOWN_ANSWER, "不知道", "跳过", "不清楚"):
+            available = information_provided(f"{label}：{answer}", (label,))
+            if matched_field in {"fundus_exam", "cardiac_exam", "imaging", "blood_count", "urine_protein", "renal_function"} \
+                    and answer in ("没有", "无", "否"):
+                available = False
+            if answer and answer not in (UNKNOWN_ANSWER, "不知道", "跳过", "不清楚") and available:
                 resolved.append(matched_field)
                 continue
             unresolved.append(matched_field)

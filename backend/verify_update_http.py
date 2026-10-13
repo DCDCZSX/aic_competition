@@ -12,7 +12,7 @@ import sys
 import requests
 from verify_http_helpers import login, preview_token
 
-BASE = "http://127.0.0.1:5000"
+BASE = os.getenv("APP_BASE_URL", "http://127.0.0.1:5000").rstrip("/")
 
 CASE = ("患者：李*，男，61岁。主诉：视物模糊3月，双下肢浮肿1周。"
         "既往2型糖尿病5年，高血压10年，未规律服药。"
@@ -197,102 +197,86 @@ def main():
           bool(steps) and all({"步骤", "内容"} <= set(t.keys()) for t in steps),
           json.dumps(steps[:1], ensure_ascii=False)[:110])
 
-    print("\n[11] 两段式：先交付画像，MDT 后台跑并有真实进度")
+    print("\n[11] 两段式创建：分别验证有模型与无模型状态")
     import time as _time
-    t0 = _time.time()
+    has_model = bool(os.getenv("AI_API_KEY", "").strip())
+
+    def wait_analysis(cid, timeout=180):
+        deadline = _time.monotonic() + timeout
+        while True:
+            response = s.get(f"{BASE}/api/v2/case/{cid}/analysis", timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            if (data.get("analysis") or {}).get("state") != "running":
+                return data
+            if _time.monotonic() >= deadline:
+                raise TimeoutError(f"{cid} 后台分析未在 {timeout} 秒内结束")
+            _time.sleep(.2)
+
+    t0 = _time.monotonic()
     r = s.post(f"{BASE}/api/v2/case", json={
-        "preview_token": preview_token(s, BASE, CASE, "该看哪个科"), "age": 61, "sex": "男",
-        "defer_mdt": True}, timeout=120)
-    fast = _time.time() - t0
+        "preview_token": preview_token(s, BASE, CASE, "该看哪个科"),
+        "age": 61, "sex": "男", "defer_mdt": True}, timeout=120)
     two = r.json() or {}
-    check("建病例返回 200", r.status_code == 200 and two.get("ok"), str(r.status_code))
-    check("标记 MDT 仍在后台", two.get("mdt_pending") is True, str(two.get("mdt_pending")))
-    check("主请求不带 MDT 结果", two.get("mdt") is None, str(two.get("mdt"))[:60])
+    check("两段式建病例成功", r.status_code == 200 and two.get("ok"))
     check("画像/分诊/路径已就绪",
-          bool(two.get("profile")) and bool(two.get("triage")) and bool(two.get("path")), "")
-    check("交付够快（<10 秒）", fast < 10, f"{fast:.2f}s")
-
-    case2 = two.get("case_id")
-    seen = []
-    ready = False
-    t1 = _time.time()
-    while _time.time() - t1 < 150:
-        d = s.get(f"{BASE}/api/v2/case/{case2}/mdt", timeout=60).json()
-        st = d.get("status") or {}
-        seen.append(st.get("state"))
-        if d.get("ready"):
-            ready = True
-            check("后台 MDT 完成", True, f"用时 {_time.time()-t1:.1f}s，"
-                  f"卡片 {len((d.get('mdt') or {}).get('analyses') or [])} 张")
-            break
-        if st.get("state") == "failed":
-            check("后台 MDT 完成", False, str(st.get("error"))[:120])
-            break
-        _time.sleep(2)
-    check("轮询能看到 running 状态", "running" in seen, json.dumps(seen[:6], ensure_ascii=False))
-    check("结束后 ready=true", ready)
-
-    print("\n[12] 渐进式：规则秒开 + 模型三相后台 + 可重试")
-    t0 = _time.time()
-    r = s.post(f"{BASE}/api/v2/case", json={
-        "preview_token": preview_token(s, BASE, CASE, "该看哪个科"), "age": 61, "sex": "男",
-        "progressive": True}, timeout=60)
-    first = _time.time() - t0
-    prog = r.json() or {}
-    check("渐进式建病例 200", r.status_code == 200 and prog.get("ok"), str(r.status_code))
-    check("首屏为规则画像", prog.get("profile_is_rules_only") is True, str(prog.get("profile_is_rules_only")))
-    check("后台任务已排入", prog.get("analysis_pending") is True, str(prog.get("analysis_pending")))
-    check("规则分诊/路径/追问已就绪",
-          bool(prog.get("triage")) and bool(prog.get("path")) and bool(prog.get("questions")), "")
-    check("首屏足够快（<2 秒）", first < 2, f"{first*1000:.0f} ms")
-
-    case3 = prog.get("case_id")
-    a = s.get(f"{BASE}/api/v2/case/{case3}/analysis", timeout=30).json()
-    check("analysis 接口可用", bool(a.get("analysis")), "")
-    check("三个相位齐备", set((a["analysis"].get("phases") or {})) == {"profile", "triage", "mdt"},
-          json.dumps(list((a["analysis"].get("phases") or {}).keys()), ensure_ascii=False))
-    seen_states = []
-    t1 = _time.time()
-    while _time.time() - t1 < 180:
-        a = s.get(f"{BASE}/api/v2/case/{case3}/analysis", timeout=30).json()
-        st = a["analysis"]
-        seen_states.append(st.get("state"))
-        if st.get("state") != "running":
-            break
-        _time.sleep(2)
-    check("相位全部完成", st.get("state") in ("done", "partial_failed"), str(st.get("state")))
-    check("画像模型增强完成", st["phases"]["profile"]["state"] == "done", st["phases"]["profile"])
-    check("就医方向相位完成", st["phases"]["triage"]["state"] == "done", st["phases"]["triage"])
-    check("多学科已就绪", a.get("mdt_ready") is True and st["mdt"]["state"] == "done",
-          json.dumps(st.get("mdt"), ensure_ascii=False))
-    check("完成后病例状态推进",
-          a.get("case_state") in ("awaiting_doctor", "analyzing"), str(a.get("case_state")))
-    check("结果可被前端直接替换渲染",
-          bool(a.get("profile")) and bool(a.get("triage")) and bool(a.get("path")), "")
-    # 逐科失败的前端契约（真实故障：血液科意见卡被 max_tokens 截断 → 永远"未完成"且无法重试）
-    check("多学科状态里带 failed 列表（前端据此提示哪一科没跑出来）",
-          isinstance((st.get("mdt") or {}).get("failed"), list),
-          json.dumps(st.get("mdt"), ensure_ascii=False))
-    check("mdt 相位取值合法（done/partial/failed/skipped）",
-          st["phases"]["mdt"]["state"] in ("done", "partial", "failed", "skipped"),
-          st["phases"]["mdt"]["state"])
-    failed_departments = (st.get("mdt") or {}).get("failed") or []
-    if os.getenv("AI_API_KEY", "").strip():
-        check("配置模型时全部科室成功",
-              failed_departments == [], json.dumps(st.get("mdt"), ensure_ascii=False))
+          bool(two.get("profile")) and bool(two.get("triage")) and bool(two.get("path")))
+    check("主请求够快（<10秒）", _time.monotonic() - t0 < 10)
+    check("主请求不含伪造的MDT结果", two.get("mdt") is None)
+    if has_model:
+        check("配置模型时MDT排入后台", two.get("mdt_pending") is True and two.get("analysis_pending") is True)
+        data = wait_analysis(two["case_id"])
+        check("后台MDT成功完成", data["analysis"]["state"] == "done" and data.get("mdt_ready") is True,
+              json.dumps(data["analysis"].get("mdt"), ensure_ascii=False))
     else:
-        check("无 Key 时如实记录未完成科室",
-              bool(failed_departments), json.dumps(st.get("mdt"), ensure_ascii=False))
+        check("无密钥两段式返回规则终态", two.get("analysis_mode") == "rules_only"
+              and not two.get("mdt_pending") and not two.get("analysis_pending"))
+        data = wait_analysis(two["case_id"])
+        check("无密钥不等待后台模型", data["analysis"]["state"] == "done")
+        legacy = s.get(f"{BASE}/api/v2/case/{two['case_id']}/mdt", timeout=30).json()
+        check("无密钥MDT明确跳过且未就绪",
+              legacy["status"]["state"] == "skipped" and legacy["ready"] is False)
+
+    print("\n[12] 渐进式创建、分析状态与重试")
+    t0 = _time.monotonic()
+    r = s.post(f"{BASE}/api/v2/case", json={
+        "preview_token": preview_token(s, BASE, CASE, "该看哪个科"),
+        "age": 61, "sex": "男", "progressive": True}, timeout=60)
+    prog = r.json() or {}
+    check("渐进式建病例成功", r.status_code == 200 and prog.get("ok"))
+    check("首屏为规则画像", prog.get("profile_is_rules_only") is True)
+    check("规则分诊/路径/追问已就绪",
+          bool(prog.get("triage")) and bool(prog.get("path")) and bool(prog.get("questions")))
+    check("首屏足够快（<2秒）", _time.monotonic() - t0 < 2)
+    check("后台启动标识与模型配置一致", prog.get("analysis_pending") is has_model)
+    check("模式与模型配置一致", prog.get("analysis_mode") == ("progressive" if has_model else "rules_only"))
+    case3 = prog["case_id"]
+    data = wait_analysis(case3)
+    st = data["analysis"]
+    check("三个相位齐备", set(st.get("phases") or {}) == {"profile", "triage", "mdt"})
+    check("画像与就医方向已完成", st["phases"]["profile"]["state"] == "done"
+          and st["phases"]["triage"]["state"] == "done")
+    check("分析返回终态", st["state"] == "done", st["state"])
+    check("结果可供页面展示", bool(data.get("profile")) and bool(data.get("triage")) and bool(data.get("path")))
+    check("完成后进入待医生处理", data.get("case_state") == "awaiting_doctor")
+    check("逐科失败列表有明确类型", isinstance(st["mdt"].get("failed"), list))
+    if has_model:
+        check("配置模型时全部科室成功", st["mdt"]["failed"] == []
+              and st["phases"]["mdt"]["state"] == "done" and data.get("mdt_ready") is True)
+    else:
+        check("无密钥MDT跳过，不伪造模型成功或失败",
+              st["phases"]["mdt"]["state"] == "skipped" and st["mdt"]["state"] == "skipped"
+              and st["mdt"]["failed"] == [] and data.get("mdt_ready") is False)
     r = s.post(f"{BASE}/api/v2/case/{case3}/analysis/retry", json={}, timeout=30)
     retry_body = r.json()
-    if os.getenv("AI_API_KEY", "").strip():
-        check("全部完成后重试被拒（400 且有说明）",
-              r.status_code == 400 and "无需重试" in (retry_body.get("error") or ""),
-              json.dumps(retry_body, ensure_ascii=False)[:120])
+    if has_model:
+        check("分析已完成时拒绝无效重试", r.status_code == 400 and "无需重试" in retry_body.get("error", ""))
     else:
-        check("无 Key 时未完成 MDT 可重试",
-              r.status_code == 200 and "mdt" in (retry_body.get("retried") or []),
-              json.dumps(retry_body, ensure_ascii=False)[:120])
+        check("无密钥重试明确拒绝而不排入任务",
+              r.status_code == 400 and retry_body.get("code") == "model_not_configured"
+              and retry_body.get("retried") == [])
+        after = s.get(f"{BASE}/api/v2/case/{case3}/analysis", timeout=30).json()
+        check("被拒重试不改变分析状态", after["analysis"] == st)
 
     print("\n[9] 非法输入被拒")
     r = s.post(f"{BASE}/api/v2/case/{case_id}/updates",

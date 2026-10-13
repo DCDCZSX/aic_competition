@@ -38,7 +38,7 @@ from services.ask_service import (  # noqa: E402
 )
 from services import challenge_service  # noqa: E402
 from services.guardrail import screen  # noqa: E402
-from services.intake import IntakeResult, sanitized_payload, validate_intake  # noqa: E402
+from services.intake import IntakeResult, sanitized_payload, validate_intake, normalize_sex  # noqa: E402
 from services.mdt_analyst import METHOD_LLM_REPAIRED, aggregate, analyze_specialty  # noqa: E402
 from services.path_service import build_path  # noqa: E402
 from services.portrait_extractor import ExtractionResult, extract  # noqa: E402
@@ -46,6 +46,7 @@ from services.privacy import desensitize  # noqa: E402
 from services import report_service  # noqa: E402
 from services import review_service  # noqa: E402
 from services import task_service  # noqa: E402
+from services.case_context import effective_case_text, confirmed_demographics, merge_demographics  # noqa: E402
 from services import update_service  # noqa: E402
 from services import department_domain  # noqa: E402
 from services import dependency_matrix  # noqa: E402
@@ -199,6 +200,10 @@ class CaseFlow:
         self._case_locks_guard = threading.Lock()
         self._case_locks: Dict[str, threading.RLock] = {}
         self._doctor_mdt_runs = set()
+
+    def _model_available(self) -> bool:
+        return bool(self.use_llm and self.ai_service is not None
+                    and getattr(self.ai_service, "api_key", ""))
 
     def _case_lock(self, case_id: str) -> threading.RLock:
         with self._case_locks_guard:
@@ -394,6 +399,10 @@ class CaseFlow:
                 )
             return result
 
+        sex = normalize_sex(sex)
+        demographics = {key: value for key, value in
+                        (("age", int(age) if age not in (None, "", "None") else None), ("sex", sex))
+                        if value not in (None, "")}
         # ---- 2. 脱敏预览（P3）：后续分析只用打码文本 ----
         payload = sanitized_payload(medical_history, main_issue)
         # ``masked_preview`` 是给前端展示的有限窗口；完整脱敏正文单独保存，
@@ -416,20 +425,14 @@ class CaseFlow:
                 use_llm=False, ai_service=None,
             )
             rule_profile = rule_extraction.profile
-            if age not in (None, ""):
-                try:
-                    rule_profile.age = int(age)
-                except (TypeError, ValueError):
-                    pass
-            if sex:
-                rule_profile.sex = sex
 
             result.case_id = case_id
             result.gaps = rule_extraction.gaps
             result.completeness = rule_profile.completeness
             result.direct_quote_coverage = rule_profile.direct_quote_coverage
             result.passes_gate = rule_extraction.passes_gate
-            result.profile = self._profile_to_dict(rule_profile)
+            result.profile = merge_demographics(self._profile_to_dict(rule_profile), demographics)
+            result.warnings.extend(item["message"] for item in result.profile["demographic_conflicts"])
             result.profile_is_rules_only = True
             result.warnings.extend(rule_extraction.warnings)
             _progress("profile")
@@ -460,8 +463,7 @@ class CaseFlow:
             result.path = care_path.to_dict()
             _progress("path")
 
-            has_model = bool(self.use_llm and self.ai_service is not None
-                             and getattr(self.ai_service, "api_key", ""))
+            has_model = self._model_available()
             result.analysis_mode = "progressive" if has_model else "rules_only"
             result.case_state = "analyzing" if has_model else STATE_AWAITING_DOCTOR
             result.progressive = True
@@ -476,25 +478,22 @@ class CaseFlow:
 
         # ---- 3. 病例结构化（P4：画像 + G4 门禁）----
         case_id = case_id or new_case_id(self.store)
+        has_model = self._model_available()
+        result.analysis_mode = "full" if has_model else "rules_only"
+        result.profile_is_rules_only = not has_model
         extraction: ExtractionResult = extract(
             payload["medical_history"], case_id=case_id, main_issue=payload["main_issue"],
-            use_llm=self.use_llm, ai_service=self.ai_service,
+            use_llm=has_model, ai_service=self.ai_service if has_model else None,
         )
         profile = extraction.profile
-        if age not in (None, ""):
-            try:
-                profile.age = int(age)
-            except (TypeError, ValueError):
-                pass
-        if sex:
-            profile.sex = sex
 
         result.case_id = case_id
         result.gaps = extraction.gaps
         result.completeness = profile.completeness
         result.direct_quote_coverage = profile.direct_quote_coverage
         result.passes_gate = extraction.passes_gate
-        result.profile = self._profile_to_dict(profile)
+        result.profile = merge_demographics(self._profile_to_dict(profile), demographics)
+        result.warnings.extend(item["message"] for item in result.profile["demographic_conflicts"])
         result.warnings.extend(extraction.warnings)
         _progress("profile")
 
@@ -517,7 +516,7 @@ class CaseFlow:
 
         s2_result = None
         model_picks = None
-        if self.use_llm and self.ai_service is not None:
+        if has_model:
             s2_result = s2_analyze(
                 ai_service=self.ai_service, text=masked_history, evaluation=rule_eval,
                 main_issue=payload["main_issue"], profile=result.profile,
@@ -544,7 +543,7 @@ class CaseFlow:
         # ---- 7. 多专科独立研判 + 聚合（P8，耗时主要在这里）----
         deferred_mdt: Optional[Dict[str, Any]] = None
         _progress("mdt")
-        if self.use_llm and self.ai_service is not None and outcome.selected:
+        if has_model and outcome.selected:
             if defer_mdt:
                 # 两段式：画像/追问/分诊/路径已就绪，MDT 等落库后由后台分析任务续跑
                 deferred_mdt = {"phase_only": True}
@@ -690,6 +689,18 @@ class CaseFlow:
             if isinstance(key, str) and isinstance(value, str) and value.strip()
         }
         effective_answers = dict(current_answers)
+        if all(not value.strip() or value.strip() == current_answers.get(key)
+               for key, value in safe_answers.items()):
+            unresolved = list(payload.get("unresolved_fields") or [])
+            return {"ok": True, "idempotent": True, "case_id": case_id,
+                    "remaining_gaps": list(payload.get("gaps") or []),
+                    "resolved_fields": list(payload.get("resolved_fields") or []),
+                    "unresolved_fields": unresolved, "reliability_downgrade": bool(unresolved),
+                    "triage": payload.get("triage"), "path": payload.get("path"),
+                    "mdt": payload.get("mdt"), "mdt_pending":
+                    ((payload.get("mdt_status") or {}).get("state") == "running" or
+                     (((payload.get("analysis") or {}).get("phases") or {}).get("mdt") or {}).get("state")
+                     in ("pending", "running"))}
         for key, value in safe_answers.items():
             if value.strip() and value.strip() not in ("不清楚 / 跳过", "不清楚", "跳过"):
                 effective_answers[key] = value
@@ -704,14 +715,11 @@ class CaseFlow:
         remaining_gaps = list(outcome_answers["remaining_gaps"])
 
         # ---- 增量重算：把回答作为补充资料，只重跑分诊与路径 ----
-        masked_history = str(payload.get("masked_history") or "")
         supplement = "；".join(
             f"{k}：{str(v).strip()}" for k, v in effective_answers.items()
             if str(v).strip() and str(v).strip() not in ("不清楚 / 跳过", "不清楚", "跳过")
         )
-        recomputed_text = "；".join(x for x in (
-            masked_history, str(payload.get("masked_main_issue") or ""), supplement
-        ) if x)
+        recomputed_text = effective_case_text(payload, answers=effective_answers)
         if len(recomputed_text) > update_service.MAX_MERGED_HISTORY_LENGTH:
             return {
                 "ok": False,
@@ -736,13 +744,17 @@ class CaseFlow:
         checks_by_dept = self._checks_by_department(remaining_gaps, outcome.selected)
         care_path = build_path(outcome=outcome, gaps=remaining_gaps,
                                checks_by_department=checks_by_dept, case_id=case_id)
+        new_path = care_path.to_dict()
+        new_path["tasks"] = task_service.merge_progress(
+            (payload.get("path") or {}).get("tasks") or payload.get("tasks") or [],
+            new_path.get("tasks") or [], reason="追问资料变化，任务内容需重新确认")
 
         # ---- 增量更新原则：只有"建议科室集合发生变化"时才重跑多专科分析 ----
         old_selected = set((payload.get("triage") or {}).get("selected") or [])
         new_selected = set(outcome.selected)
         mdt = payload.get("mdt")
         deferred_mdt: Optional[Dict[str, Any]] = None
-        if self.use_llm and self.ai_service is not None and new_selected != old_selected:
+        if self._model_available() and new_selected != old_selected:
             if defer_mdt:
                 # 科室集合变了要重跑 MDT —— 交给后台分析任务，不卡住"看分诊结果"
                 mdt = None
@@ -762,8 +774,8 @@ class CaseFlow:
             "resolved_fields": outcome_answers["resolved_fields"],
             "unresolved_fields": outcome_answers["unresolved_fields"],
             "triage": outcome.to_dict(),
-            "path": care_path.to_dict(),
-            "tasks": care_path.to_dict().get("tasks", []),
+            "path": new_path,
+            "tasks": new_path.get("tasks", []),
             "mdt": mdt,
             "mdt_status": ({"state": "running", "done": 0,
                             "total": len(outcome.selected[:MAX_MDT_DEPARTMENTS]),
@@ -814,7 +826,7 @@ class CaseFlow:
             "unresolved_fields": outcome_answers["unresolved_fields"],
             "reliability_downgrade": bool(outcome_answers["unresolved_fields"]),
             "triage": outcome.to_dict(),      # 重算后的分诊结果（P6）
-            "path": care_path.to_dict(),      # 重算后的路径与任务（P7）
+            "path": new_path,                # 重算后的路径与任务（P7）
             "mdt": mdt,                       # 多专科分析（P8，仅在科室变化时重跑）
             "mdt_pending": bool(deferred_mdt),
         }
@@ -1021,7 +1033,7 @@ class CaseFlow:
         if not case:
             return
         payload = dict(case.get("payload") or {})
-        text = str(payload.get("masked_history") or "")
+        text = effective_case_text(payload)
         main_issue = str(payload.get("masked_main_issue") or case.get("main_issue") or "")
         failed: List[str] = []
 
@@ -1051,7 +1063,7 @@ class CaseFlow:
                                  use_llm=True, ai_service=self.ai_service)
             profile = extraction.profile
             rules = pl.get("profile_rules") or {}
-            final = self._profile_to_dict(profile)
+            final = merge_demographics(self._profile_to_dict(profile), confirmed_demographics(pl))
             self._patch_payload(case_id, profile=final, profile_rules=rules,
                                 gaps=list(extraction.gaps),
                                 completeness=profile.completeness,
@@ -1059,6 +1071,8 @@ class CaseFlow:
                                 questions=[q.to_dict() for q in build_questions(gaps=extraction.gaps)])
             for warning in extraction.warnings:
                 self._append_analysis_warning(case_id, warning)
+            for conflict in final["demographic_conflicts"]:
+                self._append_analysis_warning(case_id, conflict["message"])
 
         # ---- 相位 2：S2 受限发言 + 重新编排 + 路径 ----
         def do_triage() -> None:
@@ -1079,8 +1093,12 @@ class CaseFlow:
             path = build_path(outcome=outcome, gaps=gaps,
                               checks_by_department=self._checks_by_department(gaps, outcome.selected),
                               case_id=case_id)
+            new_path = path.to_dict()
+            new_path["tasks"] = task_service.merge_progress(
+                (pl.get("path") or {}).get("tasks") or pl.get("tasks") or [],
+                new_path.get("tasks") or [], reason="后台分析变化，任务内容需重新确认")
             self._patch_payload(case_id, s2=s2.to_dict(), triage=outcome.to_dict(),
-                                path=path.to_dict(), tasks=path.to_dict().get("tasks", []))
+                                path=new_path, tasks=new_path.get("tasks", []))
 
         # ---- 相位 3：多学科独立意见 + 质询（单科跳过；逐科上报子步骤）----
         partial_mdt: Dict[str, Any] = {}          # 有科室没跑出来时，相位记为 partial（可重试）
@@ -1430,6 +1448,9 @@ class CaseFlow:
                 "error": "当前审核版仍已发布，请先提交新资料进入重新审核。",
                 "recovery": {"action": "submit_new_materials", "label": "补充新资料"},
             }
+        if not self._model_available():
+            return {"ok": False, "retried": [], "code": "model_not_configured",
+                    "error": "未配置模型服务，当前仅运行规则分析，无法启动模型重试。"}
         started = self.start_analysis_job(case_id, phases=phases)
         return {"ok": started, "retried": phases if started else [],
                 "error": "" if started else "无法启动后台任务"}
@@ -1464,6 +1485,10 @@ class CaseFlow:
                 if not payload.get("triage"):
                     skipped.append(case_id)
                     skipped_reasons[case_id] = "缺少规则分诊结果"
+                    continue
+                if not self._model_available():
+                    skipped.append(case_id)
+                    skipped_reasons[case_id] = "未配置模型服务，仅运行规则分析"
                     continue
                 status = payload.get("analysis") or {}
                 if status.get("state") == "running" and not self._is_stale_running(status):
@@ -1527,7 +1552,11 @@ class CaseFlow:
             status["failed"] = list(dict.fromkeys(list(status.get("failed") or []) + failed))
             if status.get("state") == "done":
                 status["state"] = "partial_failed" if mdt else "failed"
-        return {"case_id": case_id, "status": status, "ready": bool(mdt), "mdt": mdt}
+        ready = bool(mdt) and not any(
+            isinstance(item, dict) and item.get("status") not in (None, "ok")
+            for item in (mdt or {}).get("analyses", [])
+        )
+        return {"case_id": case_id, "status": status, "ready": ready, "mdt": mdt}
 
     # ------------------------------------------------------------------ 查询
     def list_patient_cases(self, owner_id: str, *, page: int = 1,
@@ -1685,6 +1714,9 @@ class CaseFlow:
         existing_requested = (existing.get("requested_department") or {}).get("code")
         if existing_status == "submitted":
             if existing_requested == requested_code:
+                for reviewer_id in reviewers:
+                    self.store.assign_case_role(case_id, reviewer_id, case_role="primary",
+                                                actor=actor, reason="患者再次确认已提交的主责科室")
                 return {
                     "ok": True,
                     "changed": False,
@@ -1724,8 +1756,8 @@ class CaseFlow:
         if updated is None:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
         for reviewer_id in reviewers:
-            self.store.grant_case_access(
-                case_id, reviewer_id, granted_by=actor, case_role="primary")
+            self.store.assign_case_role(case_id, reviewer_id, actor=actor, case_role="primary",
+                                        reason="患者确认主责科室并提交审核")
         self.store.add_audit(
             case_id,
             "case_submitted_for_review",
@@ -2015,6 +2047,9 @@ class CaseFlow:
             return {"ok": False, "error": "请先在分流确认中确定正式 MDT 范围和目标"}
         if set(screening.get("departments") or []) != set(confirmed.get("selected") or []):
             return {"ok": False, "error": "请在分流确认中统一本次参与科室"}
+        if not self._model_available():
+            return {"ok": False, "code": "model_not_configured",
+                    "error": "未配置模型服务，无法生成 AI 会诊模拟；仍可记录实际医生会诊结果。"}
         current = self.get_doctor_mdt_simulation(case_id)
         if current.get("state") == "running":
             return {"ok": True, "simulation": current}
@@ -2058,7 +2093,7 @@ class CaseFlow:
                     self._patch_payload(case_id, doctor_mdt_simulation=active)
         try:
             result = self._run_mdt(
-                text=payload.get("masked_history") or "", profile=payload.get("profile"),
+                text=effective_case_text(payload), profile=payload.get("profile"),
                 outcome=SimpleNamespace(selected=record["departments"], behavior_type="B"),
                 case_id=case_id, answers=payload.get("answers"), purpose=record["purpose"],
                 max_departments=6, on_department=progress)
@@ -2330,6 +2365,12 @@ class CaseFlow:
         case = self.store.load_case(case_id) if self.store else None
         if not case:
             return None
+        if case.get("case_state") == "doctor_confirmed" and (case.get("payload") or {}).get("review", {}).get("published"):
+            snapshot = self.store.get_report_version(case_id, int(case.get("report_version") or 1))
+            if snapshot and snapshot.get("report_json"):
+                return dict(snapshot["report_json"],
+                            summary_markdown=snapshot.get("summary_markdown") or "",
+                            full_markdown=snapshot.get("full_markdown") or "")
         payload = dict(case.get("payload") or {})
         # 医生审核记录（若已有）用于"医生最终意见 / AI vs 医生差异"段
         current_items = review_service.build_items(case)
@@ -2454,7 +2495,7 @@ class CaseFlow:
         answers = payload.get("answers") or {}
         refreshed: Dict[str, Dict[str, Any]] = {}
         for department in targets:
-            if self.use_llm and self.ai_service is not None:
+            if self._model_available():
                 result = analyze_specialty(
                     ai_service=self.ai_service, department=department, text=text,
                     profile=profile, case_id=case_id, answers=answers,
@@ -2560,10 +2601,8 @@ class CaseFlow:
 
         # ---- 局部重算：把新资料并入病历文本，只重跑分诊与路径 ----
         masked_history = str(payload.get("masked_history") or "")
-        merged_text = "；".join(x for x in (
-            masked_history, str(payload.get("masked_main_issue") or ""),
-            f"{kind}：{safe_content}"
-        ) if x)
+        history_text = "；".join(x for x in (masked_history, f"{kind}：{safe_content}") if x)
+        merged_text = effective_case_text(dict(payload, masked_history=history_text))
         if len(merged_text) > update_service.MAX_MERGED_HISTORY_LENGTH:
             return {
                 "ok": False,
@@ -2584,21 +2623,9 @@ class CaseFlow:
         new_triage = outcome.to_dict()
         new_path = care_path.to_dict()
 
-        # 重算路径时，内容和来源未变化的任务仍是同一业务任务，继承其完成状态。
-        old_tasks = list(old_path.get("tasks") or [])
-        old_task_map = {
-            (str(task.get("type") or ""), str(task.get("source") or ""),
-             str(task.get("content") or "")): task
-            for task in old_tasks if isinstance(task, dict)
-        }
-        for task in new_path.get("tasks") or []:
-            key = (str(task.get("type") or ""), str(task.get("source") or ""),
-                   str(task.get("content") or ""))
-            previous = old_task_map.get(key)
-            if previous:
-                task["state"] = previous.get("state") or "todo"
-                if previous.get("task_id"):
-                    task["task_id"] = previous["task_id"]
+        new_path["tasks"] = task_service.merge_progress(
+            old_path.get("tasks") or payload.get("tasks") or [], new_path.get("tasks") or [],
+            reason="新增资料使任务内容变化，需重新确认")
 
         # 只重跑受影响的专科卡；更新后新出现的就医方向也需要首次生成意见卡。
         new_departments = list(new_triage.get("selected") or [])
@@ -2627,9 +2654,12 @@ class CaseFlow:
         candidate_payload = dict(payload)
         candidate_payload.update({
             "updates": updates,
+            "gap_resolution_evidence": list(payload.get("gap_resolution_evidence") or []) +
+                                       [{"gap": gap, "update_id": update.update_id, "content": safe_content}
+                                        for gap in filled_gaps],
             "gaps": remaining_gaps,
             # 这是后续分析使用的完整脱敏正文，不能再截断成前端预览长度。
-            "masked_history": merged_text,
+            "masked_history": history_text,
             "triage": new_triage,
             "path": new_path,
             "tasks": new_path.get("tasks", []),
@@ -3094,6 +3124,7 @@ class CaseFlow:
     def submit_decision(self, case_id: str, item_id: str, action: str, *,
                         after: str = "", reason: str = "",
                         reviewer_name: str = "模拟审核员", reviewer_dept: str = "",
+                        actor_username: str = "", actor_role: str = "", actor_department_code: str = "",
                         expected_content_revision: Optional[int] = None,
                         require_content_revision: bool = False) -> Dict[str, Any]:
         """逐条审核（屏 F）：接受 / 修改 / 驳回 / 暂不确定 / 请求补资料。"""
@@ -3101,6 +3132,9 @@ class CaseFlow:
         if not case:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
 
+        if case.get("case_state") == "doctor_confirmed" or ((case.get("payload") or {}).get("review") or {}).get("published"):
+            return {"ok": False, "code": "review_already_published",
+                    "error": "本轮报告已发布，不能直接修改审核决定。请补充资料进入复核后再审核并发布新版本。"}
         # 审核后的改写内容、理由会进入 decisions 表和审计时间线，同样不能
         # 允许通过审核接口把手机号/邮箱等原文写回持久化层。
         try:
@@ -3139,10 +3173,12 @@ class CaseFlow:
             # reviewer 必须以普通 dict 落库（payload 走 json.dumps，不能塞 dataclass）
             record["reviewer"] = {"role": safe_reviewer or "模拟审核员", "dept": safe_reviewer_dept}
             record["reviewer_name"] = safe_reviewer
+            record.update(actor_username=actor_username, actor_role=actor_role,
+                          actor_department_code=actor_department_code)
             self.store.save_decision(record)
             self.store.add_audit(
                 case_id, "decision_recorded",
-                f"{review_service.ACTION_LABELS.get(action, action)} {item.title}"
+                f"账号={actor_username or '内部模拟'}；{review_service.ACTION_LABELS.get(action, action)} {item.title}"
                 + (f"｜原因：{safe_reason}" if safe_reason else "")
                 + (f"｜改为：{safe_after}" if action == "modify" and safe_after else ""),
             )
@@ -3168,6 +3204,7 @@ class CaseFlow:
         self, case_id: str, disagreement_id: str, status: str, *, choice: str = "",
         resolution: str = "", reason: str = "", next_step: str = "",
         reviewer_name: str = "模拟审核员", reviewer_dept: str = "",
+        actor_username: str = "", actor_role: str = "", actor_department_code: str = "",
         expected_content_revision: Optional[int] = None, require_content_revision: bool = False
     ) -> Dict[str, Any]:
         """记录牵头医生对某条 MDT 分歧的独立处理决定。"""
@@ -3176,6 +3213,9 @@ class CaseFlow:
             return {"ok": False, "error": f"病例不存在：{case_id}"}
 
         payload = dict(case.get("payload") or {})
+        if case.get("case_state") == "doctor_confirmed" or (payload.get("review") or {}).get("published"):
+            return {"ok": False, "code": "review_already_published",
+                    "error": "本轮报告已发布，不能直接修改分歧处理。请进入复核后再审核并发布新版本。"}
         disagreements = ((doctor_mdt.review_mdt(payload).get("aggregation") or {})
                          .get("disagreements") or [])
         safe_id = str(disagreement_id or "").strip().upper()
@@ -3221,6 +3261,8 @@ class CaseFlow:
             return {"ok": False, "error": str(exc)}
 
         records = list(payload.get("disagreement_decisions") or [])
+        record.update(actor_username=actor_username, actor_role=actor_role,
+                      actor_department_code=actor_department_code)
         records.append(record)
         payload["disagreement_decisions"] = records
         if self.store:
@@ -3233,7 +3275,7 @@ class CaseFlow:
                 report_version=int(case.get("report_version") or 1), payload=payload)
             self.store.add_audit(
                 case_id, "disagreement_decision_recorded",
-                f"{record['disagreement_id']}={record['status']}；责任审核人={safe_reviewer}")
+                f"{record['disagreement_id']}={record['status']}；账号={actor_username or '内部模拟'}；责任审核人={safe_reviewer}")
         review = self.get_review(case_id) or {}
         return {
             "ok": True,
@@ -3283,6 +3325,7 @@ class CaseFlow:
     @serialized_case
     def publish_review(self, case_id: str, *, reviewer_name: str = "模拟审核员",
                        accept_all: bool = False, final_advice: Optional[str] = None,
+                       actor_username: str = "", actor_role: str = "", actor_department_code: str = "",
                        expected_preview_revision: Optional[str] = None) -> Dict[str, Any]:
         """发布审核版报告（屏 F 底部）：状态 → doctor_confirmed、版本 +1、角标转绿。
 
@@ -3361,7 +3404,9 @@ class CaseFlow:
             for item in pending:
                 result = self.submit_decision(
                     case_id, item.item_id, "accept",
-                    reason="批量接受必审条目（发布时统一确认）", reviewer_name=safe_reviewer)
+                    reason="批量接受必审条目（发布时统一确认）", reviewer_name=safe_reviewer,
+                    actor_username=actor_username, actor_role=actor_role,
+                    actor_department_code=actor_department_code)
                 if result.get("ok"):
                     accepted_ids.append(item.item_id)
             items = review_service.apply_decisions(
@@ -3431,6 +3476,8 @@ class CaseFlow:
         payload["review"] = {
             "published": True,
             "published_by": safe_reviewer,
+            "actor_username": actor_username, "actor_role": actor_role,
+            "actor_department_code": actor_department_code,
             "published_at": published_at,
             "final_advice": safe_advice,
             "version": new_version,
@@ -3460,7 +3507,8 @@ class CaseFlow:
             "version": new_version,
             "published_by": safe_reviewer,
             "published_at": published_at,
-            "review_summary": summary,
+            "review_summary": dict(summary, actor_username=actor_username, actor_role=actor_role,
+                                   actor_department_code=actor_department_code),
             "report_json": {"summary": reports["summary"], "full": reports["full"],
                             "patient_final_report": reports.get("patient_final_report"),
                             "doctor_result": reports["doctor_result"]},
@@ -3475,7 +3523,7 @@ class CaseFlow:
                 report_version_snapshot=snapshot)
             self.store.add_audit(
                 case_id, "report_published",
-                f"审核人={safe_reviewer} 版本={new_version} 医生处理={summary['doctor_reviewed']}/"
+                f"账号={actor_username or '内部模拟'}；审核人={safe_reviewer} 版本={new_version} 医生处理={summary['doctor_reviewed']}/"
                 f"{summary['total']} 免审自动处理={summary['auto_processed']} "
                 f"批量接受={len(accepted_ids)} 分歧={len(disagreements)}")
         return {"ok": True, "case_state": "doctor_confirmed", "report_version": new_version,
@@ -3580,7 +3628,7 @@ class CaseFlow:
         if not self.store:
             return
         analysis = {}
-        if result.progressive or result.mdt_pending:
+        if result.progressive or result.mdt_pending or result.analysis_mode == "rules_only":
             if result.analysis_mode == "rules_only":
                 analysis = self._new_analysis_status(
                     mdt_total=len(((result.triage or {}).get("selected") or [])[:MAX_MDT_DEPARTMENTS])
@@ -3607,6 +3655,9 @@ class CaseFlow:
             case_state=result.case_state,
             payload={
                 "goals": list(result.goals),
+                "demographics": {key: value for key, value in
+                                 (("age", int(age) if age not in (None, "", "None") else None), ("sex", sex))
+                                 if value not in (None, "")},
                 # 不要使用 masked_preview：它是前端展示窗口，最多 2000 字。
                 "masked_history": result.masked_history or result.masked_preview.get("medical_history", ""),
                 # 后续补充会合并到 masked_history，保留首次提交内容供患者回看。

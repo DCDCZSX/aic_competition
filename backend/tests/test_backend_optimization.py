@@ -50,6 +50,36 @@ class BackendOptimizationTest(unittest.TestCase):
     def tearDown(self):
         self.store.close()
 
+    def test_no_key_incremental_refresh_marks_old_opinion_stale(self):
+        self.flow.use_llm = True
+        self.flow.ai_service = mock.Mock(api_key="")
+        payload = self.flow.get_case(self.case_id)["payload"]
+        payload["mdt"] = {"analyses": [{"department": "眼科", "status": "ok",
+                                         "facts": ["旧资料中的视力变化"]}],
+                          "departments": ["眼科"]}
+        with mock.patch("services.case_flow.analyze_specialty") as model:
+            updated, affected = self.flow._refresh_affected_mdt(
+                payload=payload, text=CASE, departments=["眼科"], case_id=self.case_id)
+        model.assert_not_called()
+        self.assertEqual(affected, ["眼科"])
+        self.assertEqual(updated["analyses"][0]["status"], "stale")
+        self.assertNotIn("facts", updated["analyses"][0])
+        self.assertTrue(any("模型不可用" in note for note in updated["aggregation"]["notes"]))
+
+    def test_no_model_doctor_simulation_does_not_mutate_case(self):
+        routing = self.flow.submit_doctor_routing(
+            self.case_id, primary_department="内分泌科", secondary_departments=["眼科"],
+            decision="recommend_mdt", reason="共同核对资料", purpose="核对已有检查",
+            reviewer_id="doctor-1")
+        self.assertTrue(routing["ok"], routing)
+        before = self.flow.get_case(self.case_id)["payload"]
+        with mock.patch("services.case_flow.threading.Thread") as thread:
+            result = self.flow.start_doctor_mdt_simulation(self.case_id, reviewer_id="doctor-1")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "model_not_configured")
+        thread.assert_not_called()
+        self.assertEqual(self.flow.get_case(self.case_id)["payload"], before)
+
     def test_doctor_modification_changes_effective_report(self):
         result = self.flow.submit_doctor_routing(
             self.case_id,
@@ -189,6 +219,54 @@ class BackendOptimizationTest(unittest.TestCase):
         self.assertEqual(status["analysis"]["state"], "done")
         self.assertEqual(status["analysis"]["mdt"]["state"], "skipped")
         self.assertFalse(status["mdt_ready"])
+
+    def test_no_key_creation_variants_do_not_call_or_queue_models(self):
+        class NoKeyModel:
+            api_key = ""
+
+            def call_ai_api(self, *args, **kwargs):
+                raise AssertionError("无密钥时不应调用模型")
+
+        flow = CaseFlow(store=self.store, ai_service=NoKeyModel(), use_llm=True)
+        for options in ({}, {"defer_mdt": True}, {"progressive": True}):
+            with self.subTest(options=options):
+                result = flow.create_case(medical_history=CASE, main_issue="该看哪个科", **options)
+                self.assertTrue(result.ok, result.errors)
+                self.assertEqual(result.analysis_mode, "rules_only")
+                self.assertFalse(result.analysis_pending)
+                self.assertFalse(result.mdt_pending)
+                self.assertIsNone(result.mdt)
+                self.assertFalse(flow._active_jobs)
+                status = flow.get_analysis(result.case_id)
+                self.assertEqual(status["analysis"]["state"], "done")
+                self.assertEqual(status["analysis"]["mdt"]["state"], "skipped")
+                self.assertFalse(flow.get_mdt_status(result.case_id)["ready"])
+
+    def test_no_key_retry_and_batch_do_not_mutate_analysis_or_queue_jobs(self):
+        class NoKeyModel:
+            api_key = ""
+
+        flow = CaseFlow(store=self.store, ai_service=NoKeyModel(), use_llm=True)
+        created = flow.create_case(medical_history=CASE, progressive=True)
+        before = flow.get_case(created.case_id)["payload"]
+        retry = flow.retry_analysis(created.case_id)
+        self.assertFalse(retry["ok"])
+        self.assertEqual(retry["code"], "model_not_configured")
+        batch = flow.analyze_pending_cases()
+        self.assertTrue(batch["ok"])
+        self.assertEqual(batch["started"], [])
+        self.assertIn(created.case_id, batch["skipped"])
+        self.assertFalse(flow._active_jobs)
+        self.assertEqual(flow.get_case(created.case_id)["payload"], before)
+
+    def test_mdt_compatibility_query_does_not_mark_invalid_cards_ready(self):
+        for state in ("stale", "unavailable", "failed", "ok"):
+            with self.subTest(state=state):
+                self.store.save_case("C-MDT-READY", case_state="awaiting_doctor", payload={
+                    "mdt": {"analyses": [{"department": "眼科", "status": state}]},
+                })
+                self.assertEqual(self.flow.get_mdt_status("C-MDT-READY")["ready"], state == "ok")
+                self.assertEqual(self.flow.get_analysis("C-MDT-READY")["mdt_ready"], state == "ok")
 
 
 class ModelOutputBoundaryTest(unittest.TestCase):
