@@ -24,6 +24,7 @@ from services.json_recovery import (  # noqa: E402
     loads_lenient,
     result_is_repaired,
 )
+from services.prompt_text import case_text_for_prompt  # noqa: E402
 from services.model_output_guard import (  # noqa: E402
     assert_safe_generated_fact,
     assert_safe_generated_text,
@@ -164,7 +165,7 @@ def _build_specialty_prompt(dept: str, text: str, focus: str,
         answered = "【患者对追问的回答】\n" + "\n".join(
             f"- {k}：{v}" for k, v in questions.items()) + "\n"
     return f"""【病例资料（已脱敏）】
-{text[:3000]}
+{case_text_for_prompt(text)}
 
 【患者主要问题】{(profile or {}).get('chief_complaint') or '未提供'}
 【已知信息缺口】{'、'.join(gaps[:6]) or '未列出'}

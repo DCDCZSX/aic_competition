@@ -20,6 +20,7 @@ import threading
 import uuid
 import logging
 import json
+import re
 import hashlib
 from functools import wraps
 from types import SimpleNamespace
@@ -82,6 +83,10 @@ ANALYSIS_START_STATES = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class DegradedPhaseError(RuntimeError):
+    """模型调用失败、已退回规则结果：结果可用，但本相位不能记为"完成"。"""
 
 
 def _now() -> str:
@@ -729,12 +734,24 @@ class CaseFlow:
                 ),
             }
 
-        profile = payload.get("profile") or {}
         completeness = float(payload.get("completeness") or 0.0)
         guard = screen(recomputed_text)
         if guard.blocked:
             return {"ok": False, "blocked": True, "blocked_by": guard.code,
                     "advice": guard.advice, "reasons": list(guard.reasons)}
+        # ---- 回答进入后同步刷新结构化画像（不再沿用回答前的旧画像）----
+        new_answer_fields = [
+            key for key, value in effective_answers.items()
+            if str(value).strip() and str(value).strip() != current_answers.get(key, "")
+        ]
+        profile = self._refresh_profile(
+            payload, recomputed_text,
+            exam_facts=[(dependency_matrix.BY_FIELD[key].label, effective_answers[key])
+                        for key in new_answer_fields
+                        if key in self.EXAM_PROFILE_FIELDS and key in dependency_matrix.BY_FIELD],
+            source_label="追问回答",
+            gaps=list(outcome_answers["remaining_gaps"]),
+        )
         rule_eval = evaluate_rules(recomputed_text)
         outcome = orchestrate(text=recomputed_text, case_id=case_id,
                               evaluation=rule_eval, model_picks=None,
@@ -754,6 +771,23 @@ class CaseFlow:
         new_selected = set(outcome.selected)
         mdt = payload.get("mdt")
         deferred_mdt: Optional[Dict[str, Any]] = None
+        partial_mdt_departments: List[str] = []
+        if self._model_available() and new_selected == old_selected and mdt and new_answer_fields:
+            # 科室集合不变、但回答补充了事实：只刷新依赖这些字段的科室意见卡
+            affected_departments = list(dict.fromkeys(
+                department for key in new_answer_fields
+                for department in dependency_matrix.departments_for_field(key)
+                if department in new_selected
+            ))
+            if affected_departments:
+                refresh_payload = dict(payload, profile=profile, answers=dict(effective_answers))
+                mdt, partial_mdt_departments = self._refresh_affected_mdt(
+                    payload=refresh_payload, text=recomputed_text,
+                    departments=affected_departments, case_id=case_id,
+                    use_model=not defer_mdt,
+                )
+                if not defer_mdt:
+                    partial_mdt_departments = []
         if self._model_available() and new_selected != old_selected:
             if defer_mdt:
                 # 科室集合变了要重跑 MDT —— 交给后台分析任务，不卡住"看分诊结果"
@@ -769,6 +803,7 @@ class CaseFlow:
 
         # ---- 落库 ----
         payload.update({
+            "profile": profile,
             "gaps": remaining_gaps,
             "answers": dict(effective_answers),
             "resolved_fields": outcome_answers["resolved_fields"],
@@ -817,6 +852,8 @@ class CaseFlow:
         if deferred_mdt:
             # 必须在落库之后启动（后台线程要能读到病例）
             self.start_analysis_job(case_id, phases=["mdt"])
+        elif partial_mdt_departments:
+            self._start_partial_mdt_refresh(case_id, partial_mdt_departments)
 
         return {
             "ok": True,
@@ -1046,8 +1083,11 @@ class CaseFlow:
                 self._set_phase(case_id, phase, "done")
             except Exception as exc:                        # noqa: BLE001 - 单相位失败不影响其他相位
                 failed.append(phase)
-                self._set_phase(case_id, phase, "failed",
-                                note=f"{self.PHASE_LABELS.get(phase, phase)}阶段执行失败（可重试）")
+                label = self.PHASE_LABELS.get(phase, phase)
+                note = (f"{label}的模型分析未完成，已保留规则结果（可重试）"
+                        if isinstance(exc, DegradedPhaseError)
+                        else f"{label}阶段执行失败（可重试）")
+                self._set_phase(case_id, phase, "failed", note=note)
                 self._record_analysis_failure(
                     case_id, phase, exc,
                     report_version=int(case.get("report_version") or 1),
@@ -1073,6 +1113,9 @@ class CaseFlow:
                 self._append_analysis_warning(case_id, warning)
             for conflict in final["demographic_conflicts"]:
                 self._append_analysis_warning(case_id, conflict["message"])
+            if self._model_available() and extraction.method == "rule":
+                reason = next((w for w in extraction.warnings if "模型" in w), "模型增强未返回结果")
+                raise DegradedPhaseError(reason)
 
         # ---- 相位 2：S2 受限发言 + 重新编排 + 路径 ----
         def do_triage() -> None:
@@ -1099,6 +1142,8 @@ class CaseFlow:
                 new_path.get("tasks") or [], reason="后台分析变化，任务内容需重新确认")
             self._patch_payload(case_id, s2=s2.to_dict(), triage=outcome.to_dict(),
                                 path=new_path, tasks=new_path.get("tasks", []))
+            if self._model_available() and s2.method == "failed":
+                raise DegradedPhaseError(s2.error or "辅助选科模型调用失败，已退回纯规则分诊")
 
         # ---- 相位 3：多学科独立意见 + 质询（单科跳过；逐科上报子步骤）----
         partial_mdt: Dict[str, Any] = {}          # 有科室没跑出来时，相位记为 partial（可重试）
@@ -1278,15 +1323,13 @@ class CaseFlow:
 
     def _analysis_job_stale(self, case_id: str, status: Dict[str, Any]) -> bool:
         """判断 running 任务是否仍有对应的后台线程；重启后的线程表为空。"""
-        # 即使线程仍在进程里，只要超过宽限期也视为失去进展，避免模型调用卡死。
-        if self._is_stale_running(status):
-            return True
         with self._jobs_lock:
             active = self._active_jobs.get(case_id)
             if active is not None and active.is_alive():
                 return False
-        # 有时间戳时给正常任务一个宽限期；没有时间戳的旧记录只能依赖线程表判断。
-        return not status.get("started_at")
+        # 外部模型有连接/读取超时及重试，活线程可能合法地运行超过 90 秒。
+        # 宽限期只用于没有对应活线程的遗留记录，不能提前宣告在跑的任务失败。
+        return self._is_stale_running(status) or not status.get("started_at")
 
     def _mark_stale_analysis(self, case_id: str, status: Dict[str, Any],
                              payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2063,6 +2106,11 @@ class CaseFlow:
                   "message": "正在生成各科独立研判"}
         revisions = dict(payload.get("review_item_revisions") or {})
         old_ids = [i.item_id for i in review_service.build_items(case) if i.target_type in ("ai_analysis", "consensus_item")]
+        # 包括本轮未显示、但历史上出现过的编号：新模拟里重新出现的科室或共识
+        # 不能沿用旧模拟内容上的决定。
+        old_ids = list(dict.fromkeys(old_ids + [
+            item_id for item_id in revisions
+            if str(item_id).startswith(("ai_analysis:", "consensus_item:"))]))
         revisions.update(review_service.bump_content_revisions(revisions, old_ids))
         record["content_revision"] = max([1, (payload.get("doctor_mdt_simulation") or {}).get("content_revision", 1)]
                                          + list(revisions.values())) + 1
@@ -2466,9 +2514,129 @@ class CaseFlow:
             referral=data.get("referral"),
         )
 
+    # 追问字段 / 补充资料中属于"检查结果"的字段：回答内容同步写入画像的检查项
+    EXAM_PROFILE_FIELDS = (
+        "blood_glucose_control", "urine_protein", "fundus_exam", "cardiac_exam", "blood_count",
+        "autoimmune_antibody", "thyroid_function", "liver_function", "renal_function", "imaging",
+        "chest_imaging", "pathology", "ecg", "coagulation",
+    )
+
+    @staticmethod
+    def _ref_offset(ref: Any) -> Optional[int]:
+        text = str(ref or "")
+        if not text.startswith("S-1:"):
+            return None
+        try:
+            return int(text.split(":", 1)[1])
+        except ValueError:
+            return None
+
+    def _refresh_profile(self, payload: Dict[str, Any], text: str, *,
+                         exam_facts: Sequence[Tuple[str, str]] = (),
+                         source_label: str = "补充资料",
+                         gaps: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+        """追问回答 / 补充资料进入后，同步刷新结构化画像。
+
+        对合并后的完整正文重新做规则抽取，把新出现的疾病、症状、检查和用药
+        并入原画像；当前用药按完整正文中最后一次明确的用药记录刷新，历史文本
+        和更新记录继续保留。追问或补充检查标注为"追问回答/补充资料"。
+        """
+        base: Dict[str, Any] = json.loads(json.dumps(payload.get("profile") or {}, ensure_ascii=False))
+        history_len = len(str(payload.get("masked_history") or ""))
+        try:
+            extraction = extract(text, case_id=str(base.get("case_id") or payload.get("case_id") or ""),
+                                 main_issue=str(payload.get("masked_main_issue") or ""),
+                                 use_llm=False, ai_service=None)
+            fresh = self._profile_to_dict(extraction.profile)
+        except Exception:                                   # noqa: BLE001 - 刷新失败不影响主流程
+            logger.exception("profile refresh failed")
+            fresh = {}
+        for key, ident in (("diseases", "name"), ("symptoms_timeline", "symptom"), ("exams", "item")):
+            items = [dict(item) for item in (base.get(key) or []) if isinstance(item, dict)]
+            names = {str(item.get(ident) or "") for item in items}
+            for item in fresh.get(key) or []:
+                name = str(item.get(ident) or "")
+                if not name or name in names:
+                    continue
+                if "source_refs" in item:
+                    refs = [ref for ref in item.get("source_refs") or []
+                            if (self._ref_offset(ref) or 0) < history_len]
+                    item["source_refs"] = refs or [source_label]
+                item["refreshed"] = True
+                items.append(item)
+                names.add(name)
+            base[key] = items
+        if "medications" in fresh:
+            base["medications"] = fresh["medications"]
+        exams = base.setdefault("exams", [])
+        for label, value in exam_facts:
+            value = str(value or "").strip()
+            if not label or not value:
+                continue
+            abnormal = bool(re.search(r"(异常|升高|增高|偏高|降低|减低|偏低|阳性|\+|↑|↓|结节|占位|出血|狭窄|渗出|实变)",
+                                      value)) and not re.search(r"(未见异常|正常|阴性)$", value)
+            entry = {"item": label, "value": value, "abnormal": abnormal,
+                     "source_refs": [source_label], "refreshed": True}
+            for idx, existing in enumerate(exams):
+                if str(existing.get("item") or "") == label:
+                    exams[idx] = entry
+                    break
+            else:
+                exams.append(entry)
+        if gaps is not None:
+            base["information_gaps"] = list(gaps)
+        if not base.get("case_id") and fresh.get("case_id"):
+            base["case_id"] = fresh["case_id"]
+        base["refreshed_at"] = _now()
+        return merge_demographics(base, confirmed_demographics(payload))
+
+    def _start_partial_mdt_refresh(self, case_id: str, departments: Sequence[str]) -> bool:
+        """后台只重跑受影响科室的专科意见卡（追问回答后科室集合未变时使用）。"""
+        targets = [str(d) for d in departments if str(d).strip()]
+        if not self.store or not targets:
+            return False
+
+        def run() -> None:
+            try:
+                case = self.store.load_case(case_id)
+                pl = dict((case or {}).get("payload") or {})
+                fingerprint = doctor_mdt.input_fingerprint(pl)
+                text = effective_case_text(pl)
+                mdt, done = self._refresh_affected_mdt(payload=pl, text=text, departments=targets,
+                                                       case_id=case_id, use_model=True)
+                if done and mdt is not None:
+                    with self._case_lock(case_id):
+                        live = self.store.load_case(case_id)
+                        if live and doctor_mdt.input_fingerprint(live.get("payload") or {}) == fingerprint:
+                            self._patch_payload(case_id, mdt=mdt)
+                        else:
+                            self.store.add_audit(case_id, "partial_analysis_discarded",
+                                                 "病例依据已更新，局部分析的过期结果未写入")
+            except Exception:                               # noqa: BLE001
+                logger.exception("partial mdt refresh failed: %s", case_id)
+                self._append_analysis_warning(
+                    case_id, f"{'、'.join(targets)} 专科意见重新分析未完成（可点「重新分析」重试）")
+            finally:
+                with self._jobs_lock:
+                    if self._active_jobs.get(case_id) is threading.current_thread():
+                        self._active_jobs.pop(case_id, None)
+
+        with self._jobs_lock:
+            existing = self._active_jobs.get(case_id)
+            if existing and existing.is_alive():
+                return False
+            thread = threading.Thread(target=run, name=f"partial-mdt-{case_id}", daemon=True)
+            self._active_jobs[case_id] = thread
+            thread.start()
+        return True
+
     def _refresh_affected_mdt(self, *, payload: Dict[str, Any], text: str,
-                              departments: Sequence[str], case_id: str) -> Tuple[Optional[Dict[str, Any]], List[str]]:
-        """只刷新受影响的专科意见卡，保留其他科室的原始卡片。"""
+                              departments: Sequence[str], case_id: str,
+                              use_model: Optional[bool] = None) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+        """只刷新受影响的专科意见卡，保留其他科室的原始卡片。
+
+        ``use_model=False`` 时只把受影响卡片标记为待重新分析（用于先快速返回、
+        再由后台任务补跑）。"""
         existing = payload.get("mdt") or {}
         if not existing or not departments:
             return existing or None, []
@@ -2494,8 +2662,9 @@ class CaseFlow:
         profile = payload.get("profile") or {}
         answers = payload.get("answers") or {}
         refreshed: Dict[str, Dict[str, Any]] = {}
+        model_on = self._model_available() if use_model is None else (use_model and self._model_available())
         for department in targets:
-            if self._model_available():
+            if model_on:
                 result = analyze_specialty(
                     ai_service=self.ai_service, department=department, text=text,
                     profile=profile, case_id=case_id, answers=answers,
@@ -2527,7 +2696,8 @@ class CaseFlow:
         }
         notes = list(aggregation.get("notes") or [])
         if any(item.get("status") == "stale" for item in refreshed.values()):
-            notes.append("部分受影响专科意见卡因模型不可用，等待重新分析")
+            notes.append("部分受影响专科意见卡等待重新分析" if self._model_available()
+                         else "部分受影响专科意见卡因模型不可用，等待重新分析")
         aggregation["notes"] = list(dict.fromkeys(notes))
         updated = dict(existing)
         updated["analyses"] = merged
@@ -2593,7 +2763,8 @@ class CaseFlow:
             payload["doctor_opinions"] = opinions
 
         # ---- 新资料填补缺口：命中则从缺口列表移除（避免"已提供却仍显示缺失"）----
-        filled_labels = update_service.gaps_filled_by(f"{kind}：{safe_content}")
+        clinical_update = kind in update_service.CLINICAL_UPDATE_KINDS
+        filled_labels = update_service.gaps_filled_by(f"{kind}：{safe_content}") if clinical_update else []
         old_gaps = list(payload.get("gaps") or [])
         remaining_gaps = [g for g in old_gaps
                           if not any(label in str(g) for label in filled_labels)]
@@ -2601,7 +2772,8 @@ class CaseFlow:
 
         # ---- 局部重算：把新资料并入病历文本，只重跑分诊与路径 ----
         masked_history = str(payload.get("masked_history") or "")
-        history_text = "；".join(x for x in (masked_history, f"{kind}：{safe_content}") if x)
+        history_text = ("；".join(x for x in (masked_history, f"{kind}：{safe_content}") if x)
+                        if clinical_update else masked_history)
         merged_text = effective_case_text(dict(payload, masked_history=history_text))
         if len(merged_text) > update_service.MAX_MERGED_HISTORY_LENGTH:
             return {
@@ -2611,21 +2783,23 @@ class CaseFlow:
                     "请分批提交或先整理已有资料"
                 ),
             }
-        rule_eval = evaluate_rules(merged_text)
-        outcome = orchestrate(
-            text=merged_text, case_id=case_id, evaluation=rule_eval, model_picks=None,
-            completeness=float(payload.get("completeness") or 0.0),
-            unresolved_gaps=len(remaining_gaps))
-        checks_by_dept = self._checks_by_department(remaining_gaps, outcome.selected)
-        care_path = build_path(outcome=outcome, gaps=remaining_gaps,
-                               checks_by_department=checks_by_dept, case_id=case_id)
-
-        new_triage = outcome.to_dict()
-        new_path = care_path.to_dict()
-
-        new_path["tasks"] = task_service.merge_progress(
-            old_path.get("tasks") or payload.get("tasks") or [], new_path.get("tasks") or [],
-            reason="新增资料使任务内容变化，需重新确认")
+        if clinical_update:
+            rule_eval = evaluate_rules(merged_text)
+            outcome = orchestrate(
+                text=merged_text, case_id=case_id, evaluation=rule_eval, model_picks=None,
+                completeness=float(payload.get("completeness") or 0.0),
+                unresolved_gaps=len(remaining_gaps))
+            checks_by_dept = self._checks_by_department(remaining_gaps, outcome.selected)
+            care_path = build_path(outcome=outcome, gaps=remaining_gaps,
+                                   checks_by_department=checks_by_dept, case_id=case_id)
+            new_triage = outcome.to_dict()
+            new_path = care_path.to_dict()
+            new_path["tasks"] = task_service.merge_progress(
+                old_path.get("tasks") or payload.get("tasks") or [], new_path.get("tasks") or [],
+                reason="新增资料使任务内容变化，需重新确认")
+        else:
+            new_triage = dict(old_triage)
+            new_path = dict(old_path)
 
         # 只重跑受影响的专科卡；更新后新出现的就医方向也需要首次生成意见卡。
         new_departments = list(new_triage.get("selected") or [])
@@ -2633,8 +2807,24 @@ class CaseFlow:
             list(affected.get("departments") or []) +
             [department for department in new_departments if department not in current_departments]
         ))
+        # ---- 新资料进入后同步刷新结构化画像，再交给受影响科室重新分析 ----
+        exam_facts: List[Tuple[str, str]] = []
+        if kind == "检查结果":
+            # 能识别出具体检查时按检查名记录；识别不出时（回退到类别全量字段）记为"补充检查结果"
+            matched_fields = update_service.recognized_exam_fields(safe_content)
+            labels = [dependency_matrix.BY_FIELD[field].label for field in matched_fields
+                      if field in dependency_matrix.BY_FIELD]
+            exam_facts.append(("、".join(labels) if labels else "补充检查结果", safe_content))
+        if kind in update_service.CLINICAL_UPDATE_KINDS:
+            refreshed_profile = self._refresh_profile(
+                dict(payload, masked_history=masked_history), merged_text,
+                exam_facts=exam_facts, source_label="补充资料", gaps=remaining_gaps,
+            )
+        else:   # 复查安排等非临床资料不改变病例画像
+            refreshed_profile = payload.get("profile") or {}
         refreshed_mdt, refreshed_departments = self._refresh_affected_mdt(
-            payload=dict(payload, triage=new_triage, path=new_path, gaps=remaining_gaps),
+            payload=dict(payload, triage=new_triage, path=new_path, gaps=remaining_gaps,
+                         profile=refreshed_profile),
             text=merged_text, departments=mdt_departments, case_id=case_id,
         )
 
@@ -2643,11 +2833,14 @@ class CaseFlow:
             case_id=case_id, old_triage=old_triage, new_triage=new_triage,
             old_path=old_path, new_path=new_path, updates=[update],
             unresolved_gaps=remaining_gaps,
-            doctor_opinions=payload.get("doctor_opinions") or [])
+            doctor_opinions=payload.get("doctor_opinions") or [],
+            affected_departments=affected.get("departments") or [])
         for gap in filled_gaps:
             summary.added.append(f"已填补信息缺口：{gap}")
             if f"仍未确认：{gap}" in summary.needs_doctor_review:
                 summary.needs_doctor_review.remove(f"仍未确认：{gap}")
+        if affected.get("unclassified"):
+            summary.notes.insert(0, update_service.UNCLASSIFIED_NOTE)
 
         updates = list(payload.get("updates") or [])
         updates.append(update.to_dict())
@@ -2660,6 +2853,7 @@ class CaseFlow:
             "gaps": remaining_gaps,
             # 这是后续分析使用的完整脱敏正文，不能再截断成前端预览长度。
             "masked_history": history_text,
+            "profile": refreshed_profile,
             "triage": new_triage,
             "path": new_path,
             "tasks": new_path.get("tasks", []),
@@ -2681,6 +2875,9 @@ class CaseFlow:
             item_id for item_id in changed_item_ids
             if item_id in old_item_map and item_id in new_item_map
         )
+        # 条目编号按科室名 / 位置生成：被删除后又以新内容出现时，若修订号不变，
+        # 旧决定会被错误套用到新内容上。因此新增与删除的条目同样推进修订号。
+        presence_changed_ids = sorted(set(added_item_ids) | set(removed_item_ids))
         item_labels = {item.item_id: item.title for item in new_review_items}
         affected_item_labels = [item_labels[item_id] for item_id in changed_item_ids
                                 if item_id in item_labels]
@@ -2729,11 +2926,11 @@ class CaseFlow:
             if needs_recheck:
                 payload = self._begin_recheck(
                     case, payload, actor=source, reason=f"{kind}更新",
-                    affected_item_ids=reopened_item_ids,
+                    affected_item_ids=reopened_item_ids + presence_changed_ids,
                 )
             else:
                 revisions.update(review_service.bump_content_revisions(
-                    revisions, reopened_item_ids))
+                    revisions, reopened_item_ids + presence_changed_ids))
                 payload["review_item_revisions"] = revisions
                 self.store.transition_case(
                     case_id, STATE_AWAITING_DOCTOR, actor=source,
@@ -2879,7 +3076,9 @@ class CaseFlow:
             )
             summary["disagreements"] = len(aggregation.get("disagreements") or [])
             summary["disagreements_pending"] = pending_disagreements
-            gap_count = len(payload.get("gaps") or [])
+            # 只统计与病例涉及科室相关的缺口；通用缺口清单里与本病例无关的项目
+            # （如血液科病例的“眼底检查”）不应把每个病例都推成高风险。
+            gap_count = len(dependency_matrix.case_relevant_gaps(payload))
             reliability = str((triage.get("reliability") or {}).get("level") or "")
             risk_level, risk_rank = self._queue_risk(
                 pending=int(summary.get("pending") or 0),

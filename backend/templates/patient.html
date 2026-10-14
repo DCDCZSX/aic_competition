@@ -434,7 +434,26 @@
       <button class="ghost" onclick="go('mdt')">← 返回多学科分析</button>
       <button class="primary" onclick="printReport()">打印报告 / 导出 PDF</button>
       <button class="ghost" onclick="goRecords()">我的病历</button>
+      <button class="ghost" onclick="openPatientUpdatePanel()">补充新资料</button>
     </div>
+    <!-- P10 就诊后资料更新 -->
+    <section id="patient-update-panel" class="col patient-update-panel" style="margin-top:var(--sp-24);" aria-labelledby="patient-update-heading">
+      <h3 id="patient-update-heading" style="margin:0;">补充新资料</h3>
+      <p class="tiny">有新的检查结果、用药调整、症状变化或复查安排时在这里补充。系统会重新整理就医方向并标出受影响的内容；已发布的报告会进入医生复核，旧版本报告保留可查。请不要填写姓名、电话、证件号等身份信息。</p>
+      <label for="update-kind" class="tiny">资料类型</label>
+      <select id="update-kind">
+        <option value="检查结果">检查结果</option>
+        <option value="症状变化">症状变化</option>
+        <option value="用药方案">用药方案</option>
+        <option value="复查安排">复查安排</option>
+        <option value="医生意见">线下医生意见（将标记为待核实）</option>
+      </select>
+      <label for="update-content" class="tiny">内容</label>
+      <textarea id="update-content" rows="4" maxlength="8000" placeholder="例如：10月12日复查血常规，血红蛋白 92g/L，血小板 150×10^9/L"></textarea>
+      <div class="actions" style="margin-top:8px;"><button id="update-submit-btn" class="primary" onclick="submitPatientUpdate()">提交补充资料</button></div>
+      <div id="update-msg" class="hide" role="status" aria-live="polite"></div>
+      <div id="update-result" aria-live="polite"></div>
+    </section>
   </div>
     </div>
   </section>
@@ -541,7 +560,7 @@ async function startNewCase(){
   document.querySelectorAll('#disease-chips .chip').forEach(el=>{
     el.classList.remove('on'); el.setAttribute('aria-pressed','false');
   });
-  switchTab('paste');
+  switchTab('paste'); resetPatientUpdatePanel();
   ['intake-msg','flow-msg','records-msg','report-msg'].forEach(id=>msg(id,''));
   go('stage1');
 }
@@ -581,7 +600,7 @@ function renderPatientRecords(){
         <div class="patient-record-meta">${row.primary_department?`<span>主责方向 ${esc(row.primary_department)}</span>`:''}<span>报告 v${esc(row.report_version||1)}</span><span>更新于 ${esc(updated)}</span></div>
         <div class="patient-record-next">${esc(row.next_step||'可继续查看当前病例')}</div>
       </div>
-      <div class="actions"><button class="primary mini" onclick="openPatientCase('${esc(row.case_id)}')">打开病例</button><button class="ghost mini" onclick="showPatientCaseHistory('${esc(row.case_id)}')">历史记录</button></div></article>`;
+      <div class="actions"><button class="primary mini" onclick="openPatientCase('${esc(row.case_id)}')">打开病例</button><button class="ghost mini" onclick="showPatientCaseHistory('${esc(row.case_id)}')">历史记录</button><button class="ghost mini" onclick="openPatientCaseForUpdate('${esc(row.case_id)}')">补充资料</button></div></article>`;
   }).join('')+'</div>';
   const totalPages=Math.max(1, Math.ceil(S.recordTotal/S.recordPageSize));
   const pager=`<div class="patient-record-pager"><span class="tiny">第 ${S.recordPage} / ${totalPages} 页，共 ${S.recordTotal} 条病历</span><div class="actions" style="margin:0;"><button class="ghost mini" ${S.recordPage<=1?'disabled':''} onclick="goRecords(${S.recordPage-1})">上一页</button><button class="ghost mini" ${S.recordPage>=totalPages?'disabled':''} onclick="goRecords(${S.recordPage+1})">下一页</button></div></div>`;
@@ -619,6 +638,7 @@ async function openPatientCase(caseId){
     S.questions.forEach((question,index)=>{const field=document.getElementById('ans-'+index);if(field) field.value=S.answers[question.field]||'';});
     document.getElementById('refresh-report-btn').disabled=false;
     renderTriage(); renderPath(); renderMdt(); switchReport('summary');
+    resetPatientUpdatePanel();
     msg('records-msg',''); go('report');
     return true;
   }catch(error){
@@ -911,6 +931,27 @@ function switchTab(which){
 const PATIENT_IMAGE_MAX = 10 * 1024 * 1024;
 const PATIENT_IMAGE_MAX_COUNT = 5;
 let patientUploadGeneration = 0;
+const PATIENT_IMAGE_COMPRESS_OVER = 1.5 * 1024 * 1024;
+const PATIENT_IMAGE_MAX_EDGE = 2400;
+async function preparePatientImage(file){
+  // 小图原样上传；大图缩放到长边不超过 2400px 并转为 JPEG，文字识别仍然清晰。
+  if(!file || file.size<=PATIENT_IMAGE_COMPRESS_OVER || typeof document==='undefined') return file;
+  const url=URL.createObjectURL(file);
+  try{
+    const img=await new Promise((resolve,reject)=>{const el=new Image(); el.onload=()=>resolve(el); el.onerror=reject; el.src=url;});
+    const scale=Math.min(1, PATIENT_IMAGE_MAX_EDGE/Math.max(img.naturalWidth||1,img.naturalHeight||1));
+    const canvas=document.createElement('canvas');
+    canvas.width=Math.max(1,Math.round((img.naturalWidth||1)*scale));
+    canvas.height=Math.max(1,Math.round((img.naturalHeight||1)*scale));
+    const ctx=canvas.getContext('2d'); if(!ctx) return file;
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.85));
+    if(!blob || blob.size>=file.size) return file;
+    const name=String(file.name||'image').replace(/\.[^.]+$/,'')+'.jpg';
+    return new File([blob],name,{type:'image/jpeg'});
+  }finally{ URL.revokeObjectURL(url); }
+}
 let newCaseBusy = false;
 async function resetPatientUploads(){
   if(newCaseBusy) return false;
@@ -975,15 +1016,28 @@ async function handlePatientImages(event){
   }
   S.imageUploads.push(...valid); renderPatientUploads();
   if(!valid.length) return;
-  const form=new FormData(); valid.forEach(item=>form.append('files',item.file,item.name));
-  const r=await api('/api/v2/patient/uploads',{method:'POST',body:form});
-  if(generation!==patientUploadGeneration){
-    await Promise.all((r.data.uploads||[]).map(item=>api('/api/v2/patient/uploads/'+encodeURIComponent(item.upload_id),{method:'DELETE'})));
-    return;
+  // 逐张上传：单个请求只带一张图，避免多张大图合并后超过服务端请求上限；
+  // 大图先在浏览器内缩放压缩，同时减小后续图片识别请求体积。
+  const failed=[];
+  for(const item of valid){
+    if(generation!==patientUploadGeneration) return;
+    if(!S.imageUploads.includes(item)) continue;
+    let upload=item.file;
+    try{ upload=await preparePatientImage(item.file); }catch(error){ upload=item.file; }
+    const form=new FormData(); form.append('files',upload,item.name);
+    const r=await api('/api/v2/patient/uploads',{method:'POST',body:form});
+    if(generation!==patientUploadGeneration || !S.imageUploads.includes(item)){
+      await Promise.all(((r.data||{}).uploads||[]).map(remote=>api('/api/v2/patient/uploads/'+encodeURIComponent(remote.upload_id),{method:'DELETE'})));
+      if(generation!==patientUploadGeneration) return;
+      continue;
+    }
+    item.uploading=false;
+    const remote=((r.data||{}).uploads||[])[0];
+    if(r.status!==201 || !remote){ failed.push(`${item.name}：${(r.data||{}).error||'上传失败'}`); continue; }
+    item.upload_id=remote.upload_id;
   }
-  if(r.status!==201){ valid.forEach(item=>{item.uploading=false;}); renderPatientUploads(); msg('patient-upload-msg',esc((r.data||{}).error||'图片上传失败，请重试'),'danger'); return; }
-  (r.data.uploads||[]).forEach((remote,index)=>{ if(valid[index]){valid[index].upload_id=remote.upload_id; valid[index].uploading=false;} });
-  renderPatientUploads(); msg('patient-upload-msg','图片已暂存，正在并行识别文字，请确认后再提交。','ok');
+  if(failed.length){ renderPatientUploads(); msg('patient-upload-msg',esc(failed.join('；'))+'，请重试或手动填写。','danger'); if(!valid.some(item=>item.upload_id)) return; }
+  renderPatientUploads(); if(!failed.length) msg('patient-upload-msg','图片已暂存，正在并行识别文字，请确认后再提交。','ok');
   await Promise.all(valid.filter(item=>item.upload_id).map(recognizePatientImage));
 }
 async function recognizePatientImage(item){
@@ -2464,6 +2518,65 @@ function patientMdtText(text){
     .replace(/^需排查/, '需要进一步了解是否存在')
     .replace(/^考虑/, '需要了解是否与');
 }
+/* ===================== P10 就诊后补充资料 ===================== */
+let patientUpdateBusy=false;
+function resetPatientUpdatePanel(){
+  const content=document.getElementById('update-content'); if(content) content.value='';
+  const kind=document.getElementById('update-kind'); if(kind) kind.value='检查结果';
+  const result=document.getElementById('update-result'); if(result) result.innerHTML='';
+  msg('update-msg','');
+}
+function openPatientUpdatePanel(){
+  const panel=document.getElementById('patient-update-panel'); if(!panel) return;
+  if(panel.scrollIntoView) panel.scrollIntoView({behavior:'smooth',block:'start'});
+  const content=document.getElementById('update-content'); if(content) setTimeout(()=>content.focus(),300);
+}
+async function openPatientCaseForUpdate(caseId){
+  const opened=await openPatientCase(caseId);
+  if(opened) setTimeout(openPatientUpdatePanel,350);
+}
+function renderPatientChangeSummary(summary){
+  summary=summary||{};
+  const block=(title,items)=>{
+    const list=(items||[]).map(x=>String(x||'').trim()).filter(Boolean);
+    return list.length?`<h4>${esc(title)}</h4><ul>${list.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:'';
+  };
+  const body=block('新增了什么',summary.added)+block('哪些建议有变化',summary.changed)
+    +block('任务变化',summary.task_changes)+block('需要医生重新确认',summary.needs_doctor_review)
+    +block('未受影响',summary.unchanged)+block('说明',summary.notes);
+  return `<div class="banner info"><strong>补充资料已记录</strong>${body||'<p class="tiny">本次资料没有改变就医方向和任务。</p>'}</div>`;
+}
+async function submitPatientUpdate(){
+  if(patientUpdateBusy) return;
+  const caseId=S.caseId;
+  if(!caseId){ msg('update-msg','请先打开一个病例再补充资料。','warn'); return; }
+  const kind=(document.getElementById('update-kind')||{}).value||'检查结果';
+  const content=String((document.getElementById('update-content')||{}).value||'').trim();
+  if(!content){ msg('update-msg','请填写要补充的资料内容。','warn'); return; }
+  patientUpdateBusy=true;
+  const button=document.getElementById('update-submit-btn'); if(button) button.disabled=true;
+  msg('update-msg','正在提交并重新整理就医建议…','info');
+  try{
+    const r=await api(`/api/v2/case/${caseId}/updates`,{method:'POST',body:JSON.stringify({kind,content,source:'患者上传'})});
+    if(caseId!==S.caseId) return;
+    const data=r.data||{};
+    if(data.blocked){
+      msg('update-msg',esc(data.advice||'内容包含需要立即就医或不宜提交的信息，请按提示处理。'),'danger'); return;
+    }
+    if(r.status!==200 || !data.ok) throw new Error(data.error||'补充资料提交失败');
+    if(data.triage) S.triage=data.triage;
+    if(data.path) S.path=data.path;
+    document.getElementById('update-content').value='';
+    document.getElementById('update-result').innerHTML=renderPatientChangeSummary(data.change_summary);
+    msg('update-msg','');
+    try{ renderTriage(); renderPath(); }catch(error){ /* 局部刷新失败不影响提交结果 */ }
+    await refreshPatientReport();
+  }catch(error){
+    if(caseId===S.caseId) msg('update-msg',esc(error.message||'网络异常')+'，请稍后重试。','danger');
+  }finally{
+    patientUpdateBusy=false; if(button) button.disabled=false;
+  }
+}
 function renderMdt(){
   const m=S.mdt||{};
   const analyses=m.analyses||[];
@@ -2480,14 +2593,17 @@ function renderMdt(){
   }
 
   const unavailable=(m.analyses||[]).filter(a=>a.status!=='ok');
+  // 来源标识随内容一起显示：医生发布报告后顶部状态会变为“已审核”，
+  // 但这里仍是提交前的 AI 参考意见，不能被误读为医生结论。
+  html+=`<div class="banner info" role="note">以下内容由 AI 按专科视角整理，仅用于就诊准备，不是医生意见。医生的审核结论请在“④ 查看医生结果”中查看。</div>`;
   analyses.forEach(a=>{
     if(a.status!=='ok'){
-      html+=`<div class="q"><strong>${esc(a.department)}</strong><div class="tiny">该科室的参考意见暂未生成。</div></div>`;
+      html+=`<div class="q"><div class="inline-between"><strong>${esc(a.department)}</strong><span class="pill warn">专科 AI 参考意见</span></div><div class="tiny">该科室的参考意见暂未生成。</div></div>`;
       return;
     }
     const hints=(a.inferences||[]).map(i=>patientMdtText(i.text)).filter(Boolean).slice(0,2);
     html+=`<div class="q">
-      <div style="font-weight:600;font-size:15px;">${esc(a.department)}</div>
+      <div class="inline-between"><div style="font-weight:600;font-size:15px;">${esc(a.department)}</div><span class="pill warn">专科 AI 参考意见 · 非医生结论</span></div>
       <div class="muted" style="margin:4px 0;">这个科室主要关注：${esc(a.focus||'你的相关症状和检查结果')}</div>
       ${hints.length?`<div class="rt" style="margin-top:10px;">参考提示</div>`+hints.map(x=>`<div style="margin-top:4px;">· ${esc(x)}</div>`).join(''):''}
       ${a.referral?`<div class="tiny" style="color:var(--info);margin-top:8px;">如果医生认为有需要，可再咨询：${esc(a.referral)}</div>`:''}

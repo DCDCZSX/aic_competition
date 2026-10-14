@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 @dataclass(frozen=True)
@@ -195,3 +195,62 @@ def triage_critical_fields() -> List[str]:
 def matrix_size() -> int:
     """矩阵条数（单测与文档校验用）。"""
     return len(MATRIX)
+
+
+# ---------------------------------------------------------------------------
+# 缺口与病例科室的相关性（队列、报告、变化摘要共用）
+# ---------------------------------------------------------------------------
+
+def gap_field(gap: Any) -> Optional[str]:
+    """缺口文案（如“眼底检查：信息不足”）→ 依赖矩阵字段；无法匹配返回 None。"""
+    text = str(gap or "")
+    for label, field in BY_LABEL.items():
+        if label in text:
+            return field
+    return None
+
+
+def relevant_gaps(gaps: Iterable[Any], departments: Optional[Sequence[str]]) -> List[str]:
+    """只保留与给定科室判断相关的缺口。
+
+    画像抽取的缺口清单对所有病例一视同仁（血液科病例也会带“眼底检查”等）。
+    没有科室信息时保持原样，避免在分诊前丢失提示；无法映射到依赖矩阵的缺口
+    视为通用缺口保留。
+    """
+    selected = [d for d in (departments or []) if d]
+    items = [str(g) for g in (gaps or []) if str(g).strip()]
+    if not selected:
+        return items
+    out: List[str] = []
+    for gap in items:
+        field = gap_field(gap)
+        if field is None or any(d in selected for d in departments_for_field(field)):
+            out.append(gap)
+    return out
+
+
+def case_departments(payload: Optional[Dict[str, Any]]) -> List[str]:
+    """病例当前涉及的科室：分诊建议 ∪ 医生确认 ∪ 正式会诊范围 ∪ 患者提交的主责科室。"""
+    payload = payload or {}
+    triage = payload.get("triage") or {}
+    confirmed = payload.get("triage_doctor_confirmation") or {}
+    screening = payload.get("mdt_screening") or {}
+    routing = payload.get("routing") or {}
+    names: List[str] = []
+    names.extend(str(x) for x in (triage.get("selected") or []))
+    primary = (triage.get("primary") or {}).get("department")
+    if primary:
+        names.append(str(primary))
+    if confirmed.get("status") == "confirmed":
+        names.extend(str(x) for x in (confirmed.get("selected") or []))
+    names.extend(str(x) for x in (screening.get("departments") or []))
+    requested = (routing.get("requested_department") or {}).get("name")
+    if requested:
+        names.append(str(requested))
+    return [name for name in dict.fromkeys(n.strip() for n in names) if name]
+
+
+def case_relevant_gaps(payload: Optional[Dict[str, Any]]) -> List[str]:
+    """病例 payload 中与其涉及科室相关的信息缺口。"""
+    payload = payload or {}
+    return relevant_gaps(payload.get("gaps") or [], case_departments(payload))

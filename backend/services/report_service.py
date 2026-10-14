@@ -35,6 +35,7 @@ from services.review_service import (  # noqa: E402
 )
 
 from services.doctor_mdt import review_analysis
+from services.dependency_matrix import case_relevant_gaps  # noqa: E402
 
 # 未审核角标 / 免责（固定文案，所有导出件必带）
 AI_BADGE = "AI 生成，尚未经医生审核"
@@ -650,7 +651,7 @@ def build_mdt_preparation_packet(case: Dict[str, Any]) -> Dict[str, Any]:
         ],
         "information_gaps": [
             {"item": str(item), "status": "待补充资料"}
-            for item in (payload.get("gaps") or [])[:10]
+            for item in case_relevant_gaps(payload)[:10]
         ],
         "unavailable_specialties": [
             {"department": department, "status": "待补齐意见"}
@@ -684,7 +685,7 @@ def build_mdt_preparation_packet(case: Dict[str, Any]) -> Dict[str, Any]:
             {"ref": ref, "source": "患者结构化资料"} for ref in evidence_refs
         ],
         "evidence": evidence,
-        "information_gaps": [str(item) for item in (payload.get("gaps") or [])[:10]],
+        "information_gaps": [str(item) for item in case_relevant_gaps(payload)[:10]],
         "path": path_steps_for_report(path.get("steps")),
         "tasks": [
             {
@@ -855,7 +856,7 @@ def build_patient_summary(case: Dict[str, Any]) -> Report:
 
     primary = triage.get("primary") or {}
     secondary = triage.get("secondary") or []
-    gaps = [g for g in (payload.get("gaps") or [])]
+    gaps = case_relevant_gaps(payload)
     decisions = _decision_map(payload.get("decisions") or [])
     confirmed = case.get("case_state") == "doctor_confirmed"
 
@@ -983,7 +984,7 @@ def build_full_report(case: Dict[str, Any]) -> Report:
                        for e in (profile.get("exams") or [])] or ["（未提供）"],
             "当前用药": [f"{m.get('name')} {m.get('dose') or ''}".strip()
                        for m in (profile.get("medications") or [])] or ["（未提供）"],
-            "信息缺口": list(payload.get("gaps") or []) or ["（无）"],
+            "信息缺口": case_relevant_gaps(payload) or ["（无）"],
             "资料完整度": payload.get("completeness"),
             "原文直引覆盖率": payload.get("direct_quote_coverage"),
         },

@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from schemas import CHALLENGE_OUTCOMES, CHALLENGE_STANCES, ChallengeRound  # noqa: E402
 from services.ai_service import call_structured  # noqa: E402
 from services.json_recovery import loads_lenient  # noqa: E402
+from services.prompt_text import case_text_for_prompt  # noqa: E402
 from services.model_output_guard import (  # noqa: E402
     assert_safe_generated_list,
     assert_safe_generated_text,
@@ -152,7 +153,7 @@ def build_questions(aggregation: Dict[str, Any],
 def _build_respond_prompt(question: ChallengeQuestion, department: str,
                           text: str, previous_reason: str = "") -> str:
     return f"""【病例资料（已脱敏）】
-{text[:2500]}
+{case_text_for_prompt(text)}
 
 【你作为 {department} 的分析视角】
 {previous_reason and f'你此前的判断要点：{previous_reason}'}

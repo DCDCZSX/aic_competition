@@ -2,6 +2,8 @@
 import hashlib
 import json
 
+NON_CLINICAL_UPDATE_KINDS = ("复查安排",)
+
 
 def input_fingerprint(payload):
     confirmation = payload.get('triage_doctor_confirmation') or {}
@@ -10,6 +12,13 @@ def input_fingerprint(payload):
         key: payload.get(key) for key in
         ('masked_history', 'masked_main_issue', 'profile', 'answers', 'updates')
     }
+    # 复查安排等非临床资料不改变专科判断，不应使已有会诊模拟整轮失效。
+    inputs['updates'] = [u for u in (inputs.get('updates') or [])
+                         if not (isinstance(u, dict) and u.get('kind') in NON_CLINICAL_UPDATE_KINDS)]
+    # 结构化画像会随补充资料刷新，其中的刷新时间戳不属于病例依据。
+    profile = inputs.get('profile')
+    if isinstance(profile, dict) and 'refreshed_at' in profile:
+        inputs['profile'] = {k: v for k, v in profile.items() if k != 'refreshed_at'}
     inputs.update(primary=confirmation.get('primary_department'),
                   scope=confirmation.get('selected'), decision=screening.get('decision'),
                   departments=screening.get('departments'), purpose=screening.get('purpose'))

@@ -28,6 +28,7 @@ from services.model_output_guard import (  # noqa: E402
     public_text,
 )
 from services.rule_engine import RuleEvaluation  # noqa: E402
+from services.prompt_text import case_text_for_prompt  # noqa: E402
 
 METHOD_LLM = "llm"
 METHOD_SKIPPED = "skipped"          # 无可用模型
@@ -126,7 +127,7 @@ def _build_prompt(text: str, evaluation: RuleEvaluation, main_issue: str,
         brief = "；".join(parts)
 
     return f"""【病例资料】
-{text[:3000]}
+{case_text_for_prompt(text)}
 
 【患者主要问题】{main_issue or '未提供'}
 【病例摘要】{brief or '未提供'}

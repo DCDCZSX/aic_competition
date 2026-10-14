@@ -26,6 +26,7 @@ from services import department_domain
 from services.intake import MAX_MAIN_ISSUE_LENGTH, MAX_TEXT_LENGTH, sanitized_payload, normalize_sex
 from services.preview_tokens import PreviewTokenService
 from services.patient_uploads import PatientUploadStore, MAX_UPLOAD_COUNT, MAX_UPLOAD_BYTES
+UPLOAD_REQUEST_MAX_BYTES = MAX_UPLOAD_BYTES * MAX_UPLOAD_COUNT + 1024 * 1024
 from services.ocr_service import OcrService
 from services.store import Store
 from schemas import CASE_STATE_LABELS
@@ -89,6 +90,11 @@ def _invalid_input(exc):
 def _api_http_error(exc):
     """API 错误始终返回 JSON，避免客户端收到 Flask HTML 错误页。"""
     if request.path.startswith('/api/'):
+        if exc.code == 413:
+            limit = request.max_content_length or app.config.get('MAX_CONTENT_LENGTH') or 0
+            limit_text = f'（上限约 {max(1, round(limit / (1024 * 1024)))}MB）' if limit else ''
+            return jsonify({'error': f'提交内容过大{limit_text}，请精简内容、压缩图片或分批提交',
+                            'code': 'request_entity_too_large'}), 413
         return jsonify({'error': exc.description or '请求失败',
                         'code': exc.name.lower().replace(' ', '_')}), exc.code
     return exc
@@ -442,6 +448,10 @@ def preview_intake():
 @app.route('/api/v2/patient/uploads', methods=['POST'])
 def upload_patient_images():
     """保存患者上传的临时图片；图片不会未经确认进入分析链路。"""
+    # 全局 APP_MAX_CONTENT_LENGTH 面向 JSON 接口（模板默认 1MB）；图片上传单独放宽到
+    # “单张上限 × 张数 + 表单开销”，否则页面允许的 10MB 图片会在解析前被 413 拒绝。
+    # 必须在读取 request.files 之前设置。
+    request.max_content_length = UPLOAD_REQUEST_MAX_BYTES
     session, error = _guard('intake')
     if error:
         return error
