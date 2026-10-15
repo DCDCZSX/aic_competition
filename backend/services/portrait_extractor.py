@@ -33,6 +33,8 @@ from schemas import (  # noqa: E402
 )
 from services.ai_service import call_structured  # noqa: E402
 from services.json_recovery import loads_lenient, result_is_repaired  # noqa: E402
+from services.clinical_context import clause_bounds, is_negated, is_resolved_history  # noqa: E402
+from services.prompt_text import case_text_for_prompt  # noqa: E402
 
 # 画像增强的输出很短（主诉 + 缺口），2000 token 足够
 PORTRAIT_MAX_TOKENS = 2000
@@ -133,15 +135,97 @@ def _extract_sex(text: str) -> Tuple[str, List[str]]:
     return sex, [_source_ref(m.start())]
 
 
+# 纯人口学/称谓分句（“女，58岁”“58岁男性”“年龄：58岁”）不能当作主诉。
+_DEMOGRAPHIC_TOKEN = (
+    r"(?:男性?|女性?|性别\s*[:：]?\s*(?:男|女)性?|"
+    r"(?:年龄\s*[:：]?\s*)?\d{1,3}\s*(?:周)?岁(?:半)?|"
+    r"(?:姓名|籍贯|职业|民族|婚姻|婚否)\s*[:：]?\s*\S{0,12}|[已未]婚)"
+)
+_DEMOGRAPHIC_CLAUSE_RE = re.compile(
+    r"^(?:患者|病人|本人)?\s*(?:" + _DEMOGRAPHIC_TOKEN + r"\s*)*$"
+)
+_CLAUSE_RE = re.compile(r"[^，,、]+")
+_SPACED_DEMOGRAPHIC_PREFIX_RE = re.compile(
+    r"(?:(?:患者|病人)\s*)?(?:(?:男性?|女性?|\d{1,3}\s*岁)\s+)+")
+_SENTENCE_RE = re.compile(r"[^。\n；;]+")
+
+
+def _is_demographic_clause(clause: str) -> bool:
+    return bool(_DEMOGRAPHIC_CLAUSE_RE.match(clause.strip()))
+
+
+def _strip_demographic_clauses(sentence: str, offset: int) -> Tuple[str, int]:
+    """去掉句首的人口学分句，返回原文中的连续剩余片段（保持直引）及其起点。
+
+    超过 60 字时在分句边界截断，仍是原文子串，不改写标点。
+    """
+    clauses = [m for m in _CLAUSE_RE.finditer(sentence) if m.group(0).strip()]
+    index = 0
+    while index < len(clauses) and _is_demographic_clause(clauses[index].group(0)):
+        index += 1
+    if index >= len(clauses):
+        return "", offset
+    first = clauses[index]
+    start = first.start() + (len(first.group(0)) - len(first.group(0).lstrip()))
+    # 空格分隔的句首人口学信息（“男 62岁 反复咳嗽”）也跳过
+    lead = _SPACED_DEMOGRAPHIC_PREFIX_RE.match(sentence, start, first.end())
+    if lead and first.end() - lead.end() >= 2:
+        start = lead.end()
+    end = first.end()
+    for clause in clauses[index + 1:]:
+        if len(sentence[start:clause.end()].strip()) > 60:
+            break
+        end = clause.end()
+    piece = sentence[start:end].strip()
+    if len(piece) > 60:
+        piece = piece[:60]
+    return piece, offset + start
+
+
 def _extract_chief_complaint(text: str) -> Tuple[str, List[str]]:
+    chief, refs, _ = _extract_chief_complaint_detail(text)
+    return chief, refs
+
+
+def _extract_chief_complaint_detail(text: str) -> Tuple[str, List[str], bool]:
+    """返回 (主诉, 来源引用, 是否来自显式“主诉：”字段)。"""
     m = _CHIEF_RE.search(text)
     if m:
-        return m.group(1).strip(), [_source_ref(m.start(1))]
-    # 退化：取第一句作为主诉候选
-    first = re.split(r"[。\n；;]", text.strip())[0].strip()
-    if 2 <= len(first) <= 60:
-        return first, [_source_ref(0)]
-    return "", []
+        explicit, start = _strip_demographic_clauses(m.group(1).strip(), m.start(1))
+        if len(explicit) >= 2:
+            return explicit, [_source_ref(start)], True
+    # 退化：逐句寻找第一句“去掉人口学信息后仍有内容”的句子作为主诉候选，
+    # 避免把“女，58岁”这种开头当成主诉。
+    for sentence in _SENTENCE_RE.finditer(text):
+        body = sentence.group(0)
+        label = re.match(r"\s*(?:现病史|病史|主要问题|主要症状)\s*[:：]\s*", body)
+        skip = label.end() if label else 0
+        candidate, at = _strip_demographic_clauses(body[skip:], sentence.start() + skip)
+        if len(candidate) >= 2:
+            return candidate, [_source_ref(at)], False
+    return "", [], False
+
+
+def _usable_model_chief(value: Any, raw: str) -> str:
+    """模型主诉只在为原文直引、且不是人口学信息时采用（不编造事实）。"""
+    chief = str(value or "").strip().strip("。；;，,")
+    if not (2 <= len(chief) <= 60):
+        return ""
+    if all(_is_demographic_clause(m.group(0)) for m in _CLAUSE_RE.finditer(chief)):
+        return ""
+    compact = lambda x: re.sub(r"\s+", "", x)
+    return chief if compact(chief) in compact(raw) else ""
+
+
+_UNIT_DAYS = {"小时": 1 / 24, "天": 1, "周": 7, "个月": 30, "月": 30, "余月": 30, "年": 365, "余年": 365}
+
+
+def _onset_days(onset: str) -> Optional[float]:
+    """把"5天""2个月"换算为距今天数，用于时间线排序；无法解析返回 None。"""
+    m = _DURATION_RE.search(onset or "")
+    if not m:
+        return None
+    return float(m.group(1)) * _UNIT_DAYS.get(m.group(2), 1)
 
 
 def _extract_symptoms(text: str) -> List[SymptomEvent]:
@@ -150,6 +234,14 @@ def _extract_symptoms(text: str) -> List[SymptomEvent]:
     for m in _SYMPTOM_RE.finditer(text):
         symptom = m.group(1).strip()
         onset = m.group(2).strip()
+        start = m.start(1)
+        # "现腹痛2天""无明显诱因出现发热3天"：去掉叙述性前缀，只保留症状本身
+        trimmed = re.sub(r"^.*(诱因下?|出现|感到|自觉|伴有|伴)", "", symptom)
+        trimmed = re.sub(r"^(现|目前|近来|近期|今|再次|又)", "", trimmed)
+        start += len(symptom) - len(trimmed)
+        symptom = trimmed
+        if re.match(r"(否认|没有|无|未|不伴)", symptom):     # "否认胸痛3天"
+            continue
         if len(symptom) < 2 or symptom in seen:
             continue
         # 过滤明显不是症状的词：文书词、疾病名（"2型糖尿病5年"里的"型糖尿病"）
@@ -158,11 +250,20 @@ def _extract_symptoms(text: str) -> List[SymptomEvent]:
         if any(d in symptom for d in ("糖尿病", "高血压", "冠心病", "房颤", "心衰",
                                       "慢阻肺", "肝硬化", "贫血", "肿瘤", "癌")):
             continue
+        end = m.end(1)
+        # 否定（"否认胸痛3天"）、正常结果和既往已缓解的症状不作为当前症状
+        if is_negated(text, start, end) or is_resolved_history(text, start, end, symptom):
+            continue
         seen.add(symptom)
         events.append(SymptomEvent(
             symptom=symptom, onset=onset, trend="", confidence="high",
-            source_refs=[_source_ref(m.start(1))],
+            source_refs=[_source_ref(start)],
         ))
+    # 时间线：起病越早越靠前（"发热1天，咳嗽5天" → 先咳嗽、后发热）；
+    # 无法解析时长的事件保持原文顺序排在后面
+    order = {id(e): i for i, e in enumerate(events)}
+    events.sort(key=lambda e: (_onset_days(e.onset) is None,
+                               -(_onset_days(e.onset) or 0), order[id(e)]))
     return events
 
 
@@ -170,16 +271,22 @@ def _extract_diseases(text: str) -> List[Disease]:
     diseases: List[Disease] = []
     seen: set = set()
     for name in COMMON_DISEASES:
-        idx = text.find(name)
-        if idx < 0 or name in seen:
+        if name in seen:
             continue
         # 避免"糖尿病"覆盖"2型糖尿病"
-        if any(name in other and name != other and other in text for other in COMMON_DISEASES):
-            if name == "糖尿病" and "2型糖尿病" in text:
-                continue
+        if name == "糖尿病" and "2型糖尿病" in text:
+            continue
+        # 逐个出现位置检查语境：否认病史、已治愈的不收录
+        idx = text.find(name)
+        while idx >= 0 and (is_negated(text, idx, idx + len(name))
+                            or is_resolved_history(text, idx, idx + len(name), name)):
+            idx = text.find(name, idx + 1)
+        if idx < 0:
+            continue
         seen.add(name)
-        # 尝试在同句里找病程
-        window = text[idx: idx + 40]
+        # 病程只在同一分句里找，避免借用后一句的时长（"否认糖尿病，咳嗽3天"）
+        _, clause_end = clause_bounds(text, idx, idx + len(name))
+        window = text[idx: min(clause_end, idx + 40)]
         dm = _DURATION_RE.search(window)
         duration = dm.group(0).strip() if dm else ""
         diseases.append(Disease(
@@ -190,15 +297,25 @@ def _extract_diseases(text: str) -> List[Disease]:
 
 
 def _extract_medications(text: str) -> List[Medication]:
-    meds: List[Medication] = []
-    seen: set = set()
+    current: Dict[str, Tuple[Medication, int]] = {}
     for m in _MED_RE.finditer(text):
-        name = m.group(1).strip()
+        name = re.sub(r"^(?:(?:长期|目前|现在|现|继续|恢复|每日|每天|常规|口服|服用|服药|使用|给予|用药)\s*)+",
+                      "", m.group(1).strip())
+        name = re.sub(r"(?:调整为|调整至|增加至|减少至|改为|加至|减至|增至|剂量为)$", "", name)
         dose = m.group(2).strip()
-        if name in seen or len(name) < 2:
+        if len(name) < 2:
             continue
-        seen.add(name)
-        meds.append(Medication(name=name, dose=dose))
+        current[name] = (Medication(name=name, dose=dose), m.end())
+    meds: List[Medication] = []
+    for name, (medication, last_dose_end) in current.items():
+        suffix = text[last_dose_end:]
+        stopped = False
+        for match in re.finditer(r"(?:停用|停服|停止服用|不再服用|暂停服用)\s*" + re.escape(name)
+                                 + "|" + re.escape(name) + r"\s*(?:已停用|已停药|停用|停药)", suffix):
+            if not re.search(r"(?:勿|不要|不应|不宜|不能|无需|未)\s*$", suffix[:match.start()]):
+                stopped = True
+        if not stopped:
+            meds.append(medication)
     return meds
 
 
@@ -276,7 +393,7 @@ def extract(
 
     age, age_refs = _extract_age(raw)
     sex, sex_refs = _extract_sex(raw)
-    chief, chief_refs = _extract_chief_complaint(raw)
+    chief, chief_refs, chief_explicit = _extract_chief_complaint_detail(raw)
     symptoms = _extract_symptoms(raw)
     diseases = _extract_diseases(raw)
     meds = _extract_medications(raw)
@@ -292,7 +409,12 @@ def extract(
             if note:
                 warnings.append(note)
             if enhanced:
-                if enhanced.get("chief_complaint") and not chief:
+                model_chief = _usable_model_chief(enhanced.get("chief_complaint"), raw)
+                if model_chief and not chief_explicit:
+                    # 规则只是“首句退化”时，优先采用可在原文中直引的模型主诉。
+                    chief = model_chief
+                    chief_refs = [_source_ref(max(0, raw.find(model_chief)))]
+                elif enhanced.get("chief_complaint") and not chief:
                     chief = str(enhanced["chief_complaint"])
                     chief_refs = [_source_ref(0)]
                 for gap in enhanced.get("information_gaps", []) or []:
@@ -382,7 +504,7 @@ def _extract_with_llm(ai_service: Any, text: str,
     prompt = (
         "你是病历结构化助手。请只提取病历中【明确写出】的信息，不要推断、不要补全。\n"
         "以 JSON 返回，字段：chief_complaint(string)、information_gaps(string[])。\n"
-        f"病历：\n{text[:4000]}\n主要问题：{main_issue}\n"
+        f"病历：\n{case_text_for_prompt(text)}\n主要问题：{main_issue}\n"
     )
     # 结构化输出走 call_structured：不做 Markdown 清理（否则 ```json 包裹会被整段删掉），
     # 并且能识别"输出被长度截断"，交给调用方按降级处理。

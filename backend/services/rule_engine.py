@@ -21,6 +21,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.department_domain import is_department  # noqa: E402
+from services.clinical_context import is_excluded  # noqa: E402
 
 # 权重 → 分数（规格书 §4.3）
 WEIGHT_SCORE: Dict[str, int] = {"strong": 3, "medium": 2, "weak": 1}
@@ -78,10 +79,10 @@ class Rule:
 
     @staticmethod
     def _present(text: str, keyword: str) -> bool:
-        """出现且不处于否定语境（"无发热"不算命中）。"""
+        """出现且不处于否定、正常结果或既往已缓解语境（"无发热""血糖正常""既往发热已治愈"均不算命中）。"""
         idx = text.find(keyword)
         while idx >= 0:
-            if not is_negated(text, idx):
+            if not is_excluded(text, idx, idx + len(keyword), keyword):
                 return True
             idx = text.find(keyword, idx + 1)
         return False
@@ -90,7 +91,7 @@ class Rule:
         """命中则返回命中的信号文本，否则 None（会跳过否定语境，如"无发热"）。"""
         if self.pattern:
             for m in re.finditer(self.pattern, text):
-                if not is_negated(text, m.start()):
+                if not is_excluded(text, m.start(), m.end(), m.group(0)):
                     return m.group(0)
             return None
         if self.all_of or self.any_of:

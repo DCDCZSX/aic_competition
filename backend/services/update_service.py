@@ -22,7 +22,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.privacy import desensitize  # noqa: E402
 from services.clinical_evidence import information_provided  # noqa: E402
-from services.dependency_matrix import BY_LABEL, departments_for_field  # noqa: E402
+from services.dependency_matrix import (  # noqa: E402
+    BY_LABEL, departments_for_field, gap_field, relevant_gaps,
+)
 
 # 来源分级（主文档 §14）
 SOURCE_PATIENT = "患者上传"
@@ -144,12 +146,31 @@ class ChangeSummary:
         }
 
 
+# 会影响医学判断的资料类别。它们若无法定位到任何当前参与科室，不能视为“无影响”。
+CLINICAL_UPDATE_KINDS = ("检查结果", "用药方案", "症状变化", "医生意见")
+UNCLASSIFIED_NOTE = "新资料无法自动归类到具体科室，已按保守规则要求全部参与科室的专科意见重新复核"
+
+
 def determine_affected(kind: str, content: str,
-                       current_departments: Sequence[str]) -> Dict[str, List[str]]:
-    """用依赖矩阵判断：这次更新影响哪些字段与专科模块。"""
+                       current_departments: Sequence[str]) -> Dict[str, Any]:
+    """用依赖矩阵判断：这次更新影响哪些字段与专科模块。
+
+    规则：
+    1. 依赖矩阵命中的科室 ∩ 当前参与科室 = 受影响科室；
+    2. 检查结果识别不出具体检查项时，直接按全部参与科室复核（unclassified）；
+       其他临床类资料（检查结果 / 用药方案 / 症状变化 / 医生意见）若交集为空，
+       说明系统无法判断影响范围——此时保守地把全部参与科室视为受影响，
+       并标记 ``unclassified``，避免旧审核决定被静默沿用；
+    3. 非临床资料（复查安排）不改变专科判断，不触发专科复核。
+    """
     fields: List[str] = _fields_for_update(kind, content)
-    if not fields:
-        return {"fields": [], "departments": [], "modules": []}
+    current = [d for d in (current_departments or []) if d]
+    # 检查结果识别不出具体检查项时，无法判断影响哪些科室：不再用类别默认字段去
+    # "部分命中"当前科室（那样会漏掉其他参与科室），直接按全部参与科室复核。
+    if kind == "检查结果" and current and not recognized_exam_fields(content):
+        modules = ["分诊与路径", "多专科分析（受影响科室：" + "、".join(current) + "）"]
+        return {"fields": fields, "departments": list(current), "modules": modules,
+                "unclassified": True}
 
     departments: List[str] = []
     for field in fields:
@@ -158,12 +179,32 @@ def determine_affected(kind: str, content: str,
                 departments.append(dep)
 
     # 只保留当前参与科室（其他科室本次不涉及）
-    affected = [d for d in departments if d in (current_departments or [])]
+    affected = [d for d in departments if d in current]
+    unclassified = False
+    if not affected and kind in CLINICAL_UPDATE_KINDS and current:
+        affected = list(current)
+        unclassified = True
     modules: List[str] = []
     if affected:
         modules.append("分诊与路径")
         modules.append("多专科分析（受影响科室：" + "、".join(affected) + "）")
-    return {"fields": fields, "departments": affected, "modules": modules}
+    return {"fields": fields, "departments": affected, "modules": modules,
+            "unclassified": unclassified}
+
+
+def recognized_exam_fields(content: str) -> List[str]:
+    """从检查资料里识别出的具体检查字段；识别不出返回空列表。"""
+    text = str(content or "").lower()
+    matched: List[str] = []
+    for label, keywords in GAP_FILL_KEYWORDS.items():
+        field = BY_LABEL.get(label)
+        if not field:
+            continue
+        candidates = (label, *keywords)
+        if any(str(keyword).lower() in text for keyword in candidates if keyword):
+            if field not in matched:
+                matched.append(field)
+    return matched
 
 
 def _fields_for_update(kind: str, content: str) -> List[str]:
@@ -177,17 +218,9 @@ def _fields_for_update(kind: str, content: str) -> List[str]:
     if kind != "检查结果":
         return default_fields
 
-    text = str(content or "").lower()
-    matched: List[str] = []
-    for label, keywords in GAP_FILL_KEYWORDS.items():
-        field = BY_LABEL.get(label)
-        if not field:
-            continue
-        candidates = (label, *keywords)
-        if any(str(keyword).lower() in text for keyword in candidates if keyword):
-            if field not in matched:
-                matched.append(field)
-    return matched or default_fields
+    return recognized_exam_fields(content) or default_fields
+
+
 
 
 def build_change_summary(
@@ -200,6 +233,7 @@ def build_change_summary(
     updates: Sequence[UpdateRecord],
     unresolved_gaps: Sequence[str] = (),
     doctor_opinions: Optional[Sequence[Dict[str, Any]]] = None,
+    affected_departments: Sequence[str] = (),
 ) -> ChangeSummary:
     """对比更新前后的分诊与路径，生成变化摘要。"""
     summary = ChangeSummary(case_id=case_id, generated_at=_now())
@@ -237,7 +271,9 @@ def build_change_summary(
             f"就医路径步骤数：{len(old_path_steps)} → {len(new_path_steps)}")
 
     # ---- 哪些未受影响 ----
-    for dep in sorted(new_sel & old_sel):
+    # 新资料涉及的科室（依赖矩阵判定）不能再写成“未受影响”。
+    touched = [dep for dep in dict.fromkeys(affected_departments or ()) if dep in new_sel]
+    for dep in sorted((new_sel & old_sel) - set(touched)):
         summary.unchanged.append(f"{dep} 的参与判断未受影响")
     if not summary.unchanged:
         summary.unchanged.append("（本次更新影响了全部参与科室）")
@@ -260,7 +296,9 @@ def build_change_summary(
     # ---- 需医生重新确认 ----
     if summary.changed:
         summary.needs_doctor_review.append("因本次更新导致判断变化，需医生重新确认")
-    for gap in list(unresolved_gaps)[:3]:
+    for dep in touched:
+        summary.needs_doctor_review.append(f"{dep}：新资料涉及该科判断，相关专科意见需医生复核")
+    for gap in relevant_gaps(unresolved_gaps, new_sel)[:3]:
         summary.needs_doctor_review.append(f"仍未确认：{gap}")
 
     # ---- AI 建议 vs 医生意见对照（若医生端已录入线下意见） ----
